@@ -145,12 +145,14 @@ def expand_conditioning(
 def prepare_latent_train(
     source: torch.Tensor | None,
     target: torch.Tensor,
-    noise_sampler: SamplerFn,
+    noise_sampler: TNoiseSamplerFn | None,
     generate_from_noise: bool = False,
 ) -> torch.Tensor:
     """Called from compute_loss - always returns single noise per batch element."""
     if source is None or generate_from_noise:
-        return noise_sampler(tuple(target.shape), device=target.device, dtype=target.dtype)
+        if noise_sampler is None:
+            raise TypeError("When generating from noise you need to pass a noise sampler, but None found.")
+        return noise_sampler(target.shape)
     return source
 
 

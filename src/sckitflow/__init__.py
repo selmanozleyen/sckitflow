@@ -1,13 +1,12 @@
 from importlib.metadata import version
 
 from sckitflow import core, data, dataset, trainer
-from sckitflow._model import Model, ModelBuilder
+from sckitflow._model import Model
 
 __version__ = version("sckitflow")
 
 __all__ = [
     "Model",
-    "ModelBuilder",
     "__version__",
     "core",
     "data",

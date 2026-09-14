@@ -14,7 +14,7 @@ from sckitflow.core.methods._base import (
     BaseInferenceProtocol,
     BaseTrainingProtocol,
     FlowSpecs,
-    MatchedTrainingProtocol,
+    MatchedTrainingMethod,
     ProtocolSpecs,
     SupportsInference,
     SupportsProtocol,
@@ -66,17 +66,17 @@ class DummyPredictionData:
 
 
 # -----------------------------------------------------------------------------
-# Dummy protocols
+# Dummy methods
 # -----------------------------------------------------------------------------
 class DummyTrainingProtocol(BaseTrainingProtocol):
-    """Concrete training protocol; the loss is a constant."""
+    """Concrete training method; the loss is a constant."""
 
     def compute_loss(self, step_data, *args, **kwargs):
         return torch.tensor(0.0), {"loss": 0.0}
 
 
 class DummyInferenceProtocol(BaseInferenceProtocol):
-    """Concrete inference protocol sizing the output from the module's `n_features`."""
+    """Concrete inference method sizing the output from the module's `n_features`."""
 
     def predict(self, step_data, *args, **kwargs):
         n_feat = self.module.n_features
@@ -107,7 +107,7 @@ def dummy_noise_sampler(shape, device=None, dtype=None):
 # picklability (cloudpickle can serialize top-level functions).
 # -----------------------------------------------------------------------------
 def dummy_match_fn(source_lin=None, target_lin=None, source_quad=None, target_quad=None):
-    """No-op matcher: returns no indices so `MatchingProtocol.match` short-circuits."""
+    """No-op matcher: returns no indices so `Matcher.match` short-circuits."""
     return None, None
 
 
@@ -133,7 +133,7 @@ def _make_model(
     inference_protocol_cls: type | None = DummyInferenceProtocol,
     **overrides,
 ) -> Model:
-    """Build a Model with the dummy protocols by default; any can be overridden."""
+    """Build a Model with the dummy methods by default; any can be overridden."""
     builder = ModelBuilder.from_adata(adata, **(dm_kwargs or {}))
     return builder.build(
         module_cls=module_cls,
@@ -222,25 +222,25 @@ class TestModel:
             builder.build(module_cls=DummyModule)
 
     # ------------------------------------------------------------------
-    # Structural contracts on the constructed protocols
+    # Structural contracts on the constructed methods
     # ------------------------------------------------------------------
     def test_default_protocols_satisfy_structural_contracts(self, adata: AnnData):
         """Unmatched construction still yields `SupportsTraining` / `SupportsInference`."""
         model = _make_model(adata)
-        assert isinstance(model.training_protocol, SupportsTraining)
-        assert isinstance(model.training_protocol, SupportsProtocol)
-        assert isinstance(model.inference_protocol, SupportsInference)
-        assert isinstance(model.inference_protocol, SupportsProtocol)
+        assert isinstance(model.training_method, SupportsTraining)
+        assert isinstance(model.training_method, SupportsProtocol)
+        assert isinstance(model.inference_method, SupportsInference)
+        assert isinstance(model.inference_method, SupportsProtocol)
 
-    def test_training_protocol_does_not_satisfy_inference_contract(self, adata: AnnData):
-        """A training-only protocol has no `predict`, so it does not satisfy `SupportsInference`."""
+    def test_training_method_does_not_satisfy_inference_contract(self, adata: AnnData):
+        """A training-only method has no `predict`, so it does not satisfy `SupportsInference`."""
         model = _make_model(adata)
-        assert not isinstance(model.training_protocol, SupportsInference)
+        assert not isinstance(model.training_method, SupportsInference)
 
-    def test_inference_protocol_does_not_satisfy_training_contract(self, adata: AnnData):
-        """An inference-only protocol has no `compute_loss`, so it does not satisfy `SupportsTraining`."""
+    def test_inference_method_does_not_satisfy_training_contract(self, adata: AnnData):
+        """An inference-only method has no `compute_loss`, so it does not satisfy `SupportsTraining`."""
         model = _make_model(adata)
-        assert not isinstance(model.inference_protocol, SupportsTraining)
+        assert not isinstance(model.inference_method, SupportsTraining)
 
     # ------------------------------------------------------------------
     # Protocol resolution
@@ -250,7 +250,7 @@ class TestModel:
     #  INFERENCE_PROTOCOLS_REGISTRY`. Patching must target the local
     # binding, not the definition site.
     # ------------------------------------------------------------------
-    def test_training_protocol_id_resolves_to_registered_class(self, adata: AnnData, monkeypatch):
+    def test_training_method_id_resolves_to_registered_class(self, adata: AnnData, monkeypatch):
         monkeypatch.setattr(
             "sckitflow._model.TRAINING_PROTOCOLS_REGISTRY",
             {"cfm": DummyTrainingProtocol},
@@ -261,9 +261,9 @@ class TestModel:
             training_protocol_id="cfm",
             inference_protocol_cls=DummyInferenceProtocol,
         )
-        assert isinstance(model.training_protocol, DummyTrainingProtocol)
+        assert isinstance(model.training_method, DummyTrainingProtocol)
 
-    def test_inference_protocol_id_resolves_to_registered_class(self, adata: AnnData, monkeypatch):
+    def test_inference_method_id_resolves_to_registered_class(self, adata: AnnData, monkeypatch):
         monkeypatch.setattr(
             "sckitflow._model.INFERENCE_PROTOCOLS_REGISTRY",
             {"ode": DummyInferenceProtocol},
@@ -274,9 +274,9 @@ class TestModel:
             training_protocol_cls=DummyTrainingProtocol,
             inference_protocol_id="ode",
         )
-        assert isinstance(model.inference_protocol, DummyInferenceProtocol)
+        assert isinstance(model.inference_method, DummyInferenceProtocol)
 
-    def test_unsupported_training_protocol_id_raises(self, adata: AnnData, monkeypatch):
+    def test_unsupported_training_method_id_raises(self, adata: AnnData, monkeypatch):
         monkeypatch.setattr(
             "sckitflow._model.TRAINING_PROTOCOLS_REGISTRY",
             {"cfm": DummyTrainingProtocol},
@@ -311,15 +311,15 @@ class TestModel:
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS)
         with patch("sckitflow._model.Trainer") as mock_trainer_cls:
             mock_trainer = mock_trainer_cls.return_value
-            spy = MagicMock(wraps=model.training_protocol.set_train_mode)
-            model.training_protocol.set_train_mode = spy
+            spy = MagicMock(wraps=model.training_method.set_train_mode)
+            model.training_method.set_train_mode = spy
 
             model.train(adata, n_train_steps=10, valid_freq=5, batch_size=32)
 
             mock_trainer_cls.assert_called_once()
             args, kwargs = mock_trainer_cls.call_args
-            assert args[0] is model.training_protocol
-            assert kwargs.get("inference_protocol") is model.inference_protocol
+            assert args[0] is model.training_method
+            assert kwargs.get("inference_method") is model.inference_method
             spy.assert_called_once_with(True)
             mock_trainer.train.assert_called_once()
             train_args, train_kwargs = mock_trainer.train.call_args
@@ -394,8 +394,8 @@ class TestModel:
 
     def test_predict_sets_eval_mode(self, adata: AnnData):
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS)
-        spy = MagicMock(wraps=model.inference_protocol.set_train_mode)
-        model.inference_protocol.set_train_mode = spy
+        spy = MagicMock(wraps=model.inference_method.set_train_mode)
+        model.inference_method.set_train_mode = spy
         model.predict(adata)
         spy.assert_called_once_with(False)
 
@@ -407,11 +407,11 @@ class TestModel:
         assert isinstance(model.dm, DataManager)
         assert model.is_paired_setting is False
         # Structural — not nominal — the properties are typed `Supports*`.
-        assert isinstance(model.training_protocol, SupportsTraining)
-        assert isinstance(model.inference_protocol, SupportsInference)
+        assert isinstance(model.training_method, SupportsTraining)
+        assert isinstance(model.inference_method, SupportsInference)
         # Concrete classes still satisfy the structural contracts too.
-        assert isinstance(model.training_protocol, BaseTrainingProtocol)
-        assert isinstance(model.inference_protocol, BaseInferenceProtocol)
+        assert isinstance(model.training_method, BaseTrainingProtocol)
+        assert isinstance(model.inference_method, BaseInferenceProtocol)
         assert model.trainer is None
         assert model.condition_state_key is None
 
@@ -491,7 +491,7 @@ class TestModel:
 # Shared specs — the point of the `FlowSpecs` refactor
 # -----------------------------------------------------------------------------
 class TestModelSpecs:
-    """`Model.__init__` builds one specs instance and shares it with both protocols."""
+    """`Model.__init__` builds one specs instance and shares it with both methods."""
 
     # ---- Default (non-flow) --------------------------------------------
     def test_default_specs_is_plain_protocol_specs(self, adata: AnnData):
@@ -501,16 +501,16 @@ class TestModelSpecs:
         assert not isinstance(model.specs, FlowSpecs)
 
     def test_default_specs_shared_by_both_protocols(self, adata: AnnData):
-        """Both protocols hold the same specs instance by default."""
+        """Both methods hold the same specs instance by default."""
         model = _make_model(adata)
-        assert model.training_protocol.specs is model.inference_protocol.specs
-        assert model.training_protocol.specs is model.specs
+        assert model.training_method.specs is model.inference_method.specs
+        assert model.training_method.specs is model.specs
 
     def test_default_specs_module_matches_model_module(self, adata: AnnData):
         model = _make_model(adata)
         assert model.specs.module is model.module
-        assert model.training_protocol.module is model.module
-        assert model.inference_protocol.module is model.module
+        assert model.training_method.module is model.module
+        assert model.inference_method.module is model.module
 
     # ---- `is_flow=True` -------------------------------------------------
     def test_is_flow_builds_flow_specs(self, adata: AnnData):
@@ -526,7 +526,7 @@ class TestModelSpecs:
         assert isinstance(model.specs, ProtocolSpecs)
 
     def test_is_flow_specs_shared_by_both_protocols(self, adata: AnnData):
-        """The same `FlowSpecs` instance is handed to both protocols."""
+        """The same `FlowSpecs` instance is handed to both methods."""
         model = _make_model(
             adata,
             module_cls=DummyModule,
@@ -534,8 +534,8 @@ class TestModelSpecs:
             inference_protocol_cls=DummyInferenceProtocol,
             is_flow=True,
         )
-        assert model.training_protocol.specs is model.inference_protocol.specs
-        assert model.training_protocol.specs is model.specs
+        assert model.training_method.specs is model.inference_method.specs
+        assert model.training_method.specs is model.specs
 
     def test_is_flow_specs_defaults(self, adata: AnnData):
         """Without `flow_kwargs`, the `FlowSpecs` uses its default path and samplers."""
@@ -575,7 +575,7 @@ class TestModelSpecs:
         assert specs.generate_from_noise is True
 
     def test_flow_kwargs_both_protocols_see_same_path_object(self, adata: AnnData):
-        """The shared `FlowSpecs` gives both protocols identical flow objects."""
+        """The shared `FlowSpecs` gives both methods identical flow objects."""
         model = _make_model(
             adata,
             module_cls=DummyModule,
@@ -584,9 +584,9 @@ class TestModelSpecs:
             is_flow=True,
             flow_kwargs={"time_sampler": dummy_time_sampler},
         )
-        assert model.training_protocol.specs is model.inference_protocol.specs
-        assert model.training_protocol.specs.probability_path is model.inference_protocol.specs.probability_path
-        assert model.training_protocol.specs.time_sampler is model.inference_protocol.specs.time_sampler
+        assert model.training_method.specs is model.inference_method.specs
+        assert model.training_method.specs.probability_path is model.inference_method.specs.probability_path
+        assert model.training_method.specs.time_sampler is model.inference_method.specs.time_sampler
 
     # ---- `dtype` / `device_id` top-level -------------------------------
     def test_top_level_dtype_reaches_specs(self, adata: AnnData):
@@ -611,8 +611,8 @@ class TestModelSpecs:
             device_id="cpu",
         )
         assert model.specs.device_id == "cpu"
-        assert model.training_protocol.device_id == "cpu"
-        assert model.inference_protocol.device_id == "cpu"
+        assert model.training_method.device_id == "cpu"
+        assert model.inference_method.device_id == "cpu"
 
     def test_top_level_dtype_with_flow_specs(self, adata: AnnData):
         """`dtype` and `device_id` also apply when `is_flow=True`."""
@@ -668,7 +668,7 @@ class TestModelSpecs:
 
     # ---- Save / load preserves shared specs ----------------------------
     def test_save_load_preserves_shared_flow_specs(self, adata):
-        """A flow-specs model reloads with the same shared instance on both protocols."""
+        """A flow-specs model reloads with the same shared instance on both methods."""
         model = _make_model(
             adata,
             dm_kwargs=_DM_TRAIN_KWARGS,
@@ -686,8 +686,8 @@ class TestModelSpecs:
 
         loaded = Model.load(tmp_path, map_location="cpu")
         assert isinstance(loaded.specs, FlowSpecs)
-        assert loaded.training_protocol.specs is loaded.inference_protocol.specs
-        assert loaded.training_protocol.specs is loaded.specs
+        assert loaded.training_method.specs is loaded.inference_method.specs
+        assert loaded.training_method.specs is loaded.specs
         assert loaded.specs.time_sampler is dummy_time_sampler
 
         os.unlink(tmp_path)
@@ -697,26 +697,26 @@ class TestModelSpecs:
 # match_fn integration
 # -----------------------------------------------------------------------------
 class TestModelMatching:
-    """`match_fn` wraps the training protocol in `MatchedTrainingProtocol`."""
+    """`match_fn` wraps the training method in `MatchedTrainingMethod`."""
 
-    def test_construction_with_match_fn_wraps_training_protocol(self, adata):
+    def test_construction_with_match_fn_wraps_training_method(self, adata):
         model = _make_model(adata, match_fn=dummy_match_fn)
-        assert isinstance(model.training_protocol, MatchedTrainingProtocol)
-        assert model.training_protocol.matcher.match_fn is dummy_match_fn
+        assert isinstance(model.training_method, MatchedTrainingMethod)
+        assert model.training_method.matcher.match_fn is dummy_match_fn
 
     def test_construction_without_match_fn_leaves_protocol_unwrapped(self, adata):
         model = _make_model(adata)
-        assert not isinstance(model.training_protocol, MatchedTrainingProtocol)
-        assert isinstance(model.training_protocol, DummyTrainingProtocol)
+        assert not isinstance(model.training_method, MatchedTrainingMethod)
+        assert isinstance(model.training_method, DummyTrainingProtocol)
 
     def test_matched_protocol_satisfies_structural_contract(self, adata):
         """The wrapper satisfies `SupportsTraining` even though it does not subclass `BaseTrainingProtocol`."""
         model = _make_model(adata, match_fn=dummy_match_fn)
-        assert isinstance(model.training_protocol, SupportsTraining)
-        assert not isinstance(model.training_protocol, BaseTrainingProtocol)
+        assert isinstance(model.training_method, SupportsTraining)
+        assert not isinstance(model.training_method, BaseTrainingProtocol)
 
     def test_matched_protocol_forwards_storage_to_wrapped(self, adata):
-        """The wrapper's storage surface delegates to the wrapped protocol's specs."""
+        """The wrapper's storage surface delegates to the wrapped method's specs."""
         model = _make_model(
             adata,
             module_cls=DummyModule,
@@ -725,57 +725,57 @@ class TestModelMatching:
             match_fn=dummy_match_fn,
             device_id="cpu",
         )
-        assert model.training_protocol.module is model.module
-        assert model.training_protocol.device_id == "cpu"
-        assert model.training_protocol.dtype == torch.float32
+        assert model.training_method.module is model.module
+        assert model.training_method.device_id == "cpu"
+        assert model.training_method.dtype == torch.float32
 
     def test_train_without_per_call_match_fn_keeps_construction_matcher(self, adata, mock_optim_manager):
-        """A `train()` call with no `match_fn` uses the instance's (already matched) protocol."""
+        """A `train()` call with no `match_fn` uses the instance's (already matched) method."""
         adata = _with_split(adata)
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS, match_fn=dummy_match_fn)
-        assert isinstance(model.training_protocol, MatchedTrainingProtocol)
+        assert isinstance(model.training_method, MatchedTrainingMethod)
 
         with patch("sckitflow._model.Trainer") as mock_trainer_cls:
             model.train(adata, n_train_steps=2)
             training_arg = mock_trainer_cls.call_args[0][0]
-            # The instance's matched protocol is passed through unchanged.
-            assert training_arg is model.training_protocol
-            assert isinstance(training_arg, MatchedTrainingProtocol)
+            # The instance's matched method is passed through unchanged.
+            assert training_arg is model.training_method
+            assert isinstance(training_arg, MatchedTrainingMethod)
             assert training_arg.matcher.match_fn is dummy_match_fn
 
     def test_train_per_call_match_fn_wraps_unmatched_protocol(self, adata, mock_optim_manager):
-        """A `train(match_fn=...)` call wraps an unmatched instance protocol for that call only."""
+        """A `train(match_fn=...)` call wraps an unmatched instance method for that call only."""
         adata = _with_split(adata)
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS)
-        original = model.training_protocol
-        assert not isinstance(original, MatchedTrainingProtocol)
+        original = model.training_method
+        assert not isinstance(original, MatchedTrainingMethod)
 
         with patch("sckitflow._model.Trainer") as mock_trainer_cls:
             model.train(adata, n_train_steps=2, match_fn=dummy_match_fn)
             training_arg = mock_trainer_cls.call_args[0][0]
-            assert isinstance(training_arg, MatchedTrainingProtocol)
+            assert isinstance(training_arg, MatchedTrainingMethod)
             assert training_arg.matcher.match_fn is dummy_match_fn
-            # The instance's stored protocol is untouched.
-            assert model.training_protocol is original
-            assert not isinstance(model.training_protocol, MatchedTrainingProtocol)
+            # The instance's stored method is untouched.
+            assert model.training_method is original
+            assert not isinstance(model.training_method, MatchedTrainingMethod)
 
     def test_train_per_call_match_fn_overrides_construction_matcher(self, adata, mock_optim_manager):
         """A per-call `match_fn` replaces the construction-time matcher for that call only."""
         adata = _with_split(adata)
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS, match_fn=dummy_match_fn)
-        original = model.training_protocol
+        original = model.training_method
 
         with patch("sckitflow._model.Trainer") as mock_trainer_cls:
             model.train(adata, n_train_steps=2, match_fn=other_match_fn)
             training_arg = mock_trainer_cls.call_args[0][0]
-            assert isinstance(training_arg, MatchedTrainingProtocol)
+            assert isinstance(training_arg, MatchedTrainingMethod)
             assert training_arg.matcher.match_fn is other_match_fn
-            # The stored protocol still carries the construction-time matcher.
-            assert model.training_protocol is original
-            assert model.training_protocol.matcher.match_fn is dummy_match_fn
+            # The stored method still carries the construction-time matcher.
+            assert model.training_method is original
+            assert model.training_method.matcher.match_fn is dummy_match_fn
 
     def test_train_per_call_protocol_without_match_fn_is_unwrapped(self, adata, mock_optim_manager):
-        """A per-call protocol override with no `match_fn` is used raw."""
+        """A per-call method override with no `match_fn` is used raw."""
         adata = _with_split(adata)
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS, match_fn=dummy_match_fn)
 
@@ -787,22 +787,22 @@ class TestModelMatching:
             )
             training_arg = mock_trainer_cls.call_args[0][0]
             # The per-call override bypasses construction-time matching.
-            assert not isinstance(training_arg, MatchedTrainingProtocol)
+            assert not isinstance(training_arg, MatchedTrainingMethod)
             assert isinstance(training_arg, DummyTrainingProtocol)
 
     def test_save_load_preserves_matching(self, adata):
         """A model saved with `match_fn` reloads with the matcher intact."""
         model = _make_model(adata, dm_kwargs=_DM_TRAIN_KWARGS, match_fn=dummy_match_fn)
-        assert isinstance(model.training_protocol, MatchedTrainingProtocol)
+        assert isinstance(model.training_method, MatchedTrainingMethod)
 
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
             tmp_path = tmp.name
         model.save(tmp_path, allow_overwrite=True)
 
         loaded = Model.load(tmp_path, map_location="cpu")
-        assert isinstance(loaded.training_protocol, MatchedTrainingProtocol)
+        assert isinstance(loaded.training_method, MatchedTrainingMethod)
         # The matcher's callable survives pickling (dummy_match_fn is module-level).
-        assert loaded.training_protocol.matcher.match_fn is dummy_match_fn
+        assert loaded.training_method.matcher.match_fn is dummy_match_fn
 
         os.unlink(tmp_path)
 
@@ -984,13 +984,13 @@ class TestModelPredictCombinations:
         model = _make_model(adata, dm_kwargs=dm_kwargs)
 
         captured_step_data = []
-        original_predict = model.inference_protocol.predict
+        original_predict = model.inference_method.predict
 
         def spy_predict(step_data, *args, **kwargs):
             captured_step_data.append(step_data)
             return original_predict(step_data, *args, **kwargs)
 
-        model.inference_protocol.predict = spy_predict
+        model.inference_method.predict = spy_predict
 
         pred_adata = model.predict(adata)
 
@@ -1044,13 +1044,13 @@ class TestModelPredictCombinations:
         model = _make_model(adata, dm_kwargs=dm_kwargs)
 
         captured = []
-        original_predict = model.inference_protocol.predict
+        original_predict = model.inference_method.predict
 
         def spy(step_data, *args, **kwargs):
             captured.append(step_data)
             return original_predict(step_data, *args, **kwargs)
 
-        model.inference_protocol.predict = spy
+        model.inference_method.predict = spy
 
         pred = model.predict(adata)
 

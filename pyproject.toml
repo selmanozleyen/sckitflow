@@ -90,6 +90,7 @@ optional-dependencies.test = [
   "sckitflow[logging,torch]", # TestWandBLogger imports omegaconf for real (wandb itself is mocked)
 ]
 optional-dependencies.torch = [
+  "lightning>=2.2",       # the training loop, optimizer stepping and logging
   "pot>=0.9",
   "scfit[torch]>=0.0.7", # the loaders stream with `to=None` and map the native arrays onto torch
   "torch>=2.2",

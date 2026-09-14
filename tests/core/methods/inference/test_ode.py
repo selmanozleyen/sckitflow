@@ -4,7 +4,6 @@ import pytest
 import torch
 
 from sckitflow.core._types import PredictionData
-from sckitflow.core.methods._base import FlowSpecs
 from sckitflow.core.methods.inference._ode import ODEInference
 
 # Adjust the module path above to wherever ODEInference lives.
@@ -66,15 +65,14 @@ def make_inference(dummy_module):
             "device_id": "cpu",
         }
         kwargs.update(overrides)
-        specs = FlowSpecs(**kwargs)
         ode_kwargs = {} if ode_kwargs is None else ode_kwargs
-        return ODEInference(specs, **ode_kwargs)
+        return ODEInference(**kwargs, **ode_kwargs)
 
     return _make
 
 
 # -------------------- Construction and properties --------------------
-def test_init_stores_flow_specs_and_extras(make_inference, dummy_module):
+def test_init_stores_flow_config_and_extras(make_inference, dummy_module):
     inference = make_inference(
         ode_kwargs={
             "solver_kwargs": {"rtol": 1e-5},
@@ -84,7 +82,7 @@ def test_init_stores_flow_specs_and_extras(make_inference, dummy_module):
         }
     )
 
-    # FlowSpecs inherited
+    # flow configuration
     assert inference.module is dummy_module
     assert inference.device_id == "cpu"
     assert inference.dtype == torch.float32
@@ -99,7 +97,7 @@ def test_init_stores_flow_specs_and_extras(make_inference, dummy_module):
     assert inference.latent is None
 
 
-def test_init_forwards_flow_specs_to_parent(make_inference):
+def test_init_forwards_flow_config_to_parent(make_inference):
     ns = dummy_noise_sampler
     inference = make_inference(
         noise_sampler=ns,

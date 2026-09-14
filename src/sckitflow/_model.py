@@ -4,391 +4,120 @@ import logging
 import tarfile
 import tempfile
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import cloudpickle
 import numpy as np
 import pandas as pd
+import torch
 from anndata import AnnData
 from tqdm import tqdm
 
 from sckitflow._types import PredictionData
-from sckitflow.core._types import MatchFn, StepData
-from sckitflow.core.methods import INFERENCE_PROTOCOLS_REGISTRY, TRAINING_PROTOCOLS_REGISTRY
-from sckitflow.core.methods._base import (
-    FlowSpecs,
-    MatchedTrainingProtocol,
-    ProtocolSpecs,
-    SupportsInference,
-    SupportsTraining,
-)
-from sckitflow.core.methods._opt import OptimConfig, OptimizationManager
-from sckitflow.core.nn._modules import BaseModule
+from sckitflow.core._types import StepData
+from sckitflow.core.methods._base import SupportsInference, SupportsTraining
+from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data._manager import DataManager, DataManagerKwargs
-from sckitflow.trainer._callbacks import BaseCallback, TrainingCallbacks
-from sckitflow.trainer._trainer import Trainer
+from sckitflow.data._manager import DataManager
+from sckitflow.trainer._plan import TrainingPlan
 
 if TYPE_CHECKING:
-    import torch
+    pass
 
-    from sckitflow.data._loader import LoaderKwargs
-
-__all__ = ["Model", "ModelBuilder"]
+__all__ = ["Model"]
 
 
-def _build_module(
-    module: BaseModule | None = None,
-    module_cls: type[BaseModule] | None = None,
-    data_dims: DataDimensions | None = None,
-    module_kwargs: dict[str, Any] | None = None,
-) -> BaseModule:
-    """Returns an instantiated module from the given inputs.
+class Model:
+    """Methods plus a data module: predicts, and serializes the whole run.
 
-    Resolution order:
-    1. `module` is returned as-is.
-    2. `module_cls` is instantiated via its `init_from_dims_registry`
-       classmethod, using `data_dims` and `module_kwargs`.
-    3. Otherwise, a `ValueError` is raised.
-    """
-    if module is not None:
-        return module
+    Training is not here -- it is a :class:`~sckitflow.trainer.TrainingPlan` and
+    a ``lightning.Trainer``, which :meth:`plan` builds for you:
 
-    if module_cls is not None:
-        if data_dims is None:
-            raise ValueError("When initializing the module with `module_cls`, `data_dims` should be provided.")
-        module_kwargs = {} if module_kwargs is None else module_kwargs
-        return module_cls.init_from_dims_registry(data_dims, **module_kwargs)
+    .. code-block:: python
 
-    raise ValueError("At least one of `module` or `module_cls` must be passed.")
-
-
-def _resolve_specs(
-    module: BaseModule,
-    dtype: torch.dtype | None = None,
-    device_id: str | None = None,
-    flow_kwargs: Mapping[str, Any] | None = None,
-    is_flow: bool = False,
-) -> ProtocolSpecs:
-    """Resolve the shared `ProtocolSpecs` (or `FlowSpecs`) for the model.
-
-    Resolution order:
-    1. If `flow_kwargs` is provided (even as `{}`), a `FlowSpecs` is built with
-       those kwargs on top of the module.
-    3. Otherwise, a plain `ProtocolSpecs` is built from the module.
-    """
-    if is_flow:
-        flow_kwargs = {} if flow_kwargs is None else flow_kwargs
-        conflicting = {"dtype", "device_id"} & flow_kwargs.keys()
-        if conflicting:
-            raise ValueError(
-                f"`flow_kwargs` must not contain {sorted(conflicting)}; pass them as "
-                "top-level `ModelKwargs` so both protocols share the same value."
-            )
-        return FlowSpecs(module, device_id=device_id, dtype=dtype, **flow_kwargs)
-
-    return ProtocolSpecs(module, device_id=device_id, dtype=dtype)
-
-
-@overload
-def _build_protocol(
-    specs: ProtocolSpecs | FlowSpecs,
-    mode: Literal["training"],
-    protocol_cls: type[SupportsTraining] | None = None,
-    protocol_id: str | None = None,
-    protocol_kwargs: dict[str, Any] | None = None,
-    *,
-    allow_none: Literal[False] = False,
-) -> SupportsTraining: ...
-
-
-@overload
-def _build_protocol(
-    specs: ProtocolSpecs | FlowSpecs,
-    mode: Literal["training"],
-    protocol_cls: type[SupportsTraining] | None = None,
-    protocol_id: str | None = None,
-    protocol_kwargs: dict[str, Any] | None = None,
-    *,
-    allow_none: Literal[True],
-) -> SupportsTraining | None: ...
-
-
-@overload
-def _build_protocol(
-    specs: ProtocolSpecs | FlowSpecs,
-    mode: Literal["inference"],
-    protocol_cls: type[SupportsInference] | None = None,
-    protocol_id: str | None = None,
-    protocol_kwargs: dict[str, Any] | None = None,
-    *,
-    allow_none: Literal[False] = False,
-) -> SupportsInference: ...
-
-
-@overload
-def _build_protocol(
-    specs: ProtocolSpecs | FlowSpecs,
-    mode: Literal["inference"],
-    protocol_cls: type[SupportsInference] | None = None,
-    protocol_id: str | None = None,
-    protocol_kwargs: dict[str, Any] | None = None,
-    *,
-    allow_none: Literal[True],
-) -> SupportsInference | None: ...
-
-
-def _build_protocol(
-    specs: ProtocolSpecs | FlowSpecs,
-    mode: Literal["inference", "training"],
-    protocol_cls: type[object] | None = None,
-    protocol_id: str | None = None,
-    protocol_kwargs: dict[str, Any] | None = None,
-    allow_none: bool = False,
-) -> SupportsTraining | SupportsInference | None:
-    """Returns an instantiated protocol from the given shared `specs`.
-
-    Resolution order:
-    1. `protocol_cls` is instantiated with `(specs, **protocol_kwargs)`.
-    2. `protocol_id` is looked up in the mode-specific registry and
-       instantiated the same way.
-    3. When `allow_none` is `True`, `None` is returned.
-    4. Otherwise, a `ValueError` is raised.
-
-    The protocol receives the shared specs instance, so training and inference
-    protocols constructed with the same `specs` share the underlying module,
-    dtype, device, and (when `specs` is a `FlowSpecs`) flow configuration.
-    """
-    if protocol_cls is not None:
-        protocol_kwargs = {} if protocol_kwargs is None else protocol_kwargs
-        return protocol_cls(specs, **protocol_kwargs)
-
-    elif protocol_id is not None:
-        protocol_kwargs = {} if protocol_kwargs is None else protocol_kwargs
-
-        if mode == "training":
-            registry = TRAINING_PROTOCOLS_REGISTRY
-        elif mode == "inference":
-            registry = INFERENCE_PROTOCOLS_REGISTRY
-        else:
-            raise ValueError(f"Invalid mode {mode}: set to `training` or `inference`.")
-
-        protocol_cls = registry[protocol_id]
-        return protocol_cls(specs, **protocol_kwargs)
-
-    elif allow_none:
-        return None
-
-    else:
-        raise ValueError(
-            "At least one of `protocol`, `protocol_cls` or `protocol_id` "
-            "must be passed or `allow_none` should be set to True."
-        )
-
-
-def _get_matched_protocol(
-    training_protocol: SupportsTraining,
-    match_fn: MatchFn | None = None,
-) -> SupportsTraining:
-    """Wrap `training_protocol` with `match_fn` when one is provided.
-
-    - `match_fn is None` → return `training_protocol` unchanged.
-    - `match_fn` provided, protocol already matched → unwrap, then re-wrap.
-    - `match_fn` provided, protocol unmatched → wrap.
-
-    The returned object always satisfies `SupportsTraining`.
-    """
-    if match_fn is None:
-        return training_protocol
-    if isinstance(training_protocol, MatchedTrainingProtocol):
-        training_protocol = training_protocol.protocol
-    return MatchedTrainingProtocol(training_protocol, match_fn)
-
-
-class ModelKwargs(TypedDict, total=False):
-    """Keyword arguments to initialize the model.
-
-    :param module: The neural module used to instantiate the model.
-        When provided, it takes precedence over `module_cls`.
-    :param module_cls: A neural module class, inheriting from `BaseModule`;
-        it is initialized only when `module` is `None`, using `module_kwargs`
-        as keyword arguments. Required when `module` is `None`.
-    :param module_kwargs: Optional keyword arguments used to initialize the
-        neural module; only used when initializing it from `module_cls`.
-    :param protocol_specs: An explicit `ProtocolSpecs` (or `FlowSpecs`) to
-        share with both protocols. When provided, `flow_kwargs` is ignored.
-        Defaults to `None`.
-    :param flow_kwargs: Keyword arguments used to build a `FlowSpecs` on top
-        of the module, shared by both protocols. Pass `{}` to build a
-        `FlowSpecs` with all defaults, or provide the flow configuration
-        (`probability_path`, `time_sampler`, `noise_sampler`,
-        `generate_from_noise`) to share it between training and inference.
-        When `None`, a plain `ProtocolSpecs` is built instead. Defaults to
-        `None`. Values must be picklable for `Model.save` to work (module-level
-        functions or bound methods of picklable objects; not lambdas).
-    :param training_protocol_cls: A class satisfying `SupportsTraining`, to be
-        initialized from the shared specs. When provided, it takes precedence
-        over `training_protocol_id`. Initialized with
-        `training_protocol_kwargs`.
-    :param training_protocol_id: Identifier of a training protocol in
-        `TRAINING_PROTOCOLS_REGISTRY`. Used only when `training_protocol_cls`
-        is `None`. Initialized from the shared specs with
-        `training_protocol_kwargs`.
-    :param training_protocol_kwargs: Keyword arguments used to initialize the
-        training protocol.
-    :param inference_protocol_cls: A class satisfying `SupportsInference`, to
-        be initialized from the shared specs. When provided, it takes
-        precedence over `inference_protocol_id`. Initialized with
-        `inference_protocol_kwargs`.
-    :param inference_protocol_id: Identifier of an inference protocol in
-        `INFERENCE_PROTOCOLS_REGISTRY`. Used only when
-        `inference_protocol_cls` is `None`. Initialized from the shared specs
-        with `inference_protocol_kwargs`.
-    :param inference_protocol_kwargs: Keyword arguments used to initialize the
-        inference protocol.
-    :param match_fn: Matching callable applied during training. When provided,
-        the training protocol is wrapped in `MatchedTrainingProtocol`, which
-        matches `StepData` before `compute_loss`. May be overridden per
-        `Model.train` call. Must be picklable for `Model.save` to work.
-    """
-
-    module: BaseModule | None
-    module_cls: type[BaseModule] | None
-    module_kwargs: dict[str, Any] | None
-    dtype: torch.dtype | None
-    device_id: str | None
-    is_flow: bool
-    flow_kwargs: dict[str, Any] | None
-    training_protocol_cls: type[SupportsTraining] | None
-    training_protocol_id: str | None
-    training_protocol_kwargs: dict[str, Any] | None
-    inference_protocol_cls: type[SupportsInference] | None
-    inference_protocol_id: str | None
-    inference_protocol_kwargs: dict[str, Any] | None
-    match_fn: MatchFn | None
-
-
-class ModelBuilder:
-    """Two-step builder for a :class:`Model`.
-
-    Step one (:meth:`from_adata`) prepares the *data* side: it initializes the
-    :class:`DataManager` from the schema keyword arguments and derives the data
-    dimensionalities. Step two (:meth:`build`) attaches the module and the
-    training/inference protocols and returns a ready-to-train :class:`Model`.
-
-    Any preprocessing of the state representation (e.g. PCA, normalization)
-    must be done by the caller *before* :meth:`from_adata`, and the resulting
-    representation passed via the ``sample_rep`` keyword argument.
+        dmod = FlowDataModule.from_adata(adata, conditions=..., groups=...)
+        module = MLPVelocity(dmod.data_dims.state_dim)
+        model = Model(dmod, CFMTraining(module=module), ODEInference(module=module))
+        pl.Trainer(max_steps=1000).fit(model.plan(optimizer), datamodule=dmod)
+        model.save("run.tar.gz")
     """
 
     def __init__(
         self,
-        dm: DataManager,
-        data_dims: DataDimensions,
+        datamodule: FlowDataModule,
+        training_method: SupportsTraining,
+        inference_method: SupportsInference | None = None,
     ) -> None:
-        """See :meth:`from_adata` for the usual entry point."""
-        self._dm = dm
-        self._data_dims = data_dims
+        """Initialize a model from a data module and the methods to run.
 
-    @classmethod
-    def from_adata(
-        cls,
-        adata: AnnData,
-        **dm_kwargs: Unpack[DataManagerKwargs],
-    ) -> ModelBuilder:
-        """Prepare the data side of a model from an annotated data object.
+        The model takes methods, it does not build them: construct them
+        yourself (they own the module and its configuration) and hand them over.
+        The module is read back off the training method. To match `StepData`
+        before the loss, wrap the training method in a
+        :class:`~sckitflow.core.methods._base.MatchedTrainingMethod` before
+        passing it -- the model itself knows nothing about matching.
 
-        :param adata: The annotated data object used to fit the schema. Any
-            preprocessing of the state representation must already have been
-            applied by the caller.
-        :type adata: class: `AnnData`
+        :param datamodule: The fitted :class:`~sckitflow.data.FlowDataModule`
+            holding the schema and the streaming loaders.
+        :type datamodule: class: `FlowDataModule`
 
-        :param dm_kwargs: Keyword arguments forwarded to :class:`DataManager`.
+        :param training_method: An object satisfying `SupportsTraining`.
+        :type training_method: class: `SupportsTraining`
+
+        :param inference_method: An object satisfying `SupportsInference`, or
+            `None` for a training-only model -- `Model.predict` and validation
+            then raise. May be the very same object as `training_method` when
+            one class implements both contracts; they are kept as separate
+            arguments so a pair that does not is equally natural.
+        :type inference_method: class: `SupportsInference | None`
         """
-        dm = DataManager(**dm_kwargs)
-        data_dims = dm.get_data_dimensionalities(adata)
-        return cls(dm, data_dims)
+        self._datamodule = datamodule
+
+        # ----- Take the methods as given -----
+        self._training_method: SupportsTraining = training_method
+        self._inference_method: SupportsInference | None = inference_method
+
+        # The module to optimize, save and move between devices. Both contracts
+        # expose it, so there is nothing for the model to build or reconcile.
+        self._module: torch.nn.Module = training_method.module
+
+    # The schema lives in the data module; read it through, never copy it, so
+    # reattaching or reloading the data module cannot leave the model stale.
+    @property
+    def _dm(self) -> DataManager:
+        return self._datamodule.dm
 
     @property
-    def dm(self) -> DataManager:
-        """The fitted data manager."""
-        return self._dm
+    def _dims(self) -> DataDimensions:
+        return self._datamodule.data_dims
 
-    @property
-    def data_dims(self) -> DataDimensions:
-        """The data dimensionalities derived from the registration data."""
-        return self._data_dims
+    def plan(
+        self,
+        optimizer: torch.optim.Optimizer,
+        *,
+        lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+        metrics: Mapping[str, torch.nn.Module] | None = None,
+        val_predict_kwargs: dict[str, Any] | None = None,
+    ) -> TrainingPlan:
+        """Wraps this model's methods in a `TrainingPlan` for ``Trainer.fit``.
 
-    def build(self, **model_kwargs: Unpack[ModelKwargs]) -> Model:
-        """Attach a training protocol, an inference protocol, and a module to the Model."""
-        return Model(self._dm, self._data_dims, **model_kwargs)
-
-
-class Model:
-    def __init__(self, dm: DataManager, data_dims: DataDimensions, **model_kwargs: Unpack[ModelKwargs]) -> None:
-        """Initialize a model from a fitted data manager and its dimensionalities.
-
-        Usually constructed through :class:`ModelBuilder` rather than directly.
-
-        :param dm: The fitted data manager describing the data schema.
-        :type dm: class: `DataManager`
-
-        :param data_dims: The data dimensionalities derived from the registration data.
-        :type data_dims: class: `DataDimensions`
-
-        :param model_kwargs: Module and protocol configuration; see
-            :class:`ModelKwargs` for the accepted options.
+        :param optimizer: An already-built optimizer over this model's module,
+            e.g. ``torch.optim.Adam(model.module.parameters(), lr=1e-4)``.
+        :param lr_scheduler: Optional scheduler for that optimizer.
+        :param metrics: ``{name: torchmetrics.Metric}`` scored during validation.
+        :param val_predict_kwargs: Forwarded to the inference method's ``predict``.
         """
-        # ----- Store data manager and dimensionalities -----
-        self._dm = dm
-        self._dims = data_dims
-
-        # ---- Initialize module ----
-        self._module: BaseModule = _build_module(
-            module=model_kwargs.get("module"),
-            module_cls=model_kwargs.get("module_cls"),
-            data_dims=self._dims,
-            module_kwargs=model_kwargs.get("module_kwargs"),
+        return TrainingPlan(
+            self._training_method,
+            optimizer,
+            lr_scheduler=lr_scheduler,
+            inference_method=self._inference_method,
+            metrics=metrics,
+            val_names=self._datamodule.val_names,
+            predict_kwargs=val_predict_kwargs,
         )
-
-        # ---- Resolve the shared specs ----
-        # A single `ProtocolSpecs` (or `FlowSpecs`) instance is shared by both
-        # the training and the inference protocol, so module, dtype, device, and
-        # flow configuration are guaranteed identical between them.
-        dtype = model_kwargs.get("dtype")
-        device_id = model_kwargs.get("device_id")
-        flow_kwargs = model_kwargs.get("flow_kwargs", None)
-        is_flow = model_kwargs.get("is_flow", False)
-        self._specs: ProtocolSpecs | FlowSpecs = _resolve_specs(
-            self._module, device_id=device_id, dtype=dtype, flow_kwargs=flow_kwargs, is_flow=is_flow
-        )
-
-        # ----- Initialize protocols -----
-        training_protocol = _build_protocol(
-            self._specs,
-            "training",
-            protocol_cls=model_kwargs.get("training_protocol_cls"),
-            protocol_id=model_kwargs.get("training_protocol_id"),
-            protocol_kwargs=model_kwargs.get("training_protocol_kwargs"),
-            allow_none=False,
-        )
-
-        match_fn = model_kwargs.get("match_fn")
-        self._training_protocol: SupportsTraining = _get_matched_protocol(training_protocol, match_fn=match_fn)
-
-        self._inference_protocol: SupportsInference = _build_protocol(
-            self._specs,
-            "inference",
-            protocol_cls=model_kwargs.get("inference_protocol_cls"),
-            protocol_id=model_kwargs.get("inference_protocol_id"),
-            protocol_kwargs=model_kwargs.get("inference_protocol_kwargs"),
-            allow_none=False,
-        )
-
-        # ----- Initialize additional attributes -----
-        self._trainer: Trainer | None = None
 
     @overload
     def _predict_empty(
@@ -538,7 +267,9 @@ class Model:
 
         obsm_final = {k: np.concatenate(v, axis=0) for k, v in all_obsm.items()}
 
-        pred_adata = AnnData(X=X_np, obs=obs_final, var=pd.DataFrame(index=self._dims.feature_names), obsm=obsm_final)
+        pred_adata = AnnData(
+            X=X_np, obs=obs_final, var=pd.DataFrame(index=self._dims.feature_names), obsm=obsm_final
+        )
 
         if return_raw:
             return pred_adata, merged_pred
@@ -556,135 +287,18 @@ class Model:
         return np.array(tensor)
 
     def to_device(self, device: str) -> None:
-        """Move the underlying PyTorch module and optimizer state to the specified device."""
-        import torch
+        """Move the underlying PyTorch module to the specified device.
 
-        self._module.to(device)
-        if self._trainer is not None and hasattr(self._trainer, "opt_manager"):
-            opt = self._trainer.opt_manager.optimizer
-            for param_group in opt.param_groups:
-                for param in param_group["params"]:
-                    if param.device.type != device.split(":")[0]:
-                        param.data = param.data.to(device)
-            for state in opt.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor) and v.device.type != device.split(":")[0]:
-                        state[k] = v.to(device)
-
-    def train(
-        self,
-        adata: AnnData,
-        *,
-        training_protocol_cls: type[SupportsTraining] | None = None,
-        training_protocol_id: str | None = None,
-        training_protocol_kwargs: dict[str, Any] | None = None,
-        inference_protocol_cls: type[SupportsInference] | None = None,
-        inference_protocol_id: str | None = None,
-        inference_protocol_kwargs: dict[str, Any] | None = None,
-        match_fn: MatchFn | None = None,
-        train_split: str = "train",
-        control_adata: AnnData | None = None,
-        callbacks: TrainingCallbacks | Sequence[BaseCallback] | None = None,
-        n_train_steps: int = 100_000,
-        valid_freq: int = 1_000,
-        pbar_freq: int = 100,
-        batch_size: int = 128,
-        loader_kwargs: LoaderKwargs | None = None,
-        optim_config: OptimConfig | None = None,
-        compute_loss_kwargs: dict[str, Any] | None = None,
-        val_predict_kwargs: dict[str, Any] | None = None,
-        cb_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """Trains the model by streaming ``StepData`` batches from scfit-backed loaders.
-
-        :param adata: The annotated data object to stream.
-        :param train_split: The split value whose loader drives optimization. Defaults to ``"train"``.
-        :param control_adata: Optional separate control (source) pool, shared by every split.
-        :param callbacks: Callbacks used during training.
-        :param n_train_steps: Number of training steps (streamed batches). Defaults to ``100_000``.
-        :param valid_freq: Frequency (in steps) of validation passes. Defaults to ``1_000``.
-        :param pbar_freq: Frequency (in steps) of progress-bar refreshes. Defaults to ``100``.
-        :param batch_size: Observations per streamed batch. Defaults to ``128``.
-        :param loader_kwargs: Options for each streaming loader.
-        :param optim_config: Optimizer / scheduler configuration.
-        :param training_protocol_cls: Overrides the model's training protocol for this call only.
-        :param training_protocol_id: Identifier of a registered training protocol.
-        :param training_protocol_kwargs: Keyword arguments forwarded to the per-call training protocol.
-        :param inference_protocol_cls: Overrides the model's inference protocol for this call's validation only.
-        :param inference_protocol_id: Identifier of a registered inference protocol.
-        :param inference_protocol_kwargs: Keyword arguments forwarded to the per-call inference protocol.
-        :param match_fn: Overrides the construction-time matcher for this call only. When `None`,
-            the instance's training protocol (matched or not) is used as-is.
-        :param compute_loss_kwargs: Forwarded to the training protocol's ``compute_loss``.
-        :param val_predict_kwargs: Forwarded to the inference protocol's ``predict`` during validation.
-        :param cb_kwargs: Forwarded to every callback hook.
+        Optimizer state is Lightning's to place -- it is re-homed on the next
+        ``fit``, so there is nothing to walk here.
         """
-        # get training protocol
-        training_protocol = _build_protocol(
-            self._specs,
-            "training",
-            protocol_cls=training_protocol_cls,
-            protocol_id=training_protocol_id,
-            protocol_kwargs=training_protocol_kwargs,
-            allow_none=True,
-        )
-        if training_protocol is None:
-            training_protocol = self._training_protocol
-        training_protocol: SupportsTraining = _get_matched_protocol(training_protocol, match_fn=match_fn)
-
-        # get inference protocol
-        inference_protocol = _build_protocol(
-            self._specs,
-            "inference",
-            protocol_cls=inference_protocol_cls,
-            protocol_id=inference_protocol_id,
-            protocol_kwargs=inference_protocol_kwargs,
-            allow_none=True,
-        )
-        if inference_protocol is None:
-            inference_protocol = self._inference_protocol
-
-        # Build one streaming loader per split.
-        loader_kwargs = dict(loader_kwargs or {})
-        loader_kwargs.setdefault("to", None)
-        loader_kwargs.setdefault("batch_size", batch_size)
-        loader_kwargs.setdefault("dtype", training_protocol.dtype)
-        loader_kwargs.setdefault("device", training_protocol.device_id)
-        loaders = self._dm.get_dataloaders(adata, control_adata=control_adata, **loader_kwargs)
-        if train_split not in loaders:
-            raise KeyError(
-                f"train split {train_split!r} has no loader; available splits: {list(loaders)}. "
-                "(A split with only control groups produces no loader.)"
-            )
-
-        train_loader = loaders[train_split].set_n_iters(n_train_steps)
-        val_loaders = {split: loader for split, loader in loaders.items() if split != train_split}
-
-        opt_manager = OptimizationManager.from_config(self._module, optim_config or OptimConfig())
-
-        self._trainer = Trainer(
-            training_protocol, opt_manager, inference_protocol=inference_protocol, callbacks=callbacks
-        )
-
-        training_protocol.set_train_mode(True)
-
-        self._trainer.train(
-            train_loader,
-            val_loaders=val_loaders or None,
-            valid_freq=valid_freq,
-            pbar_freq=pbar_freq,
-            compute_loss_kwargs=compute_loss_kwargs,
-            val_predict_kwargs=val_predict_kwargs,
-            cb_kwargs=cb_kwargs,
-        )
+        self._module.to(device)
 
     def predict(
         self,
         adata: AnnData,
         *,
-        inference_protocol_cls: type[SupportsInference] | None = None,
-        inference_protocol_id: str | None = None,
-        inference_protocol_kwargs: dict[str, Any] | None = None,
+        inference_method: SupportsInference | None = None,
         return_raw: bool = False,
         max_per_group: int | None = None,
         require_target_state: bool = True,
@@ -696,30 +310,25 @@ class Model:
         """Generate flow predictions, one deterministic pass per group via :class:`EvalLoader`.
 
         :param adata: The input adata containing the metadata for prediction.
-        :param inference_protocol_cls: Overrides the model's inference protocol for this call only.
-        :param inference_protocol_id: Identifier of a registered inference protocol.
-        :param inference_protocol_kwargs: Keyword arguments forwarded to the per-call inference protocol.
+        :param inference_method: Overrides the model's inference method for this call only.
         :param return_raw: If ``True``, also return the raw concatenated ``PredictionData``.
         :param max_per_group: Per-group cap on observations.
         :param require_target_state: Whether ``adata`` must carry a target state representation.
         :param control_values_dict: Optional mapping from each condition level to its control value.
         :param matched_keys: Optional ``{source group key: target group key}`` pairs for fixed matching.
         :param control_adata: Optional separate control (source) pool.
-        :param predict_kwargs: Forwarded to the inference protocol's ``predict``.
+        :param predict_kwargs: Forwarded to the inference method's ``predict``.
         :return: An AnnData with predictions, or a tuple ``(AnnData, PredictionData)`` if ``return_raw``.
         """
-        inference_protocol = _build_protocol(
-            self._specs,
-            "inference",
-            protocol_cls=inference_protocol_cls,
-            protocol_id=inference_protocol_id,
-            protocol_kwargs=inference_protocol_kwargs,
-            allow_none=True,
-        )
-        if inference_protocol is None:
-            inference_protocol = self._inference_protocol
+        if inference_method is None:
+            inference_method = self._inference_method
+        if inference_method is None:
+            raise ValueError("this model has no inference method: pass one to `Model(...)` or to `predict(...)`.")
 
-        inference_protocol.set_train_mode(False)
+        inference_method.module.train(False)
+        param = next(inference_method.module.parameters(), None)
+        module_dtype = torch.float32 if param is None else param.dtype
+        module_device = "cpu" if param is None else param.device
         predict_kwargs = {} if predict_kwargs is None else predict_kwargs
 
         eval_loader = self._dm.get_eval_loader(
@@ -730,8 +339,9 @@ class Model:
             matched_keys=matched_keys,
             control_adata=control_adata,
             to=None,
-            dtype=inference_protocol.dtype,
-            device=inference_protocol.device_id,
+            # the module is the reference: build the batch where it already lives
+            dtype=module_dtype,
+            device=str(module_device),
         )
 
         if len(eval_loader) == 0:
@@ -744,7 +354,7 @@ class Model:
         cont_keys = (*eval_loader.cond_cont_keys, *eval_loader.resp_keys)
 
         for step_data, leaf in tqdm(eval_loader, total=len(eval_loader), desc="Predicting"):
-            pred_obj = inference_protocol.predict(step_data, **predict_kwargs)
+            pred_obj = inference_method.predict(step_data, **predict_kwargs)
             all_preds.append(pred_obj)
 
             all_obs.append(self._pred_obs_from_leaf(group_cols, leaf, pred_obj))
@@ -763,15 +373,7 @@ class Model:
         elif path.exists() and allow_overwrite:
             path.unlink()
 
-        import torch
-
         self._module.cpu()
-        if self._trainer is not None and hasattr(self._trainer, "opt_manager"):
-            opt = self._trainer.opt_manager.optimizer
-            for state in opt.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = v.cpu()
 
         with tarfile.open(filepath, "w:gz") as tar:
             with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
@@ -788,7 +390,7 @@ class Model:
         filepath: str,
         adata: AnnData | None = None,
         map_location: str | None = None,
-        **register_kwargs,
+        **attach_kwargs,
     ) -> Model:
         """Load a saved model from a tarball."""
         path = Path(filepath)
@@ -816,14 +418,19 @@ class Model:
                 model = cloudpickle.load(f)
 
         if adata is not None:
-            builder = ModelBuilder.from_adata(adata, **register_kwargs)
-            model._dm = builder.dm
-            model._dims = builder.data_dims
+            # Attach, not re-fit: the saved schema is the one the model trained
+            # with, so rebuilding it from `adata` could silently change it.
+            model._datamodule.attach(adata, **attach_kwargs)
 
         if map_location is not None:
             model.to_device(map_location)
 
         return model
+
+    @property
+    def datamodule(self) -> FlowDataModule:
+        """The data module holding the schema and the streaming loaders."""
+        return self._datamodule
 
     @property
     def dm(self) -> DataManager:
@@ -836,34 +443,19 @@ class Model:
         return self._dm.control_values_dict is not None or self._dm.matched_keys is not None
 
     @property
-    def module(self) -> BaseModule:
+    def module(self) -> torch.nn.Module:
         """Returns the underlying module."""
         return self._module
 
     @property
-    def specs(self) -> ProtocolSpecs:
-        """The shared `ProtocolSpecs` (or `FlowSpecs`) instance.
-
-        Both the training and the inference protocol hold this same instance,
-        so `specs.probability_path`, `specs.time_sampler`, etc. reflect what
-        both protocols see.
-        """
-        return self._specs
+    def training_method(self) -> SupportsTraining:
+        """The underlying training method (may be a `MatchedTrainingMethod` wrapper)."""
+        return self._training_method
 
     @property
-    def training_protocol(self) -> SupportsTraining:
-        """The underlying training protocol (may be a `MatchedTrainingProtocol` wrapper)."""
-        return self._training_protocol
-
-    @property
-    def inference_protocol(self) -> SupportsInference:
-        """The underlying inference protocol."""
-        return self._inference_protocol
-
-    @property
-    def trainer(self) -> Trainer | None:
-        """Returns the trainer used to fit the model."""
-        return self._trainer
+    def inference_method(self) -> SupportsInference | None:
+        """The underlying inference method."""
+        return self._inference_method
 
     @property
     def condition_state_key(self) -> str | None:

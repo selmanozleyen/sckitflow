@@ -10,46 +10,53 @@ from sckitflow.core._data_utils import (
 from sckitflow.core._types import (
     PredictionData,
     StepData,
+    SamplerFn,
+    SamplerFn,
 )
-from sckitflow.core.methods._base import BaseFlowInferenceProtocol, FlowSpecs
+from sckitflow.core.methods._base import AbstractFlowMethod
 from sckitflow.core.methods.inference._utils import aggregate_predictions
+from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath
 from sckitflow.core.solvers import ODESolver
 
 __all__ = ["ODEInference"]
 
 
-class ODEInference(BaseFlowInferenceProtocol):
+class ODEInference(AbstractFlowMethod):
     """ODE inference from an underlying velocity-field module.
 
     The module is expected to implement ``.get_vf_fn`` to compile a
     ``vf_fn(t, xt)`` function compatible with ``torchdiffeq``.
 
-    Constructed with a shared :class:`FlowSpecs` instance:
+    Constructed from the module and the flow configuration:
 
     .. code-block:: python
 
-        specs = FlowSpecs(module, probability_path=..., time_sampler=...)
-        inference = ODEInference(specs, n_steps=50)
+        inference = ODEInference(module, probability_path=..., time_sampler=..., n_steps=50)
 
-    The same ``specs`` instance can be handed to a flow training protocol
-    (e.g. :class:`~sckitflow.core.methods.training.CFMTrainingProtocol`) so
-    both see the same probability path, time sampler, noise sampler, module,
-    dtype, and device.
+    Passing the same module and configuration to a flow training method
+    (e.g. :class:`~sckitflow.core.methods.training.CFMTraining`) gives
+    both the same probability path, time sampler, noise sampler, module, dtype,
+    and device.
     """
 
     def __init__(
         self,
-        specs: FlowSpecs,
+        module: torch.nn.Module,
+        probability_path: BaseProbabilityPath | None = None,
+        time_sampler: SamplerFn | None = None,
+        noise_sampler: SamplerFn | None = None,
+        generate_from_noise: bool = False,
         solver_kwargs: dict[str, Any] | None = None,
         return_trajectory: bool = False,
         n_steps: int = 100,
         latent: torch.Tensor | None = None,
         n_samples: int | None = None,
     ) -> None:
-        """Initializes the ODE inference protocol.
+        """Initializes the ODE inference method.
 
-        :param specs: The shared :class:`FlowSpecs` instance holding the module,
-            probability path, time sampler, noise sampler, and generation flag.
+        The leading arguments are the flow configuration and are documented on
+        :class:`~sckitflow.core.methods._base.AbstractFlowMethod`.
+
         :param solver_kwargs: Keyword arguments forwarded to the ODE solver.
             ``method`` defaults to ``"euler"`` when not provided.
         :param return_trajectory: When ``True``, the whole trajectory is returned
@@ -59,10 +66,16 @@ class ODEInference(BaseFlowInferenceProtocol):
             from the noise distribution is skipped. Must already be on the
             configured device and dtype.
         :param n_samples: Number of samples per batch element used to initialize
-            the dynamics. Required when ``specs.generate_from_noise`` is ``True``.
+            the dynamics. Required when ``generate_from_noise`` is ``True``.
         """
-        # ---- 0. Initialize parent class with the shared specs ----
-        super().__init__(specs)
+        # ---- 0. Initialize the module storage and flow configuration ----
+        super().__init__(
+            module,
+            probability_path=probability_path,
+            time_sampler=time_sampler,
+            noise_sampler=noise_sampler,
+            generate_from_noise=generate_from_noise,
+        )
 
         # ---- 1. Assign extra attributes ----
         self._solver_kwargs = solver_kwargs
@@ -76,8 +89,7 @@ class ODEInference(BaseFlowInferenceProtocol):
 
         The dynamics are read through the shared specs: ``self.probability_path``,
         ``self.time_sampler``, ``self.noise_sampler``, ``self.generate_from_noise``,
-        ``self.module``, ``self.device_id``, and ``self.dtype`` all delegate to
-        the underlying :class:`FlowSpecs`.
+        ``self.module``. Device and dtype come from the batch itself.
         """
         # ---- 0. Guard, when generating from noise we need n_samples ----
         if self.generate_from_noise and self.n_samples is None:
@@ -86,6 +98,7 @@ class ODEInference(BaseFlowInferenceProtocol):
             raise TypeError("When generating from noise, you need to provide a noise_sampler.")
 
         # ----- 1. Prepare latent (noise) -----
+        target_state = step_data["target_state"]
         if self.latent is None:
             latent = prepare_latent_inference(
                 step_data["source_state"],
@@ -93,22 +106,18 @@ class ODEInference(BaseFlowInferenceProtocol):
                 self.noise_sampler,
                 n_samples=self.n_samples,
                 generate_from_noise=self.generate_from_noise,
-            ).to(device=self.device_id, dtype=self.dtype)
+            )
         else:
-            latent = self.latent.to(device=self.device_id, dtype=self.dtype)
+            # the only tensor not built by the loader, so the only one to place
+            latent = self.latent.to(device=target_state.device, dtype=target_state.dtype)
 
         # ---- 2. Get optional source ----
-        source_state_raw = step_data["source_state"]
-        source_state = (
-            source_state_raw.to(device=self.device_id, dtype=self.dtype) if source_state_raw is not None else None
-        )
+        source_state = step_data["source_state"]
 
         # ----- 3. Build conditioning dict -----
-        condition_data = get_tensor_dict_from_data(step_data["target_condition_data"])
-        group_data = get_tensor_dict_from_data(step_data["target_group_data"])
         condition_dict = {
-            **{k: v.to(device=self.device_id, dtype=self.dtype) for k, v in condition_data.items()},
-            **{k: v.to(device=self.device_id, dtype=self.dtype) for k, v in group_data.items()},
+            **get_tensor_dict_from_data(step_data["target_condition_data"]),
+            **get_tensor_dict_from_data(step_data["target_group_data"]),
         }
 
         # ----- 4. Expand conditioning to match latent dimensions -----
@@ -128,7 +137,7 @@ class ODEInference(BaseFlowInferenceProtocol):
             self.module,
             method=method,
             vf_kwargs={"condition_dict": condition_dict, "source": source_expanded},
-            device_id=self.device_id,
+            device_id=str(latent.device),
         )
 
         # ----- 6. Integrate -----

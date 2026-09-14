@@ -7,39 +7,37 @@ from sckitflow.core._data_utils import (
     prepare_latent_train,
 )
 from sckitflow.core._types import StepData
-from sckitflow.core.methods._base import BaseFlowTrainingProtocol
+from sckitflow.core.methods._base import AbstractFlowMethod
 
-__all__ = ["CFMTrainingProtocol"]
+__all__ = ["CFMTraining"]
 
 
-class CFMTrainingProtocol(BaseFlowTrainingProtocol):
-    """Conditional Flow Matching training protocol.
+class CFMTraining(AbstractFlowMethod):
+    """Conditional Flow Matching training method.
 
-    Constructed with a shared :class:`FlowSpecs` instance:
+    Constructed from the module and the flow configuration:
 
     .. code-block:: python
 
-        specs = FlowSpecs(module, probability_path=..., time_sampler=...)
-        protocol = CFMTrainingProtocol(specs)
+        method = CFMTraining(module, probability_path=..., time_sampler=...)
 
-    The same ``specs`` instance can be handed to a flow inference protocol
-    (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) so both see
+    Passing the same module and configuration to a flow inference method
+    (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) gives both
     the same probability path, time sampler, noise sampler, module, dtype, and
     device.
     """
 
     def compute_loss(self, step_data: StepData) -> tuple[torch.Tensor, dict[str, Any]]:
         # ---- Get source and target states from step data ----
-        target = step_data["target_state"].to(device=self.device_id, dtype=self.dtype)
-        source_raw = step_data["source_state"]
-        source = source_raw.to(device=self.device_id, dtype=self.dtype) if source_raw is not None else None
+        # The batch is the reference: the loader built it in the module's dtype
+        # and Lightning placed it, so nothing here is coerced.
+        target = step_data["target_state"]
+        source = step_data["source_state"]
 
         # ---- Get conditioning data from step data ----
-        condition_data = get_tensor_dict_from_data(step_data["target_condition_data"])
-        group_data = get_tensor_dict_from_data(step_data["target_group_data"])
         cond = {
-            **{k: v.to(device=self.device_id, dtype=self.dtype) for k, v in condition_data.items()},
-            **{k: v.to(device=self.device_id, dtype=self.dtype) for k, v in group_data.items()},
+            **get_tensor_dict_from_data(step_data["target_condition_data"]),
+            **get_tensor_dict_from_data(step_data["target_group_data"]),
         }
 
         # ---- Sample latent (noise) – shape (batch_size, dim) -----
@@ -48,7 +46,7 @@ class CFMTrainingProtocol(BaseFlowTrainingProtocol):
             target,
             self.noise_sampler,
             generate_from_noise=self.generate_from_noise,
-        ).to(device=self.device_id, dtype=self.dtype)
+        )
         batch_size = latent.shape[0]
 
         # ---- Sample time ----

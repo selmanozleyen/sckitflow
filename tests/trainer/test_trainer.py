@@ -9,7 +9,7 @@ import torch
 from sckitflow.core.methods._base import (
     BaseInferenceProtocol,
     BaseTrainingProtocol,
-    MatchedTrainingProtocol,
+    MatchedTrainingMethod,
     ProtocolSpecs,
     SupportsInference,
     SupportsProtocol,
@@ -52,7 +52,7 @@ class DummyStepData(dict):
     """Minimal `StepData` stand-in.
 
     Always carries the four coupling keys (defaulting to `None`), matching the
-    contract `MatchingProtocol.match` relies on. Any extra key can be passed as
+    contract `Matcher.match` relies on. Any extra key can be passed as
     a keyword argument.
     """
 
@@ -67,18 +67,18 @@ class DummyStepData(dict):
 
 
 # -----------------------------------------------------------------------------
-# Dummy protocols. Both are constructed with a shared `ProtocolSpecs`, matching
+# Dummy methods. Both are constructed with a shared `ProtocolSpecs`, matching
 # the holder-based design introduced with the `FlowSpecs` refactor.
 # -----------------------------------------------------------------------------
 class DummyTrainingProtocol(BaseTrainingProtocol):
-    """Concrete training protocol: a constant loss and metric dict."""
+    """Concrete training method: a constant loss and metric dict."""
 
     def compute_loss(self, step_data, *args, **kwargs):
         return 0.5, {"loss": 0.5, "accuracy": 0.8}
 
 
 class DummyInferenceProtocol(BaseInferenceProtocol):
-    """Concrete inference protocol: returns a `PredictionData` with `.X`."""
+    """Concrete inference method: returns a `PredictionData` with `.X`."""
 
     def predict(self, step_data, *args, **kwargs):
         return DummyPredictionData(np.random.randn(10, 5), traj=None, raw_samples=None)
@@ -87,7 +87,7 @@ class DummyInferenceProtocol(BaseInferenceProtocol):
 # Module-level so `cloudpickle` can serialize it (not needed for these tests, but
 # harmless and consistent with how `match_fn` would be used in production).
 def dummy_match_fn(source_lin=None, target_lin=None, source_quad=None, target_quad=None):
-    """No-op matcher: returns no indices so `MatchingProtocol.match` short-circuits."""
+    """No-op matcher: returns no indices so `Matcher.match` short-circuits."""
     return None, None
 
 
@@ -109,8 +109,8 @@ class DummyTrainLoader:
     """Finite, re-iterable loader yielding `n` `DummyStepData` batches.
 
     Uses `DummyStepData` (a dict-like) rather than a bare `Mock` so that
-    protocols which subscript `step_data` — e.g. `MatchedTrainingProtocol`
-    routing through `MatchingProtocol.match` — work end-to-end.
+    methods which subscript `step_data` — e.g. `MatchedTrainingMethod`
+    routing through `Matcher.match` — work end-to-end.
     """
 
     def __init__(self, n=2):
@@ -173,9 +173,9 @@ def module():
 
 @pytest.fixture
 def specs(module):
-    """Shared `ProtocolSpecs` for the dummy protocols.
+    """Shared `ProtocolSpecs` for the dummy methods.
 
-    The base protocols no longer inherit from `ProtocolSpecs`; they hold one
+    The base methods no longer inherit from `ProtocolSpecs`; they hold one
     instance and delegate the storage surface to it. Both fixtures below reuse
     the same instance, mirroring how `Model` wires them up.
     """
@@ -183,12 +183,12 @@ def specs(module):
 
 
 @pytest.fixture
-def training_protocol(specs):
+def training_method(specs):
     return DummyTrainingProtocol(specs)
 
 
 @pytest.fixture
-def inference_protocol(specs):
+def inference_method(specs):
     return DummyInferenceProtocol(specs)
 
 
@@ -202,59 +202,59 @@ def opt_manager():
 # -----------------------------------------------------------------------------
 class TestTrainer:
     # ---- Construction -----------------------------------------------------
-    def test_init(self, training_protocol, inference_protocol, opt_manager):
+    def test_init(self, training_method, inference_method, opt_manager):
         callbacks = [RecordingCallback()]
         trainer = Trainer(
-            training_protocol,
+            training_method,
             opt_manager,
-            inference_protocol=inference_protocol,
+            inference_method=inference_method,
             callbacks=callbacks,
         )
 
-        assert trainer.training_protocol is training_protocol
-        assert trainer.inference_protocol is inference_protocol
+        assert trainer.training_method is training_method
+        assert trainer.inference_method is inference_method
         assert trainer.opt_manager is opt_manager
         assert len(trainer._callbacks) == 1
         assert trainer.train_logs_raw == []
         assert trainer.val_logs_raw == {}
         assert trainer.current_step == 0
 
-    def test_init_without_inference_protocol(self, training_protocol, opt_manager):
-        """Inference protocol is optional; validation is skipped when absent."""
-        trainer = Trainer(training_protocol, opt_manager)
-        assert trainer.inference_protocol is None
+    def test_init_without_inference_method(self, training_method, opt_manager):
+        """Inference method is optional; validation is skipped when absent."""
+        trainer = Trainer(training_method, opt_manager)
+        assert trainer.inference_method is None
 
-    def test_init_rejects_bad_callbacks(self, training_protocol, opt_manager):
+    def test_init_rejects_bad_callbacks(self, training_method, opt_manager):
         with pytest.raises(TypeError, match="callbacks"):
-            Trainer(training_protocol, opt_manager, callbacks=42)
+            Trainer(training_method, opt_manager, callbacks=42)
 
     # ---- Log appenders ----------------------------------------------------
-    def test_append_train_log(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_append_train_log(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         trainer._append_train_log({"loss": 0.5})
         assert len(trainer.train_logs_raw) == 1
         assert trainer.train_logs_raw[0]["loss"] == 0.5
 
-    def test_append_val_log_new_key(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_append_val_log_new_key(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         trainer._append_val_log("val1", {"metric": 0.5})
         assert "val1" in trainer.val_logs_raw
         assert trainer.val_logs_raw["val1"][0]["metric"] == 0.5
 
-    def test_append_val_log_existing_key(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_append_val_log_existing_key(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         trainer._append_val_log("val1", {"metric": 0.5})
         trainer._append_val_log("val1", {"metric": 0.8})
         assert len(trainer.val_logs_raw["val1"]) == 2
 
     # ---- Validation pass --------------------------------------------------
-    def test_run_val_on_loader(self, training_protocol, inference_protocol, opt_manager):
+    def test_run_val_on_loader(self, training_method, inference_method, opt_manager):
         callback = RecordingCallback()
         metric_cb = RecordingComputationalCallback()
         trainer = Trainer(
-            training_protocol,
+            training_method,
             opt_manager,
-            inference_protocol=inference_protocol,
+            inference_method=inference_method,
             callbacks=[metric_cb, callback],
         )
         trainer._current_step = 5
@@ -279,23 +279,23 @@ class TestTrainer:
         assert callback.valid_step_calls[0][1] == 5
         assert callback.valid_step_calls[0][2] == "test_val"
 
-    def test_run_val_on_loader_no_inference_protocol(self, training_protocol, opt_manager):
-        """When no inference protocol is set, validation is a no-op."""
+    def test_run_val_on_loader_no_inference_method(self, training_method, opt_manager):
+        """When no inference method is set, validation is a no-op."""
         callback = RecordingCallback()
-        trainer = Trainer(training_protocol, opt_manager, callbacks=[callback])
+        trainer = Trainer(training_method, opt_manager, callbacks=[callback])
         trainer._run_val_on_loader(DummyValLoader(), "test_val")
         assert trainer.val_logs_raw == {}
         assert callback.valid_step_calls == []
 
     # ---- Log DataFrame conversion ----------------------------------------
-    def test_get_train_logs_df_empty(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_get_train_logs_df_empty(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         df = trainer.get_train_logs_df()
         assert isinstance(df, pd.DataFrame)
         assert df.empty
 
-    def test_get_train_logs_df_with_data(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_get_train_logs_df_with_data(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         trainer._append_train_log({"loss": 0.5, "step": 0})
         trainer._append_train_log({"loss": 0.3, "step": 1})
 
@@ -309,8 +309,8 @@ class TestTrainer:
         assert list(df.index) == [0, 1]
         assert list(df["loss"]) == [0.5, 0.3]
 
-    def test_get_val_logs_df_single(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_get_val_logs_df_single(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         trainer._append_val_log("val1", {"metric": 0.5})
 
         df = trainer.get_val_logs_df("val1")
@@ -318,14 +318,14 @@ class TestTrainer:
         assert len(df) == 1
         assert df.iloc[0]["metric"] == 0.5
 
-    def test_get_val_logs_df_missing(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_get_val_logs_df_missing(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         df = trainer.get_val_logs_df("nonexistent")
         assert isinstance(df, pd.DataFrame)
         assert df.empty
 
-    def test_get_val_logs_df_all(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
+    def test_get_val_logs_df_all(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
         trainer._append_val_log("val1", {"metric": 0.5})
         trainer._append_val_log("val2", {"metric": 0.8})
 
@@ -337,13 +337,13 @@ class TestTrainer:
 
     # ---- Training loop ----------------------------------------------------
     @patch("sckitflow.trainer._trainer.tqdm")
-    def test_train_calls_callbacks(self, mock_tqdm, training_protocol, opt_manager):
+    def test_train_calls_callbacks(self, mock_tqdm, training_method, opt_manager):
         mock_pbar = MagicMock()
         mock_pbar.__iter__.return_value = range(3)
         mock_tqdm.return_value = mock_pbar
 
         callback = RecordingCallback()
-        trainer = Trainer(training_protocol, opt_manager, callbacks=[callback])
+        trainer = Trainer(training_method, opt_manager, callbacks=[callback])
         trainer.train(DummyTrainLoader())
 
         assert len(callback.train_begin_calls) == 1
@@ -351,14 +351,14 @@ class TestTrainer:
         assert len(callback.train_end_calls) == 1
 
     @patch("sckitflow.trainer._trainer.tqdm")
-    def test_train_with_validation(self, mock_tqdm, training_protocol, inference_protocol, opt_manager):
+    def test_train_with_validation(self, mock_tqdm, training_method, inference_method, opt_manager):
         mock_tqdm.side_effect = lambda steps: steps
 
         callback = RecordingCallback()
         trainer = Trainer(
-            training_protocol,
+            training_method,
             opt_manager,
-            inference_protocol=inference_protocol,
+            inference_method=inference_method,
             callbacks=[callback],
         )
         # 5 steps -> validate at 2, 4.
@@ -371,12 +371,12 @@ class TestTrainer:
         assert [call[1] for call in callback.valid_step_calls] == [2, 4]
 
     @patch("sckitflow.trainer._trainer.tqdm")
-    def test_train_without_inference_protocol_skips_validation(self, mock_tqdm, training_protocol, opt_manager):
-        """Even with val_loaders, no inference protocol means no validation metrics."""
+    def test_train_without_inference_method_skips_validation(self, mock_tqdm, training_method, opt_manager):
+        """Even with val_loaders, no inference method means no validation metrics."""
         mock_tqdm.side_effect = lambda steps: steps
 
         callback = RecordingCallback()
-        trainer = Trainer(training_protocol, opt_manager, callbacks=[callback])
+        trainer = Trainer(training_method, opt_manager, callbacks=[callback])
         trainer.train(
             DummyTrainLoader(3),
             val_loaders={"val1": DummyValLoader()},
@@ -387,14 +387,14 @@ class TestTrainer:
         assert callback.valid_step_calls == []
 
     @patch("sckitflow.trainer._trainer.tqdm")
-    def test_train_continues_from_current_step(self, mock_tqdm, training_protocol, inference_protocol, opt_manager):
+    def test_train_continues_from_current_step(self, mock_tqdm, training_method, inference_method, opt_manager):
         mock_tqdm.side_effect = lambda steps: steps
 
         callback = RecordingCallback()
         trainer = Trainer(
-            training_protocol,
+            training_method,
             opt_manager,
-            inference_protocol=inference_protocol,
+            inference_method=inference_method,
             callbacks=[RecordingComputationalCallback(), callback],
         )
         loader = DummyTrainLoader(3)  # 3 steps per call; two calls -> 6
@@ -408,100 +408,98 @@ class TestTrainer:
         assert list(trainer.get_val_logs_df("val1").index) == [2, 4, 6]
 
     # ---- Properties -------------------------------------------------------
-    def test_properties(self, training_protocol, inference_protocol, opt_manager):
+    def test_properties(self, training_method, inference_method, opt_manager):
         trainer = Trainer(
-            training_protocol,
+            training_method,
             opt_manager,
-            inference_protocol=inference_protocol,
+            inference_method=inference_method,
         )
-        assert trainer.training_protocol is training_protocol
-        assert trainer.inference_protocol is inference_protocol
+        assert trainer.training_method is training_method
+        assert trainer.inference_method is inference_method
         assert trainer.opt_manager is opt_manager
         assert trainer.train_logs_raw == []
         assert trainer.val_logs_raw == {}
 
     # ---- Storage delegation ----------------------------------------------
-    def test_training_protocol_delegates_storage_to_specs(self, training_protocol, module):
-        """The training protocol exposes the shared specs' storage surface."""
-        assert training_protocol.specs.module is module
-        assert training_protocol.module is module
-        assert training_protocol.device_id == "cpu"
-        assert training_protocol.dtype == torch.float32
+    def test_training_method_delegates_storage_to_specs(self, training_method, module):
+        """The training method exposes the shared specs' storage surface."""
+        assert training_method.specs.module is module
+        assert training_method.module is module
+        assert training_method.device_id == "cpu"
+        assert training_method.dtype == torch.float32
 
-    def test_inference_protocol_delegates_storage_to_specs(self, inference_protocol, module):
-        """The inference protocol exposes the shared specs' storage surface."""
-        assert inference_protocol.specs.module is module
-        assert inference_protocol.module is module
-        assert inference_protocol.device_id == "cpu"
-        assert inference_protocol.dtype == torch.float32
+    def test_inference_method_delegates_storage_to_specs(self, inference_method, module):
+        """The inference method exposes the shared specs' storage surface."""
+        assert inference_method.specs.module is module
+        assert inference_method.module is module
+        assert inference_method.device_id == "cpu"
+        assert inference_method.dtype == torch.float32
 
-    def test_train_and_inference_protocols_share_specs(self, training_protocol, inference_protocol):
-        """The training and inference protocols are wired to the same specs instance."""
-        assert training_protocol.specs is inference_protocol.specs
-        assert training_protocol.module is inference_protocol.module
+    def test_train_and_inference_methods_share_specs(self, training_method, inference_method):
+        """The training and inference methods are wired to the same specs instance."""
+        assert training_method.specs is inference_method.specs
+        assert training_method.module is inference_method.module
 
 
 class TestTrainerStructuralContracts:
-    """`Trainer` accepts anything satisfying the structural protocol shapes."""
+    """`Trainer` accepts anything satisfying the structural method shapes."""
 
-    def test_trainer_accepts_matched_training_protocol(self, specs, opt_manager):
-        """The structural refactor: a `MatchedTrainingProtocol` is a valid training protocol.
+    def test_trainer_accepts_matched_training_method(self, specs, opt_manager):
+        """The structural refactor: a `MatchedTrainingMethod` is a valid training method.
 
-        `MatchedTrainingProtocol` is *not* a subclass of `BaseTrainingProtocol` — they
+        `MatchedTrainingMethod` is *not* a subclass of `BaseTrainingProtocol` — they
         are siblings under `_AbstractTrainingProtocol` — so this only works because the
         `Trainer` parameter is typed `SupportsTraining`.
         """
         inner = DummyTrainingProtocol(specs)
-        matched = MatchedTrainingProtocol(inner, match_fn=dummy_match_fn)
+        matched = MatchedTrainingMethod(inner, match_fn=dummy_match_fn)
         # Precondition: not a nominal subclass.
         assert not isinstance(matched, BaseTrainingProtocol)
         # The check `SupportsTraining` is what makes it acceptable.
         assert isinstance(matched, SupportsTraining)
 
         trainer = Trainer(matched, opt_manager)
-        assert trainer.training_protocol is matched
+        assert trainer.training_method is matched
 
     def test_matched_protocol_forwards_storage_to_specs(self, specs, opt_manager):
         """The matched wrapper exposes the shared specs' storage surface."""
         inner = DummyTrainingProtocol(specs)
-        matched = MatchedTrainingProtocol(inner, match_fn=dummy_match_fn)
+        matched = MatchedTrainingMethod(inner, match_fn=dummy_match_fn)
         trainer = Trainer(matched, opt_manager)
 
-        assert trainer.training_protocol.module is specs.module
-        assert trainer.training_protocol.device_id == "cpu"
-        assert trainer.training_protocol.dtype == torch.float32
+        assert trainer.training_method.module is specs.module
+        assert trainer.training_method.device_id == "cpu"
+        assert trainer.training_method.dtype == torch.float32
 
-    def test_training_protocol_property_satisfies_structural_contract(self, training_protocol, opt_manager):
-        trainer = Trainer(training_protocol, opt_manager)
-        assert isinstance(trainer.training_protocol, SupportsTraining)
-        assert isinstance(trainer.training_protocol, SupportsProtocol)
+    def test_training_method_property_satisfies_structural_contract(self, training_method, opt_manager):
+        trainer = Trainer(training_method, opt_manager)
+        assert isinstance(trainer.training_method, SupportsTraining)
+        assert isinstance(trainer.training_method, SupportsProtocol)
 
-    def test_inference_protocol_property_satisfies_structural_contract(
-        self, training_protocol, inference_protocol, opt_manager
+    def test_inference_method_property_satisfies_structural_contract(
+        self, training_method, inference_method, opt_manager
     ):
-        trainer = Trainer(training_protocol, opt_manager, inference_protocol=inference_protocol)
-        assert isinstance(trainer.inference_protocol, SupportsInference)
-        assert isinstance(trainer.inference_protocol, SupportsProtocol)
+        trainer = Trainer(training_method, opt_manager, inference_method=inference_method)
+        assert isinstance(trainer.inference_method, SupportsInference)
+        assert isinstance(trainer.inference_method, SupportsProtocol)
 
-    def test_training_protocol_does_not_satisfy_inference_contract(self, training_protocol, opt_manager):
-        """A training protocol has no `predict`, so it is not usable as an inference protocol."""
-        trainer = Trainer(training_protocol, opt_manager)
-        assert not isinstance(trainer.training_protocol, SupportsInference)
+    def test_training_method_does_not_satisfy_inference_contract(self, training_method, opt_manager):
+        """A training method has no `predict`, so it is not usable as an inference method."""
+        trainer = Trainer(training_method, opt_manager)
+        assert not isinstance(trainer.training_method, SupportsInference)
 
-    def test_inference_protocol_does_not_satisfy_training_contract(
-        self, training_protocol, inference_protocol, opt_manager
-    ):
-        """An inference protocol has no `compute_loss`, so it is not usable as a training protocol."""
-        trainer = Trainer(training_protocol, opt_manager, inference_protocol=inference_protocol)
-        assert not isinstance(trainer.inference_protocol, SupportsTraining)
+    def test_inference_method_does_not_satisfy_training_contract(self, training_method, inference_method, opt_manager):
+        """An inference method has no `compute_loss`, so it is not usable as a training method."""
+        trainer = Trainer(training_method, opt_manager, inference_method=inference_method)
+        assert not isinstance(trainer.inference_method, SupportsTraining)
 
     @patch("sckitflow.trainer._trainer.tqdm")
     def test_matched_protocol_train_loop(self, mock_tqdm, specs, opt_manager):
-        """The training loop runs end-to-end with a matched training protocol."""
+        """The training loop runs end-to-end with a matched training method."""
         mock_tqdm.side_effect = lambda steps: steps
 
         inner = DummyTrainingProtocol(specs)
-        matched = MatchedTrainingProtocol(inner, match_fn=dummy_match_fn)
+        matched = MatchedTrainingMethod(inner, match_fn=dummy_match_fn)
         trainer = Trainer(matched, opt_manager)
 
         trainer.train(DummyTrainLoader(3))

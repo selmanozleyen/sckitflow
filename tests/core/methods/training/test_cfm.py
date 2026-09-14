@@ -3,10 +3,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from sckitflow.core.methods._base import FlowSpecs
-from sckitflow.core.methods.training._cfm import CFMTrainingProtocol
+from sckitflow.core.methods.training._cfm import CFMTraining
 
-# Adjust the module path above to wherever CFMTrainingProtocol actually lives.
+# Adjust the module path above to wherever CFMTraining actually lives.
 MODULE = "sckitflow.core.methods.training._cfm"
 
 
@@ -59,7 +58,7 @@ def dummy_module():
 
 @pytest.fixture
 def make_cfm(dummy_module):
-    """Build a CFMTrainingProtocol; override any kwarg via ``_make``."""
+    """Build a CFMTraining; override any kwarg via ``_make``."""
 
     def _make(**overrides):
         kwargs = {
@@ -69,8 +68,7 @@ def make_cfm(dummy_module):
             "device_id": "cpu",
         }
         kwargs.update(overrides)
-        specs = FlowSpecs(**kwargs)
-        return CFMTrainingProtocol(specs)
+        return CFMTraining(**kwargs)
 
     return _make
 
@@ -198,8 +196,7 @@ def test_loss_matches_mse_between_predicted_and_target_velocity(dummy_module, st
     # Target velocity is 2x ones -> (vt - ut)^2 == 1 everywhere.
     path.compute_ut.side_effect = lambda t, xt, x0, x1: 2 * torch.ones_like(x0)
 
-    specs = FlowSpecs(module=KnownModule(), probability_path=path, time_sampler=dummy_time_sampler, device_id="cpu")
-    cfm = CFMTrainingProtocol(specs)
+    cfm = CFMTraining(module=KnownModule(), probability_path=path, time_sampler=dummy_time_sampler, device_id="cpu")
     loss, _ = cfm.compute_loss(step_data)
 
     assert loss.item() == pytest.approx(1.0)

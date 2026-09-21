@@ -160,7 +160,7 @@ class _StepDataBridge:
         self._cond_schema = condition_schema
         self._groups_schema = groups_schema
         self._dtype = dtype
-        # Compared by device *type* ("cuda" vs "cuda:0"), matching ``Model.to_device``.
+        # Compared by device *type* ("cuda" vs "cuda:0"), matching the module's own device.
         self._device = device
         self._device_type = device.split(":")[0] if device is not None else None
         self._assert_device = assert_device

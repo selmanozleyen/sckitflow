@@ -126,7 +126,7 @@ class DataManagerKwargs(TypedDict, total=False):
 
     control_values_dict: dict[str, str] | None
     """Dictionary mapping each condition level to the corresponding value used to indicate control
-    observations. Defaults to `None`. Pass `{}` at call time (`get_eval_loader`, `Model.predict`) to predict
+    observations. Defaults to `None`. Pass `{}` at call time (`get_eval_loader`, `predict_adata`) to predict
     unpaired, ignoring the registered controls."""
 
     matched_keys: dict[tuple, tuple] | None

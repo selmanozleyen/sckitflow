@@ -1,12 +1,15 @@
 from importlib.metadata import version
 
 from sckitflow import core, data, dataset, trainer
-from sckitflow._model import Model
+from sckitflow._predict import predict_adata
+from sckitflow._run import load_run, save_run
 
 __version__ = version("sckitflow")
 
 __all__ = [
-    "Model",
+    "predict_adata",
+    "save_run",
+    "load_run",
     "__version__",
     "core",
     "data",

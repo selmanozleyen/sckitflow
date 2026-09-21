@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 import logging
 import tarfile
 import tempfile
@@ -10,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 import cloudpickle
 import torch
 from anndata import AnnData
+from scfit.registry import Component
 from tqdm import tqdm
 
 from sckitflow._predict import prediction_record, predictions_to_adata
@@ -202,8 +205,27 @@ class Model:
 
         return predictions_to_adata(self._data_dims, records, return_raw=return_raw)
 
-    def save(self, filepath: str, allow_overwrite: bool = False) -> None:
-        """Save the entire model (including registered data) to a tarball."""
+    def save(
+        self,
+        filepath: str,
+        allow_overwrite: bool = False,
+        *,
+        method_configs: Mapping[str, Component] | None = None,
+    ) -> None:
+        """Save the entire model (including registered data) to a tarball.
+
+        :param method_configs: Optional ``{name: Component}`` configs to record
+            as portable scfit specs beside the pickle -- e.g.
+            ``{"training": CFMConfig(), "inference": ODEConfig(n_steps=50)}``.
+            Written as ``specs.json``, so an archive states what it holds
+            without being unpickled. A config holding a live object raises
+            `scfit.registry.PortabilityError` before anything is written.
+        """
+        specs = (
+            json.dumps({name: cfg.to_spec() for name, cfg in method_configs.items()}, indent=2).encode()
+            if method_configs
+            else None
+        )
         path = Path(filepath)
         if path.exists() and not allow_overwrite:
             raise FileExistsError(f"{filepath} already exists. Use allow_overwrite=True.")
@@ -213,6 +235,10 @@ class Model:
         self._module.cpu()
 
         with tarfile.open(filepath, "w:gz") as tar:
+            if specs is not None:
+                info = tarfile.TarInfo(name="specs.json")
+                info.size = len(specs)
+                tar.addfile(info, io.BytesIO(specs))
             with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
                 cloudpickle.dump(self, tmp)
                 tmp.flush()

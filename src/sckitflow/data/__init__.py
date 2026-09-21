@@ -5,6 +5,7 @@ from sckitflow.data import _group_encoders as group_encoders
 from sckitflow.data import _mixins as mixins
 from sckitflow.data import _utils as utils
 from sckitflow.data import containers, schemas, sim, splitters
+from sckitflow.data._config import FlowDataConfig
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerKwargs, LoaderKwargs
@@ -12,6 +13,7 @@ from sckitflow.data.splitters import CombinationSplitter, Splitter
 
 __all__ = [
     "FlowDataModule",
+    "FlowDataConfig",
     "DataDimensions",
     "containers",
     "dims",

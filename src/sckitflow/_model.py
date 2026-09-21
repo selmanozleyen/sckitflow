@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import tarfile
 import tempfile
-from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -15,6 +14,7 @@ import torch
 from anndata import AnnData
 from tqdm import tqdm
 
+from sckitflow._predict import prediction_record, predictions_to_adata
 from sckitflow._types import PredictionData
 from sckitflow.core._types import StepData
 from sckitflow.core.methods._base import SupportsInference, SupportsTraining
@@ -95,7 +95,7 @@ class Model:
 
     def plan(
         self,
-        optimizer: torch.optim.Optimizer,
+        optimizer: torch.optim.Optimizer | None = None,
         *,
         lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         metrics: Mapping[str, torch.nn.Module] | None = None,
@@ -294,6 +294,7 @@ class Model:
         """
         self._module.to(device)
 
+    @torch.inference_mode()
     def predict(
         self,
         adata: AnnData,
@@ -325,45 +326,31 @@ class Model:
         if inference_method is None:
             raise ValueError("this model has no inference method: pass one to `Model(...)` or to `predict(...)`.")
 
-        inference_method.module.train(False)
-        param = next(inference_method.module.parameters(), None)
-        module_dtype = torch.float32 if param is None else param.dtype
-        module_device = "cpu" if param is None else param.device
-        predict_kwargs = {} if predict_kwargs is None else predict_kwargs
-
-        eval_loader = self._dm.get_eval_loader(
+        loader = self._datamodule.set_predict_data(
             adata,
             max_per_group=max_per_group,
             require_target_state=require_target_state,
             control_values_dict=control_values_dict,
             matched_keys=matched_keys,
             control_adata=control_adata,
-            to=None,
-            # the module is the reference: build the batch where it already lives
-            dtype=module_dtype,
-            device=str(module_device),
-        )
+        ).predict_dataloader()
+        predict_kwargs = {} if predict_kwargs is None else predict_kwargs
 
-        if len(eval_loader) == 0:
-            return self._predict_empty(return_raw)
+        # A plain pass, not `Trainer.predict`: predicting needs no loop machinery,
+        # and requiring a `lightning.Trainer` just to call this would be ceremony.
+        # For multi-device prediction or a `BasePredictionWriter`, use the Lightning
+        # path instead -- `trainer.predict(model.plan(), datamodule=model.datamodule)`.
+        was_training = inference_method.module.training
+        inference_method.module.eval()
+        records = []
+        try:
+            for step_data, leaf in tqdm(loader, total=len(loader), desc="Predicting"):
+                preds = inference_method.predict(step_data, **predict_kwargs)
+                records.append(prediction_record(loader, step_data, leaf, preds))
+        finally:
+            inference_method.module.train(was_training)
 
-        all_preds = []
-        all_obs = []
-        all_obsm = defaultdict(list)
-        group_cols = eval_loader.group_cols
-        cont_keys = (*eval_loader.cond_cont_keys, *eval_loader.resp_keys)
-
-        for step_data, leaf in tqdm(eval_loader, total=len(eval_loader), desc="Predicting"):
-            pred_obj = inference_method.predict(step_data, **predict_kwargs)
-            all_preds.append(pred_obj)
-
-            all_obs.append(self._pred_obs_from_leaf(group_cols, leaf, pred_obj))
-
-            node_obsm_dict = self._get_pred_obsm_dict(step_data, pred_obj, cont_keys)
-            for key, val in node_obsm_dict.items():
-                all_obsm[key].append(val)
-
-        return self._aggregate_nodes_pred(all_preds, all_obs, all_obsm, return_raw=return_raw)
+        return predictions_to_adata(self._dims_registry, records, return_raw=return_raw)
 
     def save(self, filepath: str, allow_overwrite: bool = False) -> None:
         """Save the entire model (including registered data) to a tarball."""

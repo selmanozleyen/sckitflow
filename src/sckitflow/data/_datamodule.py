@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Unpack
 
 import cloudpickle
@@ -13,7 +14,8 @@ from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerKwargs
 
 if TYPE_CHECKING:
-    from sckitflow.data._loader import Loader, LoaderKwargs
+    from sckitflow.data._loader import EvalLoader, Loader
+    from sckitflow.data._manager import LoaderKwargs
 
 __all__ = ["FlowDataModule"]
 
@@ -80,6 +82,9 @@ class FlowDataModule(pl.LightningDataModule):
         self._batch_size = batch_size
         self._loader_kwargs = dict(loader_kwargs or {})
         self._loaders: dict[str, Loader] | None = None
+        # What `predict_dataloader` streams; set by `set_predict_data`.
+        self._predict_adata: AnnData | None = None
+        self._predict_kwargs: dict[str, Any] = {}
 
     @classmethod
     def from_adata(
@@ -120,6 +125,32 @@ class FlowDataModule(pl.LightningDataModule):
         self._loaders = None
         return self
 
+    def set_predict_data(
+        self,
+        adata: AnnData,
+        *,
+        max_per_group: int | None = None,
+        require_target_state: bool = True,
+        control_values_dict: dict[str, str] | None = None,
+        matched_keys: Mapping[tuple, tuple] | None = None,
+        control_adata: AnnData | None = None,
+    ) -> FlowDataModule:
+        """Points :meth:`predict_dataloader` at ``adata``. Returns self.
+
+        Separate from :meth:`attach` because predicting is usually over a
+        different set of observations than training, and takes its own
+        pairing options. See :meth:`DataManager.get_eval_loader`.
+        """
+        self._predict_adata = adata
+        self._predict_kwargs = {
+            "max_per_group": max_per_group,
+            "require_target_state": require_target_state,
+            "control_values_dict": control_values_dict,
+            "matched_keys": matched_keys,
+            "control_adata": control_adata if control_adata is not None else self._control_adata,
+        }
+        return self
+
     # ---------------- Lightning hooks ----------------
     def setup(self, stage: str | None = None) -> None:
         """Builds one loader per split. Called by Lightning before fitting."""
@@ -150,12 +181,28 @@ class FlowDataModule(pl.LightningDataModule):
         self.setup()
         return [loader for split, loader in self._loaders.items() if split != self._train_split]
 
+    def predict_dataloader(self) -> EvalLoader:
+        """Deterministic ``(StepData, leaf)`` loader, one pass per selected group.
+
+        Built from whatever :meth:`set_predict_data` was given. Lightning's
+        predict loop drives it, so batching and device placement are its job.
+        """
+        if self._predict_adata is None:
+            raise ValueError("no prediction data set: call `set_predict_data(adata)` first.")
+        return self._dm.get_eval_loader(
+            self._predict_adata,
+            to=None,
+            dtype=self._dtype,
+            **self._predict_kwargs,
+        )
+
     # ---------------- Serialization ----------------
     def state_dict(self) -> dict[str, Any]:
         """The schema, for the Lightning checkpoint.
 
-        The ``AnnData`` is deliberately left out -- a checkpoint should not carry
-        the dataset. Reattach it with :meth:`attach` after loading.
+        The ``AnnData`` and the built loaders are deliberately left out: a
+        checkpoint should not carry the dataset. Reattach it with :meth:`attach`
+        after loading.
         """
         return {
             "dm": cloudpickle.dumps(self._dm),

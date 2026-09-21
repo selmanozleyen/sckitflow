@@ -11,6 +11,7 @@ from typing import Any
 import lightning.pytorch as pl
 import torch
 
+from sckitflow._predict import prediction_record
 from sckitflow.core._types import StepData
 from sckitflow.core.methods._base import SupportsInference, SupportsTraining
 
@@ -30,6 +31,7 @@ class TrainingPlan(pl.LightningModule):
     :param training_method: The method whose `compute_loss` is one training step.
     :param optimizer: An already-built optimizer over the method's module.
         Taken rather than configured, so there is no optimizer factory here.
+        May be `None` for a plan used only to predict, which never asks for one.
     :param lr_scheduler: Optional scheduler for that optimizer.
     :param lr_scheduler_interval: ``"step"`` or ``"epoch"``; how often Lightning
         steps the scheduler.
@@ -48,7 +50,7 @@ class TrainingPlan(pl.LightningModule):
     def __init__(
         self,
         training_method: SupportsTraining,
-        optimizer: torch.optim.Optimizer,
+        optimizer: torch.optim.Optimizer | None = None,
         *,
         lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         lr_scheduler_interval: str = "step",
@@ -105,7 +107,26 @@ class TrainingPlan(pl.LightningModule):
             self.log(f"{val_name}/{name}", metric.compute())
             metric.reset()
 
+    def predict_step(self, batch: tuple[StepData, tuple], batch_idx: int, dataloader_idx: int = 0) -> dict[str, Any]:
+        """Predicts one group and shapes it for reassembly.
+
+        The predict loader yields ``(step_data, leaf)``; ``leaf`` is the group's
+        ``group_by`` value tuple, which is what the output ``obs`` is rebuilt
+        from. The per-batch obsm extraction happens here so the batch itself
+        does not have to be held until the end of the run.
+
+        :returns: ``{"preds", "obs", "obsm"}``, consumed by
+            :func:`~sckitflow._predict.predictions_to_adata`.
+        """
+        if self.inference_method is None:
+            raise ValueError("this plan has no inference method: pass one to `TrainingPlan(...)`.")
+        step_data, leaf = batch
+        preds = self.inference_method.predict(step_data, **self._predict_kwargs)
+        return prediction_record(self.trainer.predict_dataloaders, step_data, leaf, preds)
+
     def configure_optimizers(self) -> Any:
+        if self._optimizer is None:
+            raise ValueError("this plan was built without an optimizer, so it can only predict.")
         if self._lr_scheduler is None:
             return self._optimizer
         return {

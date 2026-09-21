@@ -12,6 +12,7 @@ from sckitflow._constants import (
     DEFAULT_VF_LATENT_STATE_DIM,
     DEFAULT_VF_LATENT_TIME_DIM,
 )
+from sckitflow._serialization import register_module
 from sckitflow._types import ConditioningLayersId, LayersDict, NestedLayersDict, TimeFeaturesId
 from sckitflow.core._types import ConditioningFn, MappedTensor, TimeFeaturesFn, VfFn
 from sckitflow.core._utils import make_concatenation_possible
@@ -59,6 +60,7 @@ class BaseVelocityField(torch.nn.Module):
         """Compiles the velocity field function to be fed to external solvers."""
 
 
+@register_module
 class MLPVelocity(BaseVelocityField):
     """Class for MLP-base unconditional neural velocity fields.
 

@@ -2,6 +2,7 @@ from typing import Any
 
 import torch
 
+from sckitflow._serialization import register_method
 from sckitflow.core._data_utils import (
     get_tensor_dict_from_data,
     prepare_latent_train,
@@ -12,6 +13,7 @@ from sckitflow.core.methods._base import AbstractFlowMethod
 __all__ = ["CFMTraining"]
 
 
+@register_method
 class CFMTraining(AbstractFlowMethod):
     """Conditional Flow Matching training method.
 

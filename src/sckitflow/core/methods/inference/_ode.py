@@ -2,7 +2,6 @@ from typing import Any
 
 import torch
 
-from sckitflow._serialization import register_method
 from sckitflow.core._data_utils import (
     expand_conditioning,
     get_tensor_dict_from_data,
@@ -21,7 +20,6 @@ from sckitflow.core.solvers import ODESolver
 __all__ = ["ODEInference"]
 
 
-@register_method
 class ODEInference(AbstractFlowMethod):
     """ODE inference from an underlying velocity-field module.
 

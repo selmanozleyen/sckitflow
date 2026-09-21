@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import json
 import logging
 import tarfile
 import tempfile
@@ -15,7 +13,6 @@ from anndata import AnnData
 from tqdm import tqdm
 
 from sckitflow._predict import prediction_record, predictions_to_adata
-from sckitflow._serialization import name_for_saving
 from sckitflow.core._types import PredictionData
 from sckitflow.core.methods._base import SupportsInference, SupportsTraining
 from sckitflow.data._datamodule import FlowDataModule
@@ -205,46 +202,17 @@ class Model:
 
         return predictions_to_adata(self._data_dims, records, return_raw=return_raw)
 
-    def manifest(self) -> dict[str, Any]:
-        """Which classes this model is built from, by registered name.
-
-        Recording names rather than pickled class references is what lets a saved
-        run survive those classes being renamed or moved. Anything can be
-        *constructed* and trained; only registered classes can be written down,
-        so this raises rather than producing an artifact nothing can read back.
-
-        :raises TypeError: If a method or the module is not registered.
-        """
-        entries = {
-            "training_method": name_for_saving(self._training_method, kind="method"),
-            "module": name_for_saving(self._module, kind="module"),
-        }
-        if self._inference_method is not None:
-            entries["inference_method"] = name_for_saving(self._inference_method, kind="method")
-        return entries
-
     def save(self, filepath: str, allow_overwrite: bool = False) -> None:
-        """Save the entire model (including registered data) to a tarball.
-
-        Writes a ``manifest.json`` of registered class names beside the pickle,
-        so the archive says what it holds without being unpickled -- and so an
-        unregistered class is refused here rather than at load time.
-        """
+        """Save the entire model (including registered data) to a tarball."""
         path = Path(filepath)
         if path.exists() and not allow_overwrite:
             raise FileExistsError(f"{filepath} already exists. Use allow_overwrite=True.")
         elif path.exists() and allow_overwrite:
             path.unlink()
 
-        # before writing anything: refuse a model that cannot be named
-        manifest = json.dumps(self.manifest(), indent=2).encode()
-
         self._module.cpu()
 
         with tarfile.open(filepath, "w:gz") as tar:
-            info = tarfile.TarInfo(name="manifest.json")
-            info.size = len(manifest)
-            tar.addfile(info, io.BytesIO(manifest))
             with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
                 cloudpickle.dump(self, tmp)
                 tmp.flush()

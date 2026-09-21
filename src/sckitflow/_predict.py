@@ -15,8 +15,7 @@ import pandas as pd
 import torch
 from anndata import AnnData
 
-from sckitflow._types import PredictionData
-from sckitflow.core._types import StepData
+from sckitflow.core._types import PredictionData, StepData, concatenate_predictions
 from sckitflow.data._dims import DataDimensions
 
 __all__ = ["prediction_record", "predictions_to_adata"]
@@ -112,7 +111,7 @@ def _aggregate_nodes_pred(
     all_obsm: dict[str, list[np.ndarray]],
     return_raw: bool = False,
 ) -> AnnData | tuple[AnnData, PredictionData]:
-    merged_pred = type(all_preds[0]).concatenate(all_preds)
+    merged_pred = concatenate_predictions(all_preds)
 
     X_np = _to_numpy(merged_pred.X)
 

@@ -8,15 +8,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import cloudpickle
-import numpy as np
-import pandas as pd
 import torch
 from anndata import AnnData
 from tqdm import tqdm
 
 from sckitflow._predict import prediction_record, predictions_to_adata
-from sckitflow._types import PredictionData
-from sckitflow.core._types import StepData
+from sckitflow.core._types import PredictionData
 from sckitflow.core.methods._base import SupportsInference, SupportsTraining
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
@@ -120,40 +117,6 @@ class Model:
         )
 
     @overload
-    def _predict_empty(
-        self,
-        return_raw: Literal[False],
-    ) -> AnnData:
-        pass
-
-    @overload
-    def _predict_empty(
-        self,
-        return_raw: Literal[True],
-    ) -> tuple[AnnData, None]:
-        pass
-
-    @overload
-    def _aggregate_nodes_pred(
-        self,
-        all_preds: list[PredictionData],
-        all_obs: list[pd.DataFrame],
-        all_obsm: dict[str, list[np.ndarray]],
-        return_raw: Literal[False],
-    ) -> AnnData:
-        pass
-
-    @overload
-    def _aggregate_nodes_pred(
-        self,
-        all_preds: list[PredictionData],
-        all_obs: list[pd.DataFrame],
-        all_obsm: dict[str, list[np.ndarray]],
-        return_raw: Literal[True],
-    ) -> tuple[AnnData, PredictionData]:
-        pass
-
-    @overload
     def predict(
         self,
         adata: AnnData,
@@ -172,119 +135,6 @@ class Model:
         **kwargs,
     ) -> tuple[AnnData, PredictionData]:
         pass
-
-    def _predict_empty(self, return_raw: bool) -> AnnData | tuple[AnnData, None]:
-        """Returns empty anndata for prediction."""
-        empty_adata = AnnData(
-            X=np.empty((0, len(self._data_dims.feature_names))),
-            var=pd.DataFrame(index=self._data_dims.feature_names),
-        )
-        return empty_adata if not return_raw else (empty_adata, None)
-
-    def _pred_obs_from_leaf(self, group_cols: tuple[str, ...], leaf: tuple, pred_obj: PredictionData) -> pd.DataFrame:
-        """Rebuild a group's obs rows from its ``leaf`` (the ``group_by`` value tuple), one per predicted observation."""
-        n_pred_obs = pred_obj.X.shape[0] if getattr(pred_obj, "X", None) is not None else 1
-        return pd.DataFrame({col: np.repeat(val, n_pred_obs) for col, val in zip(group_cols, leaf, strict=True)})
-
-    def _get_pred_traj(self, pred_obj: PredictionData) -> np.ndarray | None:
-        if pred_obj.traj is None:
-            return None
-
-        n_obs = pred_obj.X.shape[0]
-        traj_np = self._to_numpy(pred_obj.traj)
-
-        if traj_np.ndim == 2 and traj_np.shape[0] == n_obs:
-            return traj_np
-        elif traj_np.ndim == 3 and traj_np.shape[1] == n_obs:
-            return np.transpose(traj_np, (1, 0, 2))
-        elif traj_np.ndim == 4 and traj_np.shape[2] == n_obs:
-            return np.transpose(traj_np, (2, 0, 1, 3))
-        else:
-            raise ValueError(
-                "Trajectory array has incompatible shape for AnnData.obsm: "
-                f"got {traj_np.shape}, expected first dimension to equal "
-                f"n_obs ({n_obs}) or, for 3D trajectories, second "
-                "dimension to equal n_obs so it can be transposed from "
-                "(n_time_steps, n_obs, n_features) to "
-                "(n_obs, n_time_steps, n_features)."
-            )
-
-    def _get_pred_raw_samples(self, pred_obj: PredictionData) -> np.ndarray | None:
-        raw_samples = getattr(pred_obj, "raw_samples", None)
-        if raw_samples is None:
-            return None
-
-        X = getattr(pred_obj, "X", None)
-        if X is None:
-            raise ValueError("Prediction object should have the .X attribute.")
-        n_obs = X.shape[0]
-
-        samples_np = self._to_numpy(raw_samples)
-        if samples_np.ndim == 2 and samples_np.shape[0] == n_obs:
-            return samples_np
-        elif samples_np.ndim == 3 and samples_np.shape[1] == n_obs:
-            return np.transpose(samples_np, (1, 0, 2))
-        else:
-            raise ValueError(
-                "Samples array has incompatible shape for AnnData.obsm: "
-                f"got {samples_np.shape}, expected data of shape "
-                f"(n_obs, n_features) or (n_samples, n_obs, n_features)"
-            )
-
-    def _get_pred_obsm_dict(
-        self, step_data: StepData, pred_obj: PredictionData, cont_keys: tuple[str, ...]
-    ) -> dict[str, np.ndarray]:
-        obsm_dict: dict[str, np.ndarray] = {}
-        traj = self._get_pred_traj(pred_obj)
-        if traj is not None:
-            obsm_dict["trajectory"] = traj
-        raw_samples = self._get_pred_raw_samples(pred_obj)
-        if raw_samples is not None:
-            obsm_dict["raw_samples"] = raw_samples
-
-        condition = step_data["target_condition_data"] or {}
-        response = step_data["target_response_data"] or {}
-        for key in cont_keys:
-            if key in condition:
-                obsm_dict[key] = self._to_numpy(condition[key])
-            elif key in response:
-                obsm_dict[key] = self._to_numpy(response[key])
-        return obsm_dict
-
-    def _aggregate_nodes_pred(
-        self,
-        all_preds: list[PredictionData],
-        all_obs: list[pd.DataFrame],
-        all_obsm: dict[str, list[np.ndarray]],
-        return_raw: bool = False,
-    ) -> AnnData | tuple[AnnData, PredictionData]:
-        merged_pred = type(all_preds[0]).concatenate(all_preds)
-
-        X_np = self._to_numpy(merged_pred.X)
-
-        obs_final = pd.concat(all_obs, axis=0, ignore_index=True)
-        obs_final.index = obs_final.index.astype(str)
-
-        obsm_final = {k: np.concatenate(v, axis=0) for k, v in all_obsm.items()}
-
-        pred_adata = AnnData(
-            X=X_np, obs=obs_final, var=pd.DataFrame(index=self._data_dims.feature_names), obsm=obsm_final
-        )
-
-        if return_raw:
-            return pred_adata, merged_pred
-
-        return pred_adata
-
-    def _to_numpy(self, tensor: Any) -> np.ndarray:
-        """Convert a torch tensor (or array-like) to a numpy array."""
-        if tensor is None:
-            return None
-        import torch
-
-        if isinstance(tensor, torch.Tensor):
-            return tensor.detach().cpu().numpy()
-        return np.array(tensor)
 
     def to_device(self, device: str) -> None:
         """Move the underlying PyTorch module to the specified device.

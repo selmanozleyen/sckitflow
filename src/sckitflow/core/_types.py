@@ -154,14 +154,6 @@ class PredictionData:
     raw_samples: torch.Tensor | None = None
     traj: torch.Tensor | None = None
 
-    @property
-    def has_raw_samples(self) -> bool:
-        return self.raw_samples is not None
-
-    @property
-    def has_traj(self) -> bool:
-        return self.traj is not None
-
 
 @dataclass(frozen=True)
 class MappedTensor(mixins.MappedTree):
@@ -192,19 +184,11 @@ def concatenate_predictions(preds: Collection[PredictionData]) -> PredictionData
     if len(preds) == 0:
         raise ValueError("Cannot concatenate empty collection")
 
-    # ---- Sanity check as they should all contain the same fields ----
-    for idx, p in enumerate(preds):
-        # ---- Get reference values from first element ----
-        if idx == 0:
-            ref_has_raw_samples = p.has_raw_samples
-            ref_has_traj = p.has_traj
-
-        # ---- Check that the raw samples match ---
-        if p.has_raw_samples != ref_has_raw_samples:
-            raise ValueError("All elements should have the same type of `raw_samples` attribute.")
-
-        if p.has_traj != ref_has_traj:
-            raise ValueError("All elements should have the same type of `traj`attribute.")
+    # ---- They must agree on which optional fields they carry ----
+    for field in ("raw_samples", "traj"):
+        present = {getattr(p, field) is not None for p in preds}
+        if len(present) > 1:
+            raise ValueError(f"all elements must agree on whether `{field}` is present.")
 
     # ---- Concatenate X, always on first dimension ----
     X = torch.cat([p.X for p in preds], dim=0)

@@ -17,12 +17,12 @@ from anndata import AnnData
 
 from sckitflow._types import PredictionData
 from sckitflow.core._types import StepData
-from sckitflow.data._dims_registry import DataDimensionalitiesRegistry
+from sckitflow.data._dims import DataDimensions
 
 __all__ = ["prediction_record", "predictions_to_adata"]
 
 
-def _predict_empty(data_dims: DataDimensionalitiesRegistry, return_raw: bool) -> AnnData | tuple[AnnData, None]:
+def _predict_empty(data_dims: DataDimensions, return_raw: bool) -> AnnData | tuple[AnnData, None]:
     """Returns empty anndata for prediction."""
     empty_adata = AnnData(
         X=np.empty((0, len(data_dims.feature_names))),
@@ -106,7 +106,7 @@ def _get_pred_obsm_dict(
 
 
 def _aggregate_nodes_pred(
-    data_dims: DataDimensionalitiesRegistry,
+    data_dims: DataDimensions,
     all_preds: list[PredictionData],
     all_obs: list[pd.DataFrame],
     all_obsm: dict[str, list[np.ndarray]],
@@ -167,7 +167,7 @@ def prediction_record(
 
 
 def predictions_to_adata(
-    data_dims: DataDimensionalitiesRegistry,
+    data_dims: DataDimensions,
     records: list[dict[str, Any]],
     *,
     return_raw: bool = False,

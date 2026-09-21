@@ -1,7 +1,7 @@
 import pytest
 import torch
-
 from sckitflow.core.methods._opt import OptimConfig, OptimizationManager
+
 from sckitflow.core.nn._modules import BaseModule
 
 

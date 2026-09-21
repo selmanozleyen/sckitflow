@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from sckitflow.core.methods._opt import OptimizationManager
+from sckitflow.trainer._callbacks import ComputationalCallback, LoggingCallback
+from sckitflow.trainer._trainer import Trainer
 
 from sckitflow.core.methods._base import (
     BaseInferenceProtocol,
@@ -15,10 +18,7 @@ from sckitflow.core.methods._base import (
     SupportsProtocol,
     SupportsTraining,
 )
-from sckitflow.core.methods._opt import OptimizationManager
 from sckitflow.core.nn._modules import BaseModule
-from sckitflow.trainer._callbacks import ComputationalCallback, LoggingCallback
-from sckitflow.trainer._trainer import Trainer
 
 
 # -----------------------------------------------------------------------------
@@ -31,7 +31,7 @@ class DummyModule(BaseModule):
         super().__init__()
         self.linear = torch.nn.Linear(2, 2)
 
-    def _make_modules(self, dims_registry=None, *args, **kwargs):
+    def _make_modules(self, data_dims=None, *args, **kwargs):
         # BaseModule may call this during setup; keep it a no-op.
         pass
 

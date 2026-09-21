@@ -38,9 +38,9 @@ class DummyModule(BaseModule):
         pass
 
     @classmethod
-    def init_from_dims_registry(cls, dims_registry, n_features=None, **kwargs):
+    def init_from_dims_registry(cls, data_dims, n_features=None, **kwargs):
         if n_features is None:
-            n_features = len(dims_registry.feature_names)
+            n_features = len(data_dims.feature_names)
         return cls(n_features=n_features)
 
     def forward(self, *args, **kwargs):
@@ -177,9 +177,9 @@ class TestModel:
     def test_builder_builds_dm_and_dims(self, adata: AnnData):
         model = _make_model(adata)
         assert isinstance(model.dm, DataManager)
-        assert model._dims is not None
+        assert model._data_dims is not None
         assert model.is_paired_setting is False
-        assert len(model._dims.feature_names) == adata.n_vars
+        assert len(model._data_dims.feature_names) == adata.n_vars
 
     def test_builder_exposes_dm_and_dims(self, adata: AnnData):
         builder = ModelBuilder.from_adata(adata)
@@ -214,7 +214,7 @@ class TestModel:
             inference_protocol_cls=DummyInferenceProtocol,
         )
         assert model.dm is dm
-        assert model._dims is data_dims
+        assert model._data_dims is data_dims
 
     def test_init_raises_without_protocols(self, adata: AnnData):
         builder = ModelBuilder.from_adata(adata)
@@ -451,7 +451,7 @@ class TestModel:
                 return self.linear(x)
 
             @classmethod
-            def init_from_dims_registry(cls, dims_registry, *args, **kwargs):
+            def init_from_dims_registry(cls, data_dims, *args, **kwargs):
                 return cls()
 
         class RealDummyTrainingProtocol(BaseTrainingProtocol):
@@ -1009,7 +1009,7 @@ class TestModelPredictCombinations:
         if view_on_condition_space:
             expected_n_vars = adata.obsm[cont_key].shape[1]
         else:
-            expected_n_vars = len(model._dims.feature_names)
+            expected_n_vars = len(model._data_dims.feature_names)
         assert pred_adata.n_vars == expected_n_vars
 
         step_data = captured_step_data[0]

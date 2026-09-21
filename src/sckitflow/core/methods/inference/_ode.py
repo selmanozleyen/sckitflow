@@ -9,9 +9,8 @@ from sckitflow.core._data_utils import (
 )
 from sckitflow.core._types import (
     PredictionData,
+    SamplerFn,
     StepData,
-    SamplerFn,
-    SamplerFn,
 )
 from sckitflow.core.methods._base import AbstractFlowMethod
 from sckitflow.core.methods.inference._utils import aggregate_predictions

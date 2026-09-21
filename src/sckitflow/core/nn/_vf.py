@@ -13,7 +13,7 @@ from sckitflow._constants import (
     DEFAULT_VF_LATENT_TIME_DIM,
 )
 from sckitflow._types import ConditioningLayersId, LayersDict, NestedLayersDict, TimeFeaturesId
-from sckitflow.core._types import MappedTensor, ConditioningFn, TimeFeaturesFn, VfFn
+from sckitflow.core._types import ConditioningFn, MappedTensor, TimeFeaturesFn, VfFn
 from sckitflow.core._utils import make_concatenation_possible
 from sckitflow.core.nn._conditioning_layers import BaseConditioningLayer, get_conditioning_layer
 from sckitflow.core.nn._modules import FunctionalModule

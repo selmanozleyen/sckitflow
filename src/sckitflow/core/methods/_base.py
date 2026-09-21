@@ -4,7 +4,7 @@ from typing import Any, Protocol, runtime_checkable
 import torch
 
 from sckitflow.core._data_utils import subscript_step_data
-from sckitflow.core._types import PredictionData, StepData, MatchFn, SamplerFn, SamplerFn
+from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
 from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath, LinearDiracProbabilityPath
 
 __all__ = [

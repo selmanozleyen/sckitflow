@@ -90,7 +90,7 @@ class Model:
         return self._datamodule.dm
 
     @property
-    def _dims(self) -> DataDimensions:
+    def _data_dims(self) -> DataDimensions:
         return self._datamodule.data_dims
 
     def plan(
@@ -176,8 +176,8 @@ class Model:
     def _predict_empty(self, return_raw: bool) -> AnnData | tuple[AnnData, None]:
         """Returns empty anndata for prediction."""
         empty_adata = AnnData(
-            X=np.empty((0, len(self._dims.feature_names))),
-            var=pd.DataFrame(index=self._dims.feature_names),
+            X=np.empty((0, len(self._data_dims.feature_names))),
+            var=pd.DataFrame(index=self._data_dims.feature_names),
         )
         return empty_adata if not return_raw else (empty_adata, None)
 
@@ -268,7 +268,7 @@ class Model:
         obsm_final = {k: np.concatenate(v, axis=0) for k, v in all_obsm.items()}
 
         pred_adata = AnnData(
-            X=X_np, obs=obs_final, var=pd.DataFrame(index=self._dims.feature_names), obsm=obsm_final
+            X=X_np, obs=obs_final, var=pd.DataFrame(index=self._data_dims.feature_names), obsm=obsm_final
         )
 
         if return_raw:
@@ -350,7 +350,7 @@ class Model:
         finally:
             inference_method.module.train(was_training)
 
-        return predictions_to_adata(self._dims_registry, records, return_raw=return_raw)
+        return predictions_to_adata(self._data_dims, records, return_raw=return_raw)
 
     def save(self, filepath: str, allow_overwrite: bool = False) -> None:
         """Save the entire model (including registered data) to a tarball."""

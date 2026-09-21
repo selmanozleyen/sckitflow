@@ -7,6 +7,7 @@ Free functions, not methods: reassembly is a pure transform of
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import fields
 from typing import Any
 
@@ -14,11 +15,14 @@ import numpy as np
 import pandas as pd
 import torch
 from anndata import AnnData
+from tqdm import tqdm
 
 from sckitflow.core._types import PredictionData, StepData, concatenate_predictions
+from sckitflow.core.methods._base import SupportsInference
+from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
 
-__all__ = ["prediction_record", "predictions_to_adata"]
+__all__ = ["prediction_record", "predictions_to_adata", "predict_adata"]
 
 
 def _predict_empty(data_dims: DataDimensions, return_raw: bool) -> AnnData | tuple[AnnData, None]:
@@ -195,3 +199,59 @@ def predictions_to_adata(
         all_obsm,
         return_raw=return_raw,
     )
+
+
+@torch.inference_mode()
+def predict_adata(
+    datamodule: FlowDataModule,
+    inference_method: SupportsInference,
+    adata: AnnData,
+    *,
+    return_raw: bool = False,
+    max_per_group: int | None = None,
+    require_target_state: bool = True,
+    control_values_dict: dict[str, str] | None = None,
+    matched_keys: Mapping[tuple, tuple] | None = None,
+    control_adata: AnnData | None = None,
+    predict_kwargs: dict[str, Any] | None = None,
+) -> AnnData | tuple[AnnData, PredictionData]:
+    """Predicts over ``adata``, one deterministic pass per group, into one `AnnData`.
+
+    A plain pass rather than ``Trainer.predict``: predicting needs no loop
+    machinery, and our eval loader cannot shard, so multi-device prediction would
+    silently duplicate rows. For a prediction writer or multi-device, drive
+    `~sckitflow.trainer.TrainingPlan.predict_step` through a `lightning.Trainer`
+    instead.
+
+    :param datamodule: Supplies the schema and the per-group eval loader.
+    :param inference_method: The method whose ``predict`` is called per group.
+    :param adata: The input adata carrying the metadata to predict over.
+    :param return_raw: If ``True``, also return the concatenated `PredictionData`.
+    :param max_per_group: Per-group cap on observations.
+    :param require_target_state: Whether ``adata`` must carry a target state representation.
+    :param control_values_dict: Mapping from each condition level to its control value.
+    :param matched_keys: ``{source group key: target group key}`` pairs for fixed matching.
+    :param control_adata: Optional separate control (source) pool.
+    :param predict_kwargs: Forwarded to the inference method's ``predict``.
+    """
+    loader = datamodule.set_predict_data(
+        adata,
+        max_per_group=max_per_group,
+        require_target_state=require_target_state,
+        control_values_dict=control_values_dict,
+        matched_keys=matched_keys,
+        control_adata=control_adata,
+    ).predict_dataloader()
+    predict_kwargs = {} if predict_kwargs is None else predict_kwargs
+
+    was_training = inference_method.module.training
+    inference_method.module.eval()
+    records = []
+    try:
+        for step_data, leaf in tqdm(loader, total=len(loader), desc="Predicting"):
+            preds = inference_method.predict(step_data, **predict_kwargs)
+            records.append(prediction_record(loader, step_data, leaf, preds))
+    finally:
+        inference_method.module.train(was_training)
+
+    return predictions_to_adata(datamodule.data_dims, records, return_raw=return_raw)

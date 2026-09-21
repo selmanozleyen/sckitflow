@@ -4,7 +4,7 @@ from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
 import torch
 
 from sckitflow.core._data_utils import subscript_step_data
-from sckitflow.core._types import PredictionData, StepData, TMatchFn, TNoiseSamplerFn, TTimeSamplerFn
+from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
 from sckitflow.core.nn._modules import BaseModule
 from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath, LinearDiracProbabilityPath
 
@@ -130,8 +130,8 @@ class FlowSpecs(ProtocolSpecs):
         self,
         module: BaseModule,
         probability_path: BaseProbabilityPath | None = None,
-        time_sampler: TTimeSamplerFn | None = None,
-        noise_sampler: TNoiseSamplerFn | None = None,
+        time_sampler: SamplerFn | None = None,
+        noise_sampler: SamplerFn | None = None,
         generate_from_noise: bool = False,
         dtype: torch.dtype | None = None,
         device_id: str | None = None,
@@ -163,11 +163,11 @@ class FlowSpecs(ProtocolSpecs):
         return self._probability_path
 
     @property
-    def noise_sampler(self) -> TNoiseSamplerFn | None:
+    def noise_sampler(self) -> SamplerFn | None:
         return self._noise_sampler
 
     @property
-    def time_sampler(self) -> TTimeSamplerFn:
+    def time_sampler(self) -> SamplerFn:
         return self._time_sampler
 
     @property
@@ -217,11 +217,11 @@ class _FlowSpecsHolder(_SpecsHolder[FlowSpecs]):
         return self._specs.probability_path
 
     @property
-    def time_sampler(self) -> TTimeSamplerFn:
+    def time_sampler(self) -> SamplerFn:
         return self._specs.time_sampler
 
     @property
-    def noise_sampler(self) -> TNoiseSamplerFn | None:
+    def noise_sampler(self) -> SamplerFn | None:
         return self._specs.noise_sampler
 
     @property
@@ -268,10 +268,10 @@ class BaseMatchingProtocol(abc.ABC):
     Stores the `match_fn` callable used to match source and target populations.
     """
 
-    def __init__(self, match_fn: TMatchFn) -> None:
+    def __init__(self, match_fn: MatchFn) -> None:
         """Initializes the matching protocol.
 
-        :param match_fn: A callable satisfying `TMatchFn`, used to match source
+        :param match_fn: A callable satisfying `MatchFn`, used to match source
             and target populations from a batch of data.
         """
         self._match_fn = match_fn
@@ -280,7 +280,7 @@ class BaseMatchingProtocol(abc.ABC):
     def match(self, step_data: StepData) -> StepData: ...
 
     @property
-    def match_fn(self) -> TMatchFn:
+    def match_fn(self) -> MatchFn:
         return self._match_fn
 
 
@@ -396,11 +396,11 @@ class MatchedTrainingProtocol(TrainingProtocolWrapper):
     been matched by an internal `MatchingProtocol`.
     """
 
-    def __init__(self, protocol: SupportsTraining, match_fn: TMatchFn) -> None:
+    def __init__(self, protocol: SupportsTraining, match_fn: MatchFn) -> None:
         """Initializes the matched training protocol.
 
         :param protocol: The training protocol to wrap around.
-        :param match_fn: The matching function satisfying `TMatchFn`.
+        :param match_fn: The matching function satisfying `MatchFn`.
         """
         super().__init__(protocol)
         self._matcher = MatchingProtocol(match_fn)

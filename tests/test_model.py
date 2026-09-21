@@ -93,12 +93,12 @@ class DummyInferenceProtocol(BaseInferenceProtocol):
 # them picklable for `Model.save`.
 # -----------------------------------------------------------------------------
 def dummy_time_sampler(shape, device=None, dtype=None):
-    """Valid `TTimeSamplerFn`; returns uniform values in [0, 1)."""
+    """Valid `SamplerFn`; returns uniform values in [0, 1)."""
     return torch.rand(shape, device=device, dtype=dtype)
 
 
 def dummy_noise_sampler(shape, device=None, dtype=None):
-    """Valid `TNoiseSamplerFn`; returns standard-normal samples."""
+    """Valid `SamplerFn`; returns standard-normal samples."""
     return torch.randn(shape, device=device, dtype=dtype)
 
 
@@ -177,9 +177,9 @@ class TestModel:
     def test_builder_builds_dm_and_dims(self, adata: AnnData):
         model = _make_model(adata)
         assert isinstance(model.dm, DataManager)
-        assert model._dims_registry is not None
+        assert model._dims is not None
         assert model.is_paired_setting is False
-        assert len(model._dims_registry.feature_names) == adata.n_vars
+        assert len(model._dims.feature_names) == adata.n_vars
 
     def test_builder_exposes_dm_and_dims(self, adata: AnnData):
         builder = ModelBuilder.from_adata(adata)
@@ -214,7 +214,7 @@ class TestModel:
             inference_protocol_cls=DummyInferenceProtocol,
         )
         assert model.dm is dm
-        assert model._dims_registry is data_dims
+        assert model._dims is data_dims
 
     def test_init_raises_without_protocols(self, adata: AnnData):
         builder = ModelBuilder.from_adata(adata)
@@ -1009,7 +1009,7 @@ class TestModelPredictCombinations:
         if view_on_condition_space:
             expected_n_vars = adata.obsm[cont_key].shape[1]
         else:
-            expected_n_vars = len(model._dims_registry.feature_names)
+            expected_n_vars = len(model._dims.feature_names)
         assert pred_adata.n_vars == expected_n_vars
 
         step_data = captured_step_data[0]

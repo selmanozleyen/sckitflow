@@ -15,7 +15,7 @@ from anndata import AnnData
 from tqdm import tqdm
 
 from sckitflow._types import PredictionData
-from sckitflow.core._types import StepData, TMatchFn
+from sckitflow.core._types import MatchFn, StepData
 from sckitflow.core.methods import INFERENCE_PROTOCOLS_REGISTRY, TRAINING_PROTOCOLS_REGISTRY
 from sckitflow.core.methods._base import (
     FlowSpecs,
@@ -26,7 +26,7 @@ from sckitflow.core.methods._base import (
 )
 from sckitflow.core.methods._opt import OptimConfig, OptimizationManager
 from sckitflow.core.nn._modules import BaseModule
-from sckitflow.data._dims_registry import DataDimensionalitiesRegistry
+from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerKwargs
 from sckitflow.trainer._callbacks import BaseCallback, TrainingCallbacks
 from sckitflow.trainer._trainer import Trainer
@@ -42,7 +42,7 @@ __all__ = ["Model", "ModelBuilder"]
 def _build_module(
     module: BaseModule | None = None,
     module_cls: type[BaseModule] | None = None,
-    data_dims: DataDimensionalitiesRegistry | None = None,
+    data_dims: DataDimensions | None = None,
     module_kwargs: dict[str, Any] | None = None,
 ) -> BaseModule:
     """Returns an instantiated module from the given inputs.
@@ -190,7 +190,7 @@ def _build_protocol(
 
 def _get_matched_protocol(
     training_protocol: SupportsTraining,
-    match_fn: TMatchFn | None = None,
+    match_fn: MatchFn | None = None,
 ) -> SupportsTraining:
     """Wrap `training_protocol` with `match_fn` when one is provided.
 
@@ -267,7 +267,7 @@ class ModelKwargs(TypedDict, total=False):
     inference_protocol_cls: type[SupportsInference] | None
     inference_protocol_id: str | None
     inference_protocol_kwargs: dict[str, Any] | None
-    match_fn: TMatchFn | None
+    match_fn: MatchFn | None
 
 
 class ModelBuilder:
@@ -286,7 +286,7 @@ class ModelBuilder:
     def __init__(
         self,
         dm: DataManager,
-        data_dims: DataDimensionalitiesRegistry,
+        data_dims: DataDimensions,
     ) -> None:
         """See :meth:`from_adata` for the usual entry point."""
         self._dm = dm
@@ -317,7 +317,7 @@ class ModelBuilder:
         return self._dm
 
     @property
-    def data_dims(self) -> DataDimensionalitiesRegistry:
+    def data_dims(self) -> DataDimensions:
         """The data dimensionalities derived from the registration data."""
         return self._data_dims
 
@@ -327,9 +327,7 @@ class ModelBuilder:
 
 
 class Model:
-    def __init__(
-        self, dm: DataManager, data_dims: DataDimensionalitiesRegistry, **model_kwargs: Unpack[ModelKwargs]
-    ) -> None:
+    def __init__(self, dm: DataManager, data_dims: DataDimensions, **model_kwargs: Unpack[ModelKwargs]) -> None:
         """Initialize a model from a fitted data manager and its dimensionalities.
 
         Usually constructed through :class:`ModelBuilder` rather than directly.
@@ -338,20 +336,20 @@ class Model:
         :type dm: class: `DataManager`
 
         :param data_dims: The data dimensionalities derived from the registration data.
-        :type data_dims: class: `DataDimensionalitiesRegistry`
+        :type data_dims: class: `DataDimensions`
 
         :param model_kwargs: Module and protocol configuration; see
             :class:`ModelKwargs` for the accepted options.
         """
         # ----- Store data manager and dimensionalities -----
         self._dm = dm
-        self._dims_registry = data_dims
+        self._dims = data_dims
 
         # ---- Initialize module ----
         self._module: BaseModule = _build_module(
             module=model_kwargs.get("module"),
             module_cls=model_kwargs.get("module_cls"),
-            data_dims=self._dims_registry,
+            data_dims=self._dims,
             module_kwargs=model_kwargs.get("module_kwargs"),
         )
 
@@ -449,8 +447,8 @@ class Model:
     def _predict_empty(self, return_raw: bool) -> AnnData | tuple[AnnData, None]:
         """Returns empty anndata for prediction."""
         empty_adata = AnnData(
-            X=np.empty((0, len(self._dims_registry.feature_names))),
-            var=pd.DataFrame(index=self._dims_registry.feature_names),
+            X=np.empty((0, len(self._dims.feature_names))),
+            var=pd.DataFrame(index=self._dims.feature_names),
         )
         return empty_adata if not return_raw else (empty_adata, None)
 
@@ -540,9 +538,7 @@ class Model:
 
         obsm_final = {k: np.concatenate(v, axis=0) for k, v in all_obsm.items()}
 
-        pred_adata = AnnData(
-            X=X_np, obs=obs_final, var=pd.DataFrame(index=self._dims_registry.feature_names), obsm=obsm_final
-        )
+        pred_adata = AnnData(X=X_np, obs=obs_final, var=pd.DataFrame(index=self._dims.feature_names), obsm=obsm_final)
 
         if return_raw:
             return pred_adata, merged_pred
@@ -585,7 +581,7 @@ class Model:
         inference_protocol_cls: type[SupportsInference] | None = None,
         inference_protocol_id: str | None = None,
         inference_protocol_kwargs: dict[str, Any] | None = None,
-        match_fn: TMatchFn | None = None,
+        match_fn: MatchFn | None = None,
         train_split: str = "train",
         control_adata: AnnData | None = None,
         callbacks: TrainingCallbacks | Sequence[BaseCallback] | None = None,
@@ -822,7 +818,7 @@ class Model:
         if adata is not None:
             builder = ModelBuilder.from_adata(adata, **register_kwargs)
             model._dm = builder.dm
-            model._dims_registry = builder.data_dims
+            model._dims = builder.data_dims
 
         if map_location is not None:
             model.to_device(map_location)

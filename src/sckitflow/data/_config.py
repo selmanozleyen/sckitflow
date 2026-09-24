@@ -22,12 +22,12 @@ from scfit.registry import Component, register_live
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import GroupEncoder
 from sckitflow.data.splitters._base import Splitter
+from sckitflow.data.splitters._config import SplitterConfig
 
 __all__ = ["FlowDataConfig"]
 
-# A splitter is an arbitrary runtime object with no portable form. Passing one
-# builds and trains fine; asking that config for a spec raises rather than
-# silently writing a config that splits differently on reload.
+# A live `Splitter` instance still builds and trains; it just has no spec, so a
+# config holding one refuses to serialize. Prefer `SplitterConfig`, which does.
 register_live(Splitter)
 
 
@@ -72,7 +72,8 @@ class FlowDataConfig(Component, type_id="data_module.flow", version=1):
 
     # --- which observations are held out ---
     split_by: str | None = None
-    splitter: Splitter | None = None
+    splitter: SplitterConfig | Splitter | None = None
+    """A `SplitterConfig` (portable) or a live `Splitter` (builds, will not serialize)."""
 
     # --- incomparable spaces ---
     n_shared_dims: int | None = None
@@ -109,7 +110,7 @@ class FlowDataConfig(Component, type_id="data_module.flow", version=1):
             "control_values_dict": self.control_values_dict,
             "matched_keys": dict(self.matched_pairs) if self.matched_pairs else None,
             "split_by": self.split_by,
-            "splitter": self.splitter,
+            "splitter": (self.splitter.build() if isinstance(self.splitter, SplitterConfig) else self.splitter),
             "n_shared_dims": self.n_shared_dims,
             "source_rep": self.source_rep,
         }

@@ -28,6 +28,7 @@ from scfit.registry import Component, register_live
 from sckitflow.core._types import SamplerFn
 from sckitflow.core.methods.inference._ode import ODEInference
 from sckitflow.core.methods.training._cfm import CFMTraining
+from sckitflow.core.probability_paths._config import ProbabilityPathConfig
 from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath
 
 __all__ = [
@@ -39,7 +40,11 @@ __all__ = [
 
 # Runtime-only types: a config may hold one to build and train with, but asking
 # that config for a portable spec raises instead of dropping it on the floor.
+# Genuinely runtime-only: a module's learned weights belong in a `state_dict`,
+# not a spec, and a `torch.Generator` has no portable form (seed it via config).
 register_live(torch.nn.Module)
+register_live(torch.Generator)
+# A live path still builds and trains; prefer `ProbabilityPathConfig`, which serializes.
 register_live(BaseProbabilityPath)
 
 
@@ -62,14 +67,19 @@ class _FlowConfig(Component):
     builds fine and refuses to serialize.
     """
 
-    probability_path: BaseProbabilityPath | None = None
+    probability_path: ProbabilityPathConfig | BaseProbabilityPath | None = None
+    """A `ProbabilityPathConfig` (portable) or a live path (builds, will not serialize)."""
     time_sampler: SamplerFn | None = None
     noise_sampler: SamplerFn | None = None
     generate_from_noise: bool = False
 
     def _flow_kwargs(self) -> dict[str, Any]:
         return {
-            "probability_path": self.probability_path,
+            "probability_path": (
+                self.probability_path.build()
+                if isinstance(self.probability_path, ProbabilityPathConfig)
+                else self.probability_path
+            ),
             "time_sampler": self.time_sampler,
             "noise_sampler": self.noise_sampler,
             "generate_from_noise": self.generate_from_noise,

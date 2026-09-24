@@ -31,7 +31,7 @@ __all__ = ["FlowDataConfig"]
 register_live(Splitter)
 
 
-@dataclass
+@dataclass(frozen=True)
 class FlowDataConfig(Component, type_id="data_module.flow", version=1):
     """The schema and streaming options a run reads its batches with.
 

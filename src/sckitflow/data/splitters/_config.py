@@ -26,7 +26,7 @@ class SplitterConfig(Component):
         raise NotImplementedError
 
 
-@dataclass
+@dataclass(frozen=True)
 class CombinationSplitterConfig(SplitterConfig, type_id="splitter.combination", version=1):
     """Holds out whole condition combinations. See :class:`CombinationSplitter`."""
 

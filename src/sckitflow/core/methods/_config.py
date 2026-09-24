@@ -58,7 +58,7 @@ class InferenceMethodConfig(Component):
     """Family base for anything that configures an inference method."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class _FlowConfig(Component):
     """The flow parameters every flow method shares.
 
@@ -86,7 +86,7 @@ class _FlowConfig(Component):
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class CFMConfig(_FlowConfig, TrainingMethodConfig, type_id="training_method.cfm", version=1):
     """Conditional Flow Matching training."""
 
@@ -95,7 +95,7 @@ class CFMConfig(_FlowConfig, TrainingMethodConfig, type_id="training_method.cfm"
         return CFMTraining(module=context, **self._flow_kwargs())
 
 
-@dataclass
+@dataclass(frozen=True)
 class ODEConfig(_FlowConfig, InferenceMethodConfig, type_id="inference_method.ode", version=1):
     """ODE inference over a trained velocity field."""
 

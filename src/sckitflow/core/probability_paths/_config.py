@@ -31,7 +31,7 @@ __all__ = [
 
 # No `type_id`: the family base stays unregistered so it can be the `expected`
 # family in `ProbabilityPathConfig.from_spec(spec)`.
-@dataclass
+@dataclass(frozen=True)
 class ProbabilityPathConfig(Component):
     """Family base for the probability paths.
 
@@ -44,7 +44,7 @@ class ProbabilityPathConfig(Component):
         raise NotImplementedError
 
 
-@dataclass
+@dataclass(frozen=True)
 class _SeededPathConfig(ProbabilityPathConfig):
     """A path whose sampling is stochastic, so a seed is meaningful.
 
@@ -61,7 +61,7 @@ class _SeededPathConfig(ProbabilityPathConfig):
         return None if self.seed is None else torch.Generator().manual_seed(self.seed)
 
 
-@dataclass
+@dataclass(frozen=True)
 class LinearDiracConfig(ProbabilityPathConfig, type_id="probability_path.linear_dirac", version=1):
     """Straight-line interpolation to a Dirac target. Deterministic."""
 
@@ -69,7 +69,7 @@ class LinearDiracConfig(ProbabilityPathConfig, type_id="probability_path.linear_
         return LinearDiracProbabilityPath(sigma=self.sigma)
 
 
-@dataclass
+@dataclass(frozen=True)
 class LinearGaussianConfig(_SeededPathConfig, type_id="probability_path.linear_gaussian", version=1):
     """Straight-line interpolation with Gaussian noise."""
 
@@ -77,7 +77,7 @@ class LinearGaussianConfig(_SeededPathConfig, type_id="probability_path.linear_g
         return LinearGaussianProbabilityPath(sigma=self.sigma, prng=self._prng())
 
 
-@dataclass
+@dataclass(frozen=True)
 class SchrodingerBridgeConfig(_SeededPathConfig, type_id="probability_path.schrodinger_bridge", version=1):
     """Schrödinger-bridge path.
 
@@ -90,7 +90,7 @@ class SchrodingerBridgeConfig(_SeededPathConfig, type_id="probability_path.schro
         return SchrodingerBridgeProbabilityPath(sigma=self.sigma, prng=self._prng(), eps=self.eps)
 
 
-@dataclass
+@dataclass(frozen=True)
 class VariancePreservingDiracConfig(
     ProbabilityPathConfig, type_id="probability_path.variance_preserving_dirac", version=1
 ):

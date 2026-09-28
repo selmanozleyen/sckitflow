@@ -186,10 +186,6 @@ lint.per-file-ignores."docs/*" = [ "I" ]
 lint.per-file-ignores."tests/*" = [ "D" ]
 lint.pydocstyle.convention = "numpy"
 
-[tool.pyright]
-# Resolved params always hold every key, so reading one is safe.
-reportTypedDictNotRequiredAccess = false
-
 [tool.pytest.ini_options]
 testpaths = [ "tests" ]
 xfail_strict = true

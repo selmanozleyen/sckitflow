@@ -12,7 +12,7 @@ from sckitflow.core._data_utils import (
 from sckitflow.core._types import StepData
 from sckitflow.core.methods._base import AbstractFlowMethod, FlowParams, TrainingMethodConfig
 
-__all__ = ["CFMTraining", "CFMConfig"]
+__all__ = ["CFMTraining", "CFMTrainingConfig"]
 
 
 class CFMTraining(AbstractFlowMethod):
@@ -65,8 +65,8 @@ class CFMTraining(AbstractFlowMethod):
         return loss, {"loss": loss.item()}
 
 
-@component("training_method.cfm")
-class CFMConfig(ParamsComponent, TrainingMethodConfig):
+@component("training_method.cfm", builds=CFMTraining)
+class CFMTrainingConfig(ParamsComponent, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
     params: FlowParams = field(default_factory=lambda: FlowParams())

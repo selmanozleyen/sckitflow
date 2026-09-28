@@ -15,10 +15,10 @@ from sckitflow.core.methods._base import AbstractFlowMethod, FlowParams, Inferen
 from sckitflow.core.methods.inference._utils import aggregate_predictions
 from sckitflow.core.solvers import ODESolver
 
-__all__ = ["ODEInference", "ODEParams", "ODEConfig"]
+__all__ = ["ODEInference", "ODEInferenceParams", "ODEInferenceConfig"]
 
 
-class ODEParams(FlowParams, total=False):
+class ODEInferenceParams(FlowParams, total=False):
     """`FlowParams` plus the ODE solver settings."""
 
     solver_kwargs: Annotated[dict[str, Any], Default({})]
@@ -50,7 +50,7 @@ class ODEInference(AbstractFlowMethod):
     """
 
     def __init__(
-        self, module: torch.nn.Module, *, latent: torch.Tensor | None = None, **params: Unpack[ODEParams]
+        self, module: torch.nn.Module, *, latent: torch.Tensor | None = None, **params: Unpack[ODEInferenceParams]
     ) -> None:
         """Initializes the ODE inference method.
 
@@ -160,11 +160,11 @@ class ODEInference(AbstractFlowMethod):
         return self._n_samples
 
 
-@component("inference_method.ode")
-class ODEConfig(ParamsComponent, InferenceMethodConfig):
+@component("inference_method.ode", builds=ODEInference)
+class ODEInferenceConfig(ParamsComponent, InferenceMethodConfig):
     """ODE inference over a trained velocity field."""
 
-    params: ODEParams = field(default_factory=lambda: ODEParams())
+    params: ODEInferenceParams = field(default_factory=lambda: ODEInferenceParams())
 
     def build(self, module: torch.nn.Module) -> ODEInference:
         return ODEInference(module, **self.params)

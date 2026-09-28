@@ -9,7 +9,7 @@ The neural module is supplied on load:
 
 .. code-block:: python
 
-    spec = RunSpec(data=FlowDataConfig(...), training=CFMConfig(), loader_seed=0)
+    spec = RunSpec(data=FlowDataModuleConfig(...), training=CFMTrainingConfig(), loader_seed=0)
     save_run("run", spec, module)
 
     dmod, plan = load_run("run", adata, module=MLPVelocity(...))
@@ -26,7 +26,7 @@ import torch
 from scfit.registry import Component, component
 
 from sckitflow.core.methods._base import InferenceMethodConfig, TrainingMethodConfig
-from sckitflow.data._config import FlowDataConfig
+from sckitflow.data._config import FlowDataModuleConfig
 from sckitflow.data.splitters._base import SplitterConfig
 from sckitflow.trainer._plan import TrainingPlan
 
@@ -45,7 +45,7 @@ WEIGHTS_NAME = "weights.pt"
 class RunSpec(Component):
     """Everything portable about a run: what ``specs.json`` holds."""
 
-    data: FlowDataConfig
+    data: FlowDataModuleConfig
     training: TrainingMethodConfig
     inference: InferenceMethodConfig | None = None
     splitter: SplitterConfig | None = None

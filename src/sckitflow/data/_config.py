@@ -19,11 +19,11 @@ from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import GroupEncoder
 from sckitflow.data.splitters._base import Splitter
 
-__all__ = ["FlowDataConfig"]
+__all__ = ["FlowDataModuleConfig"]
 
 
-@component("data_module.flow")
-class FlowDataConfig(Component):
+@component("data_module.flow", builds=FlowDataModule)
+class FlowDataModuleConfig(Component):
     """The schema and streaming options a run reads its batches with.
 
     Mirrors :class:`~sckitflow.data.DataManagerKwargs` plus the loader knobs

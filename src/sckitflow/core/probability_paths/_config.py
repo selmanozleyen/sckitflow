@@ -1,8 +1,7 @@
 """Portable configs for the probability paths.
 
-A path is a `sigma` and, at most, a seeded generator -- so it is portable, and
-does not belong behind :func:`scfit.registry.register_live`. ``prng`` is the one
-runtime piece: the config carries ``seed`` and builds the generator.
+A path is a `sigma` and, at most, a seeded generator, so it is portable. ``prng``
+is the one runtime piece: the config carries ``seed`` and builds the generator.
 """
 
 from __future__ import annotations

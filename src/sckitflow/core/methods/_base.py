@@ -3,7 +3,7 @@ from typing import Annotated, Any, ClassVar, Protocol, TypedDict, Unpack, runtim
 
 import torch
 from scfit.params import Default, resolve_params
-from scfit.registry import Component, register_live
+from scfit.registry import Component
 
 from sckitflow.core._data_utils import subscript_step_data
 from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
@@ -50,11 +50,6 @@ class SupportsInference(Protocol):
     @property
     def module(self) -> torch.nn.Module: ...
     def predict(self, step_data: StepData) -> PredictionData: ...
-
-
-# Live on a config: it builds and trains, but its spec raises instead of dropping the object.
-register_live(torch.nn.Module)
-register_live(BaseProbabilityPath)
 
 
 class TrainingMethodConfig(Component):

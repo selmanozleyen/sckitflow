@@ -5,17 +5,19 @@ import torch
 from anndata import AnnData
 
 from sckitflow import load_run, run_rngs, save_run
-from sckitflow.core.methods._config import CFMConfig, ODEConfig
+from sckitflow.core.methods.inference._ode import ODEConfig
+from sckitflow.core.methods.training._cfm import CFMConfig
 from sckitflow.data._config import FlowDataConfig
 from sckitflow.data._group_encoders import OneHot
-from sckitflow.data.splitters._config import CombinationSplitterConfig
+from sckitflow.data.splitters._combination import CombinationSplitterConfig
 
 SPLITTER = CombinationSplitterConfig(
-    group_keys=("cell_line", "drug"),
-    always_train_keys=("cell_line",),
-    control_key="drug",
-    control_value="control",
-    test_fraction=0.5,
+    params={
+        "group_keys": ("cell_line", "drug"),
+        "always_train_keys": ("cell_line",),
+        "control_key": "drug",
+        "test_fraction": 0.5,
+    }
 )
 DATA = FlowDataConfig(
     conditions={"drug": ("drug",)},
@@ -42,7 +44,7 @@ def test_load_run_round_trips(tmp_path, adata_small: AnnData):
         split_seed=3,
         splitter_config=SPLITTER,
         data_config=DATA,
-        method_configs={"training": CFMConfig(), "inference": ODEConfig(n_steps=5)},
+        method_configs={"training": CFMConfig(), "inference": ODEConfig(params={"n_steps": 5})},
         module=module,
     )
     document = json.loads((tmp_path / "specs.json").read_text())

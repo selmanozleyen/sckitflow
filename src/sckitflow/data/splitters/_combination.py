@@ -1,16 +1,59 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from dataclasses import field
+from typing import Annotated, Any, TypedDict, Unpack
 
 import numpy as np
 import pandas as pd
 from anndata import AnnData
+from scfit.params import Default, ParamsComponent, resolve_params, validates
+from scfit.registry import component
 
 from sckitflow._utils import check_sequence_query_against_reference
-from sckitflow.data.splitters._base import Splitter
+from sckitflow.data.splitters._base import Splitter, SplitterConfig
 
-__all__ = ["CombinationSplitter"]
+__all__ = ["CombinationSplitter", "CombinationSplitterParams", "CombinationSplitterConfig"]
+
+
+class CombinationSplitterParams(TypedDict, total=False):
+    """Parameters of :class:`CombinationSplitter`."""
+
+    group_keys: Annotated[tuple[str, ...], Default(())]
+    """``adata.obs`` columns whose unique combination is the unit of splitting. Required."""
+    always_train_keys: Annotated[tuple[str, ...], Default(())]
+    """Subset of ``group_keys`` for which every unique value keeps at least one combination in train."""
+    control_key: Annotated[str | None, Default(None)]
+    """``adata.obs`` column marking controls, which are never split. ``None`` means no controls."""
+    control_value: Annotated[str, Default("control")]
+    """Value of ``control_key`` marking a control row."""
+    test_fraction: Annotated[float, Default(0.2)]
+    """Target fraction of each stratum's combinations to hold out, in ``[0, 1)``."""
+    split_key: Annotated[str, Default("split")]
+    """``adata.obs`` column the split label is written to."""
+    train_label: Annotated[str, Default("train")]
+    test_label: Annotated[str, Default("test")]
+    control_label: Annotated[str, Default("control")]
+    """Label written for control observations, which are not split members."""
+
+
+@validates(CombinationSplitterParams)
+def _check(p: dict[str, Any]) -> None:
+    p["group_keys"], p["always_train_keys"] = tuple(p["group_keys"]), tuple(p["always_train_keys"])
+    if not p["group_keys"]:
+        raise ValueError("group_keys must be non-empty.")
+    if not 0.0 <= p["test_fraction"] < 1.0:
+        raise ValueError(f"test_fraction must be in [0, 1), got {p['test_fraction']}.")
+    check_sequence_query_against_reference(
+        p["always_train_keys"], p["group_keys"], query_name="always_train_keys", reference_name="group_keys"
+    )
+    if p["test_fraction"] > 0 and set(p["always_train_keys"]) == set(p["group_keys"]):
+        # Every stratum would then be one combination, and the "keep >=1 in train" cap makes its hold-out 0.
+        raise ValueError(
+            f"always_train_keys {p['always_train_keys']} covers every group key, so each stratum is one "
+            "combination and nothing can ever be held out. Drop a key from always_train_keys, or pass "
+            "test_fraction=0 if no hold-out is intended."
+        )
 
 
 class CombinationSplitter(Splitter):
@@ -39,61 +82,24 @@ class CombinationSplitter(Splitter):
     """
 
     def __init__(
-        self,
-        *,
-        group_keys: Sequence[str],
-        always_train_keys: Sequence[str],
-        control_key: str | None = None,
-        control_value: str = "control",
-        test_fraction: float = 0.2,
-        rng: int | np.random.Generator | None = 0,
-        split_key: str = "split",
-        train_label: str = "train",
-        test_label: str = "test",
-        control_label: str = "control",
+        self, *, rng: int | np.random.Generator | None = 0, **params: Unpack[CombinationSplitterParams]
     ) -> None:
         """Initializes the splitter.
 
-        :param group_keys: ``adata.obs`` columns whose unique combination is the unit of splitting.
-        :param always_train_keys: subset of ``group_keys`` for which every unique value keeps >=1 combination in train.
-        :param control_key: optional ``adata.obs`` column marking controls (never split). ``None`` = no controls.
-        :param control_value: value of ``control_key`` marking a control row. Defaults to ``"control"``.
-        :param test_fraction: target fraction of each stratum's combinations to hold out, in ``[0, 1)``.
         :param rng: seed or generator for the hold-out choice, normalized with :func:`numpy.random.default_rng`.
             An int gives the same split on every call; a `Generator` advances between calls.
-        :param split_key: ``adata.obs`` column the split label is written to.
-        :param train_label: label written for training observations.
-        :param test_label: label written for held-out observations.
-        :param control_label: label written for control observations (not split members).
         """
-        super().__init__(split_key=split_key)
-        if not 0.0 <= test_fraction < 1.0:
-            raise ValueError(f"test_fraction must be in [0, 1), got {test_fraction}.")
-        self._group_keys = tuple(group_keys)
-        self._always_train_keys = tuple(always_train_keys)
-        if not self._group_keys:
-            raise ValueError("group_keys must be non-empty.")
-        check_sequence_query_against_reference(
-            self._always_train_keys,
-            self._group_keys,
-            query_name="always_train_keys",
-            reference_name="group_keys",
-        )
-        if test_fraction > 0 and set(self._always_train_keys) == set(self._group_keys):
-            # Every stratum would then be a single combination, and the "keep >=1 in train" cap makes its
-            # hold-out 0 -- so no test_fraction could ever hold anything out. A config mistake, not a split.
-            raise ValueError(
-                f"always_train_keys {self._always_train_keys} covers every group key, so each stratum is one "
-                "combination and nothing can ever be held out. Drop a key from always_train_keys, or pass "
-                "test_fraction=0 if no hold-out is intended."
-            )
-        self._control_key = control_key
-        self._control_value = control_value
-        self._test_fraction = test_fraction
+        p = resolve_params(params, CombinationSplitterParams)
+        super().__init__(split_key=p["split_key"])
+        self._group_keys = p["group_keys"]
+        self._always_train_keys = p["always_train_keys"]
+        self._control_key = p["control_key"]
+        self._control_value = p["control_value"]
+        self._test_fraction = p["test_fraction"]
         self._rng = rng
-        self._train_label = train_label
-        self._test_label = test_label
-        self._control_label = control_label
+        self._train_label = p["train_label"]
+        self._test_label = p["test_label"]
+        self._control_label = p["control_label"]
 
     def assign(self, adata: AnnData) -> pd.Series:
         """Assigns each observation to train / test / control (see the class docstring for the policy)."""
@@ -142,3 +148,13 @@ class CombinationSplitter(Splitter):
             labels[combo_index.isin(test_combos) & ~is_control] = self._test_label
         labels[is_control] = self._control_label
         return pd.Series(labels, index=obs.index, name=self._split_key)
+
+
+@component("splitter.combination")
+class CombinationSplitterConfig(ParamsComponent, SplitterConfig):
+    """Holds out whole condition combinations. See :class:`CombinationSplitter`."""
+
+    params: CombinationSplitterParams = field(default_factory=lambda: CombinationSplitterParams())
+
+    def build(self, *, rng: np.random.Generator) -> CombinationSplitter:
+        return CombinationSplitter(rng=rng, **self.params)

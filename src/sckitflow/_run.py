@@ -28,9 +28,9 @@ import numpy as np
 import torch
 from scfit.registry import Component
 
-from sckitflow.core.methods._config import InferenceMethodConfig, TrainingMethodConfig
+from sckitflow.core.methods._base import InferenceMethodConfig, TrainingMethodConfig
 from sckitflow.data._config import FlowDataConfig
-from sckitflow.data.splitters._config import SplitterConfig
+from sckitflow.data.splitters._base import SplitterConfig
 from sckitflow.trainer._plan import TrainingPlan
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ def save_run(
     :param splitter_config: The splitter, if the split is derived rather than read from ``split_by``.
     :param data_config: The schema and streaming options.
     :param method_configs: ``{name: Component}``, e.g.
-        ``{"training": CFMConfig(), "inference": ODEConfig(n_steps=50)}``.
+        ``{"training": CFMConfig(), "inference": ODEConfig(params={"n_steps": 50})}``.
         ``"training"`` and ``"inference"`` are the names :func:`load_run` reads.
     :param module: The trained module; its ``state_dict`` is what gets stored.
     :param allow_overwrite: Whether to replace existing files.

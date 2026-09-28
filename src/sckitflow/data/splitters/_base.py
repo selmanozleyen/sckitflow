@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from anndata import AnnData
+from scfit.registry import Component
 
 from sckitflow.data._utils import with_derived_obs
 
-__all__ = ["Splitter"]
+__all__ = ["Splitter", "SplitterConfig"]
 
 
 class Splitter:
@@ -80,3 +82,11 @@ class Splitter:
     def __call__(self, adata: AnnData, *, copy: bool = False) -> AnnData:
         """Alias for :meth:`split`."""
         return self.split(adata, copy=copy)
+
+
+class SplitterConfig(Component):
+    """Family base for the splitter configs. Holds no seed: ``build`` takes the run's split ``rng``."""
+
+    def build(self, *, rng: np.random.Generator) -> Splitter:
+        """The splitter, drawing its hold-out choice from ``rng``."""
+        raise NotImplementedError

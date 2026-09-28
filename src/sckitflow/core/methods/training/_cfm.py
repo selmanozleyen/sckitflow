@@ -1,15 +1,18 @@
+from dataclasses import field
 from typing import Any
 
 import torch
+from scfit.params import ParamsComponent
+from scfit.registry import component
 
 from sckitflow.core._data_utils import (
     get_tensor_dict_from_data,
     prepare_latent_train,
 )
 from sckitflow.core._types import StepData
-from sckitflow.core.methods._base import AbstractFlowMethod
+from sckitflow.core.methods._base import AbstractFlowMethod, FlowParams, TrainingMethodConfig
 
-__all__ = ["CFMTraining"]
+__all__ = ["CFMTraining", "CFMConfig"]
 
 
 class CFMTraining(AbstractFlowMethod):
@@ -60,3 +63,13 @@ class CFMTraining(AbstractFlowMethod):
         vt = self.module(t, xt, condition_dict=cond, source=source)
         loss = torch.nn.functional.mse_loss(vt, ut)
         return loss, {"loss": loss.item()}
+
+
+@component("training_method.cfm")
+class CFMConfig(ParamsComponent, TrainingMethodConfig):
+    """Conditional Flow Matching training."""
+
+    params: FlowParams = field(default_factory=lambda: FlowParams())
+
+    def build(self, module: torch.nn.Module) -> CFMTraining:
+        return CFMTraining(module, **self.params)

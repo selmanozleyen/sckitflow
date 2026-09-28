@@ -28,7 +28,7 @@ import pandas as pd
 from anndata import AnnData
 from scfit.data import EvalLoader as ScfitEvalLoader
 from scfit.data import Loader as ScfitLoader
-from scfit.data import Stream
+from scfit.data import ReadConfig, Stream
 
 from sckitflow.data._utils import with_derived_obs
 
@@ -496,11 +496,11 @@ class Loader(_StepDataBridge):
             device=device,
         )
         self._rows_per_batch = batch_size
-        sampler_kwargs = {
-            "batch_size": batch_size,
-            "chunk_size": chunk_size,
-            "preload_nchunks": preload_nchunks if preload_nchunks is not None else batch_size // chunk_size,
-        }
+        read = ReadConfig(
+            batch_size=batch_size,
+            chunk_size=chunk_size,
+            preload_nchunks=preload_nchunks if preload_nchunks is not None else batch_size // chunk_size,
+        )
         primary_reps = (self._state_loc, *self._cond_cont_locs, *self._resp_cont_locs)
         # With a split column the leaf is ``(split, *group_cols)``, so a weight of 0 excludes the *observations*
         # of another split rather than the whole group -- see `DataManager.get_dataloaders`. The split is
@@ -513,7 +513,7 @@ class Loader(_StepDataBridge):
             group_by=[*prefix_cols, *self._group_cols, *self._pair_cols],
             reps=primary_reps,
             weights=primary_weights,
-            **sampler_kwargs,
+            read=read,
         )
         # `self._adata`, not the argument: an unconditional schema streams a shallow copy carrying the
         # implicit all-observations group column (see `with_derived_obs`).
@@ -522,9 +522,7 @@ class Loader(_StepDataBridge):
 
         # Control link -- `in_memory` materializes just the selected control observations, a small pool re-drawn
         # every batch. The control stream never groups on the split: controls are shared across splits.
-        control_source, control_stream = self._control_link(
-            control_adata, control_weights, in_memory=True, **sampler_kwargs
-        )
+        control_source, control_stream = self._control_link(control_adata, control_weights, in_memory=True, read=read)
         if control_stream is not None:
             links[_CONTROL] = control_stream
             if control_source is not None:

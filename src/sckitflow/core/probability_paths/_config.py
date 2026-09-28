@@ -40,7 +40,7 @@ class ProbabilityPathConfig(Component):
 
     sigma: float = 0.0
 
-    def build(self, context: object = None) -> BaseProbabilityPath:
+    def build(self, context: None = None) -> BaseProbabilityPath:
         raise NotImplementedError
 
 
@@ -65,7 +65,7 @@ class _SeededPathConfig(ProbabilityPathConfig):
 class LinearDiracConfig(ProbabilityPathConfig, type_id="probability_path.linear_dirac", version=1):
     """Straight-line interpolation to a Dirac target. Deterministic."""
 
-    def build(self, context: object = None) -> LinearDiracProbabilityPath:
+    def build(self, context: None = None) -> LinearDiracProbabilityPath:
         return LinearDiracProbabilityPath(sigma=self.sigma)
 
 
@@ -73,7 +73,7 @@ class LinearDiracConfig(ProbabilityPathConfig, type_id="probability_path.linear_
 class LinearGaussianConfig(_SeededPathConfig, type_id="probability_path.linear_gaussian", version=1):
     """Straight-line interpolation with Gaussian noise."""
 
-    def build(self, context: object = None) -> LinearGaussianProbabilityPath:
+    def build(self, context: None = None) -> LinearGaussianProbabilityPath:
         return LinearGaussianProbabilityPath(sigma=self.sigma, prng=self._prng())
 
 
@@ -86,7 +86,7 @@ class SchrodingerBridgeConfig(_SeededPathConfig, type_id="probability_path.schro
 
     eps: float = 1e-3
 
-    def build(self, context: object = None) -> SchrodingerBridgeProbabilityPath:
+    def build(self, context: None = None) -> SchrodingerBridgeProbabilityPath:
         return SchrodingerBridgeProbabilityPath(sigma=self.sigma, prng=self._prng(), eps=self.eps)
 
 
@@ -96,5 +96,5 @@ class VariancePreservingDiracConfig(
 ):
     """Variance-preserving path to a Dirac target. Deterministic."""
 
-    def build(self, context: object = None) -> VariancePreservingDiracProbabilityPath:
+    def build(self, context: None = None) -> VariancePreservingDiracProbabilityPath:
         return VariancePreservingDiracProbabilityPath(sigma=self.sigma)

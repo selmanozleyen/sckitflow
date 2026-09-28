@@ -22,7 +22,7 @@ __all__ = ["SplitterConfig", "CombinationSplitterConfig"]
 class SplitterConfig(Component):
     """Family base for the splitters."""
 
-    def build(self, context: object = None) -> Splitter:
+    def build(self, context: None = None) -> Splitter:
         raise NotImplementedError
 
 
@@ -41,7 +41,7 @@ class CombinationSplitterConfig(SplitterConfig, type_id="splitter.combination", 
     test_label: str = "test"
     control_label: str = "control"
 
-    def build(self, context: object = None) -> CombinationSplitter:
+    def build(self, context: None = None) -> CombinationSplitter:
         return CombinationSplitter(
             group_keys=self.group_keys,
             always_train_keys=self.always_train_keys,

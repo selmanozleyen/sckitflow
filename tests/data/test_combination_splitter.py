@@ -34,7 +34,7 @@ def _splitter(**overrides) -> CombinationSplitter:
         "control_key": "drug",
         "control_value": "control",
         "test_fraction": 0.2,
-        "seed": 0,
+        "rng": 0,
     }
     kwargs.update(overrides)
     return CombinationSplitter(**kwargs)
@@ -81,10 +81,16 @@ class TestCombinationSplitter:
         labels = _splitter(test_fraction=0.0).assign(_make_adata())
         assert (labels != "test").all()
 
-    def test_deterministic_given_seed(self):
+    def test_deterministic_given_int_rng(self):
         adata = _make_adata()
-        a = _splitter(seed=0).assign(adata)
-        b = _splitter(seed=0).assign(adata)
+        a = _splitter(rng=0).assign(adata)
+        b = _splitter(rng=0).assign(adata)
+        pd.testing.assert_series_equal(a, b)
+
+    def test_generator_rng_matches_its_seed(self):
+        adata = _make_adata()
+        a = _splitter(rng=np.random.default_rng(0)).assign(adata)
+        b = _splitter(rng=0).assign(adata)
         pd.testing.assert_series_equal(a, b)
 
     def test_no_control_key_labels_no_controls(self):
@@ -102,7 +108,7 @@ class TestCombinationSplitter:
         """A split already in obs is someone's hold-out decision; replacing it silently is data loss."""
         adata = _splitter().split(_make_adata())
         with pytest.raises(ValueError, match="refusing to overwrite"):
-            _splitter(seed=1).split(adata)
+            _splitter(rng=1).split(adata)
 
     def test_an_empty_hold_out_warns(self):
         """`floor(fraction * k)` rounds to 0 for every small stratum -- a split that silently didn't split."""

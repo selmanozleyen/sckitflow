@@ -4,7 +4,7 @@ import pandas as pd
 import torch
 from anndata import AnnData
 
-from sckitflow import load_run, run_rngs, save_run
+from sckitflow import RunSpec, load_run, run_rngs, save_run
 from sckitflow.core.methods.inference._ode import ODEConfig
 from sckitflow.core.methods.training._cfm import CFMConfig
 from sckitflow.data._config import FlowDataConfig
@@ -38,17 +38,12 @@ def test_split_depends_only_on_split_seed(adata_small: AnnData):
 
 def test_load_run_round_trips(tmp_path, adata_small: AnnData):
     module = torch.nn.Linear(2, 2)
-    save_run(
-        tmp_path,
-        seed=0,
-        split_seed=3,
-        splitter_config=SPLITTER,
-        data_config=DATA,
-        method_configs={"training": CFMConfig(), "inference": ODEConfig(params={"n_steps": 5})},
-        module=module,
+    spec = RunSpec(
+        data=DATA, training=CFMConfig(), inference=ODEConfig(params={"n_steps": 5}), splitter=SPLITTER, split_seed=3
     )
-    document = json.loads((tmp_path / "specs.json").read_text())
-    assert document["seeds"] == {"seed": 0, "split_seed": 3}
+    save_run(tmp_path, spec, module)
+    document = json.loads((tmp_path / "specs.json").read_text())["config"]
+    assert (document["seed"], document["split_seed"]) == (0, 3)
     assert document["data"]["config"]["groups_encoding"]["cell_line"]["type"] == "group_encoder.one_hot"
 
     datamodule, plan = load_run(tmp_path, adata_small, torch.nn.Linear(2, 2))

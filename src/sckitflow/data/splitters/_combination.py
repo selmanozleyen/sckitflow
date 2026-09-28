@@ -7,7 +7,7 @@ from typing import Annotated, Any, TypedDict, Unpack
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scfit.params import Default, ParamsComponent, resolve_params, validates
+from scfit.params import Default, ParamsComponent, resolve_init_params, validates
 from scfit.registry import component
 
 from sckitflow._utils import check_sequence_query_against_reference
@@ -89,7 +89,7 @@ class CombinationSplitter(Splitter):
         :param rng: seed or generator for the hold-out choice, normalized with :func:`numpy.random.default_rng`.
             An int gives the same split on every call; a `Generator` advances between calls.
         """
-        p = resolve_params(params, CombinationSplitterParams)
+        p = resolve_init_params(self, params)
         super().__init__(split_key=p["split_key"])
         self._group_keys = p["group_keys"]
         self._always_train_keys = p["always_train_keys"]

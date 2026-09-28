@@ -1,8 +1,8 @@
 import abc
-from typing import Annotated, Any, ClassVar, Protocol, TypedDict, Unpack, runtime_checkable
+from typing import Annotated, Any, Protocol, TypedDict, Unpack, runtime_checkable
 
 import torch
-from scfit.params import Default, resolve_params
+from scfit.params import Default, resolve_init_params
 from scfit.registry import Component
 
 from sckitflow.core._data_utils import subscript_step_data
@@ -111,15 +111,13 @@ class FlowParams(TypedDict, total=False):
 class AbstractFlowMethod(AbstractMethod):
     """Adds the flow configuration that flow trainers and flow predictors share.
 
-    Subclasses with more parameters extend `FlowParams` and set `params_spec` to it.
+    Subclasses with more parameters extend `FlowParams` and unpack that in their own ``__init__``.
     """
-
-    params_spec: ClassVar[type[FlowParams]] = FlowParams
 
     def __init__(self, module: torch.nn.Module, **params: Unpack[FlowParams]) -> None:
         """:param module: An initialized neural module the method builds upon."""
         super().__init__(module)
-        self._params = p = resolve_params(params, type(self).params_spec)
+        self._params = p = resolve_init_params(self, params)
 
         if p["generate_from_noise"] and p["noise_sampler"] is None:
             raise TypeError("When generating from noise, you need to provide a noise_sampler.")

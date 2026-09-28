@@ -49,8 +49,6 @@ class ODEInference(AbstractFlowMethod):
     and device.
     """
 
-    params_spec = ODEParams
-
     def __init__(
         self, module: torch.nn.Module, *, latent: torch.Tensor | None = None, **params: Unpack[ODEParams]
     ) -> None:

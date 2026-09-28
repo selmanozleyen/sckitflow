@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import torch
 from scfit.registry import Component
 
-from sckitflow._components import config_fields
 from sckitflow.core.probability_paths._probability_paths import (
     BaseProbabilityPath,
     LinearDiracProbabilityPath,
@@ -67,7 +66,7 @@ class LinearDiracConfig(ProbabilityPathConfig, type_id="probability_path.linear_
     """Straight-line interpolation to a Dirac target. Deterministic."""
 
     def build(self, context: object = None) -> LinearDiracProbabilityPath:
-        return LinearDiracProbabilityPath(**config_fields(self))
+        return LinearDiracProbabilityPath(sigma=self.sigma)
 
 
 @dataclass(frozen=True)
@@ -75,7 +74,7 @@ class LinearGaussianConfig(_SeededPathConfig, type_id="probability_path.linear_g
     """Straight-line interpolation with Gaussian noise."""
 
     def build(self, context: object = None) -> LinearGaussianProbabilityPath:
-        return LinearGaussianProbabilityPath(**config_fields(self, exclude=("seed",)), prng=self._prng())
+        return LinearGaussianProbabilityPath(sigma=self.sigma, prng=self._prng())
 
 
 @dataclass(frozen=True)
@@ -88,7 +87,7 @@ class SchrodingerBridgeConfig(_SeededPathConfig, type_id="probability_path.schro
     eps: float = 1e-3
 
     def build(self, context: object = None) -> SchrodingerBridgeProbabilityPath:
-        return SchrodingerBridgeProbabilityPath(**config_fields(self, exclude=("seed",)), prng=self._prng())
+        return SchrodingerBridgeProbabilityPath(sigma=self.sigma, prng=self._prng(), eps=self.eps)
 
 
 @dataclass(frozen=True)
@@ -98,4 +97,4 @@ class VariancePreservingDiracConfig(
     """Variance-preserving path to a Dirac target. Deterministic."""
 
     def build(self, context: object = None) -> VariancePreservingDiracProbabilityPath:
-        return VariancePreservingDiracProbabilityPath(**config_fields(self))
+        return VariancePreservingDiracProbabilityPath(sigma=self.sigma)

@@ -25,7 +25,6 @@ from typing import Any
 import torch
 from scfit.registry import Component, register_live
 
-from sckitflow._components import built, config_fields
 from sckitflow.core._types import SamplerFn
 from sckitflow.core.methods.inference._ode import ODEInference
 from sckitflow.core.methods.training._cfm import CFMTraining
@@ -74,13 +73,17 @@ class _FlowConfig(Component):
     noise_sampler: SamplerFn | None = None
     generate_from_noise: bool = False
 
-    def _kwargs(self) -> dict[str, Any]:
-        """Every field as a constructor argument, with a path config built.
-
-        The fields mirror the method's constructor one to one, which is what
-        lets a subclass add a field without touching `build`.
-        """
-        return {**config_fields(self), "probability_path": built(self.probability_path)}
+    def _flow_kwargs(self) -> dict[str, Any]:
+        return {
+            "probability_path": (
+                self.probability_path.build()
+                if isinstance(self.probability_path, ProbabilityPathConfig)
+                else self.probability_path
+            ),
+            "time_sampler": self.time_sampler,
+            "noise_sampler": self.noise_sampler,
+            "generate_from_noise": self.generate_from_noise,
+        }
 
 
 @dataclass(frozen=True)
@@ -89,7 +92,7 @@ class CFMConfig(_FlowConfig, TrainingMethodConfig, type_id="training_method.cfm"
 
     def build(self, context: torch.nn.Module) -> CFMTraining:
         """:param context: The neural module to train."""
-        return CFMTraining(module=context, **self._kwargs())
+        return CFMTraining(module=context, **self._flow_kwargs())
 
 
 @dataclass(frozen=True)
@@ -103,4 +106,11 @@ class ODEConfig(_FlowConfig, InferenceMethodConfig, type_id="inference_method.od
 
     def build(self, context: torch.nn.Module) -> ODEInference:
         """:param context: The neural module to integrate."""
-        return ODEInference(module=context, **self._kwargs())
+        return ODEInference(
+            module=context,
+            solver_kwargs=dict(self.solver_kwargs),
+            return_trajectory=self.return_trajectory,
+            n_steps=self.n_steps,
+            n_samples=self.n_samples,
+            **self._flow_kwargs(),
+        )

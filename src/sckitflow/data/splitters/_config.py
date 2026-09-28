@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from scfit.registry import Component
 
-from sckitflow._components import config_fields
 from sckitflow.data.splitters._base import Splitter
 from sckitflow.data.splitters._combination import CombinationSplitter
 
@@ -43,4 +42,15 @@ class CombinationSplitterConfig(SplitterConfig, type_id="splitter.combination", 
     control_label: str = "control"
 
     def build(self, context: object = None) -> CombinationSplitter:
-        return CombinationSplitter(**config_fields(self))
+        return CombinationSplitter(
+            group_keys=self.group_keys,
+            always_train_keys=self.always_train_keys,
+            control_key=self.control_key,
+            control_value=self.control_value,
+            test_fraction=self.test_fraction,
+            seed=self.seed,
+            split_key=self.split_key,
+            train_label=self.train_label,
+            test_label=self.test_label,
+            control_label=self.control_label,
+        )

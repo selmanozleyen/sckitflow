@@ -19,7 +19,6 @@ import torch
 from anndata import AnnData
 from scfit.registry import Component, register_live
 
-from sckitflow._components import built, config_fields
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import GroupEncoder
 from sckitflow.data.splitters._base import Splitter
@@ -30,9 +29,6 @@ __all__ = ["FlowDataConfig"]
 # A live `Splitter` instance still builds and trains; it just has no spec, so a
 # config holding one refuses to serialize. Prefer `SplitterConfig`, which does.
 register_live(Splitter)
-
-# Fields that configure `FlowDataModule` itself rather than the `DataManager` schema.
-_STREAMING_FIELDS = ("train_split", "n_train_steps", "batch_size", "dtype", "loader_kwargs")
 
 
 @dataclass(frozen=True)
@@ -96,17 +92,27 @@ class FlowDataConfig(Component, type_id="data_module.flow", version=1):
 
         :param context: The `AnnData` to derive dimensionalities from and stream.
         """
-        # Every schema field goes to `DataManager` under its own name, except the
-        # three whose portable form differs from what `DataManager` takes.
         schema = {
-            **config_fields(self, exclude=(*_STREAMING_FIELDS, "matched_pairs")),
-            "matched_keys": dict(self.matched_pairs) if self.matched_pairs else None,
+            "sample_rep": self.sample_rep,
+            "conditions": self.conditions,
+            "conditions_reps": self.conditions_reps,
+            "conditions_covariates": self.conditions_covariates,
+            "condition_state_key": self.condition_state_key,
+            "groups": self.groups,
+            "groups_reps": self.groups_reps,
             "groups_encoding": (
                 {key: GroupEncoder.from_spec(spec) for key, spec in self.groups_encoding.items()}
                 if self.groups_encoding
                 else None
             ),
-            "splitter": built(self.splitter),
+            "target_categorical_covs_dict": self.target_categorical_covs_dict,
+            "target_continuous_covs": self.target_continuous_covs,
+            "control_values_dict": self.control_values_dict,
+            "matched_keys": dict(self.matched_pairs) if self.matched_pairs else None,
+            "split_by": self.split_by,
+            "splitter": (self.splitter.build() if isinstance(self.splitter, SplitterConfig) else self.splitter),
+            "n_shared_dims": self.n_shared_dims,
+            "source_rep": self.source_rep,
         }
         return FlowDataModule.from_adata(
             context,

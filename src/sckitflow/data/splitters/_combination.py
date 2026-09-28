@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import warnings
 from collections.abc import Sequence
 
@@ -31,7 +32,8 @@ class CombinationSplitter(Splitter):
     drugs keeps all 4. :meth:`assign` warns if that leaves no test split at all.
 
     Control rows (``control_key == control_value``) are labelled ``control_label`` and never take part -- they
-    are the shared source population, not a split. The choice is drawn from ``rng``.
+    are the shared source population, not a split. The choice is drawn from ``rng``, copied on each call, so repeated
+    calls give the same split.
 
     Example, ``group_keys=["cell_line", "drug"]`` and ``always_train_keys=["cell_line"]`` at
     ``test_fraction=0.5``: cell line A with drugs ``d0..d3`` gives up 2 of them to test and keeps 2 in train;
@@ -46,7 +48,7 @@ class CombinationSplitter(Splitter):
         control_key: str | None = None,
         control_value: str = "control",
         test_fraction: float = 0.2,
-        rng: int | np.random.Generator | None = 0,
+        rng: np.random.Generator,
         split_key: str = "split",
         train_label: str = "train",
         test_label: str = "test",
@@ -59,8 +61,7 @@ class CombinationSplitter(Splitter):
         :param control_key: optional ``adata.obs`` column marking controls (never split). ``None`` = no controls.
         :param control_value: value of ``control_key`` marking a control row. Defaults to ``"control"``.
         :param test_fraction: target fraction of each stratum's combinations to hold out, in ``[0, 1)``.
-        :param rng: seed or generator for the hold-out choice, normalized with :func:`numpy.random.default_rng`.
-            An int gives the same split on every call; a `Generator` advances between calls.
+        :param rng: generator the hold-out choice is drawn from. Copied on each call, so the split never changes.
         :param split_key: ``adata.obs`` column the split label is written to.
         :param train_label: label written for training observations.
         :param test_label: label written for held-out observations.
@@ -112,7 +113,7 @@ class CombinationSplitter(Splitter):
         combos = obs.loc[~is_control, gk].astype(str).drop_duplicates()
 
         # Hold out per stratum (each `always_train_keys` value), always leaving >=1 combination in train.
-        rng = np.random.default_rng(self._rng)
+        rng = copy.deepcopy(self._rng)
         test_combos: list[tuple] = []
         largest_stratum = 0
         strata = combos.groupby(atk, sort=True) if atk else [(None, combos)]

@@ -95,7 +95,7 @@ def _scale_distance_matrix(
 
 
 def _select_indices(
-    coupling_matrix: NumpyArray, size: int, rng: int | np.random.Generator | None = None
+    coupling_matrix: NumpyArray, size: int, *, rng: np.random.Generator
 ) -> tuple[NumpyArray, NumpyArray]:
     """Samples matching indices from a coupling matrix.
 
@@ -110,11 +110,8 @@ def _select_indices(
     :param size: Number of index pairs to sample from the coupling matrix.
     :type size: int
 
-    :param rng: Seed or generator for drawing the matched indices, normalized with
-        :func:`numpy.random.default_rng` (SPEC 7). ``None`` uses fresh OS entropy. When
-        calling once per batch, pass one shared `Generator`: an int restarts the same
-        stream on every call.
-    :type rng: class:`int` or class:`numpy.random.Generator`, optional
+    :param rng: Generator the matched indices are drawn from.
+    :type rng: class:`numpy.random.Generator`
 
     Returns
     -------
@@ -133,7 +130,7 @@ def _select_indices(
     coupling_probs = coupling_matrix.flatten()
     coupling_probs = coupling_probs / coupling_probs.sum()
     # sampling indices
-    choices = np.random.default_rng(rng).choice(
+    choices = rng.choice(
         coupling_matrix.shape[0] * coupling_matrix.shape[1],
         p=coupling_probs,
         size=size,
@@ -148,7 +145,8 @@ def independent_coupling(
     target_lin: TensorLike,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
-    rng: int | np.random.Generator | None = None,
+    *,
+    rng: np.random.Generator,
 ) -> tuple[NumpyArray, NumpyArray]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices.
 
@@ -158,11 +156,8 @@ def independent_coupling(
     :param target: A tensor of values containing the data coming from the target distribution.
     :type target: class:`TensorLike`
 
-    :param rng: Seed or generator for drawing the permutations, normalized with
-        :func:`numpy.random.default_rng` (SPEC 7). ``None`` uses fresh OS entropy. When
-        calling once per batch, pass one shared `Generator`: an int restarts the same
-        stream on every call.
-    :type rng: class:`int` or class:`numpy.random.Generator`, optional
+    :param rng: Generator the permutations are drawn from.
+    :type rng: class:`numpy.random.Generator`
 
     Returns
     -------
@@ -176,7 +171,6 @@ def independent_coupling(
         available samples in the source and target tensors.
     """
     # randomy permuting the tensors
-    rng = np.random.default_rng(rng)
     src_random_perm_idx = rng.choice(source_lin.shape[0], size=source_lin.shape[0], replace=False)
     tgt_random_perm_idx = rng.choice(target_lin.shape[0], size=source_lin.shape[0], replace=False)
 
@@ -197,7 +191,8 @@ def ot_linear_coupling(
     method: LinCouplingMethod = ...,
     reg: float = ...,
     reg_m: float = ...,
-    rng: int | np.random.Generator | None = ...,
+    *,
+    rng: np.random.Generator,
     **kwargs,
 ) -> tuple[NumpyArray, NumpyArray]: ...
 
@@ -214,7 +209,8 @@ def ot_linear_coupling(
     method: LinCouplingMethod = ...,
     reg: float = ...,
     reg_m: float = ...,
-    rng: int | np.random.Generator | None = ...,
+    *,
+    rng: np.random.Generator,
     **kwargs,
 ) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
 
@@ -230,7 +226,8 @@ def ot_linear_coupling(
     method: LinCouplingMethod = None,
     reg: float = 5e-1,
     reg_m: float = 1.0,
-    rng: int | np.random.Generator | None = None,
+    *,
+    rng: np.random.Generator,
     **kwargs,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices
@@ -263,11 +260,8 @@ def ot_linear_coupling(
     :param return_matrix: If ``True``, also return the optimal transport coupling matrix.
     :type return_matrix: bool
 
-    :param rng: Seed or generator for drawing the matched indices, normalized with
-        :func:`numpy.random.default_rng` (SPEC 7). ``None`` uses fresh OS entropy. When
-        calling once per batch, pass one shared `Generator`: an int restarts the same
-        stream on every call.
-    :type rng: class:`int` or class:`numpy.random.Generator`, optional
+    :param rng: Generator the matched indices are drawn from.
+    :type rng: class:`numpy.random.Generator`
 
     :param kwargs: Additional keyword arguments forwarded to the selected optimal transport solver.
     :type kwargs: dict
@@ -342,7 +336,8 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = ...,
     scale_cost: ScaleMethod = ...,
     method: QuadCouplingMethod = ...,
-    rng: int | np.random.Generator | None = ...,
+    *,
+    rng: np.random.Generator,
     **kwargs,
 ) -> tuple[NumpyArray, NumpyArray]: ...
 
@@ -357,7 +352,8 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = ...,
     scale_cost: ScaleMethod = ...,
     method: QuadCouplingMethod = ...,
-    rng: int | np.random.Generator | None = ...,
+    *,
+    rng: np.random.Generator,
     **kwargs,
 ) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
 
@@ -371,7 +367,8 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = None,
     scale_cost: ScaleMethod = 1.0,
     method: QuadCouplingMethod = None,
-    rng: int | np.random.Generator | None = None,
+    *,
+    rng: np.random.Generator,
     **kwargs,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches source and target groups using an optimal transport-based quadratic coupling (Gromov-Wasserstein or fused Gromov-Wasserstein) and returns the respective indices.
@@ -409,11 +406,8 @@ def ot_quadratic_coupling(
         ``"entropic_fused_gromov_wasserstein"``.
     :type method: class:`QuadCouplingMethod`, optional
 
-    :param rng: Seed or generator for drawing the matched indices, normalized with
-        :func:`numpy.random.default_rng` (SPEC 7). ``None`` uses fresh OS entropy. When
-        calling once per batch, pass one shared `Generator`: an int restarts the same
-        stream on every call.
-    :type rng: class:`int` or class:`numpy.random.Generator`, optional
+    :param rng: Generator the matched indices are drawn from.
+    :type rng: class:`numpy.random.Generator`
 
     :param kwargs: Additional keyword arguments forwarded to the solver.
     :type kwargs: dict

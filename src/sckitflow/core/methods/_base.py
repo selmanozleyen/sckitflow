@@ -98,9 +98,6 @@ class AbstractFlowMethod(AbstractMethod):
         """
         super().__init__(module)
 
-        if generate_from_noise and noise_sampler is None:
-            raise TypeError("When generating from noise, you need to provide a noise_sampler.")
-
         self._probability_path = LinearDiracProbabilityPath() if probability_path is None else probability_path
         self._noise_sampler = torch.randn if noise_sampler is None else noise_sampler
         self._time_sampler = torch.rand if time_sampler is None else time_sampler

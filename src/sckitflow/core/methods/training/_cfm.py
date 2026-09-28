@@ -1,4 +1,3 @@
-from dataclasses import field
 from typing import Any
 
 import torch
@@ -66,10 +65,8 @@ class CFMTraining(AbstractFlowMethod):
 
 
 @component("training_method.cfm", builds=CFMTraining)
-class CFMTrainingConfig(ParamsComponent, TrainingMethodConfig):
+class CFMTrainingConfig(ParamsComponent[AbstractFlowMethodParams], TrainingMethodConfig):
     """Conditional Flow Matching training."""
-
-    params: AbstractFlowMethodParams = field(default_factory=lambda: AbstractFlowMethodParams())
 
     def build(self, module: torch.nn.Module) -> CFMTraining:
         return CFMTraining(module, **self.params)

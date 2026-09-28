@@ -1,4 +1,3 @@
-from dataclasses import field
 from typing import Annotated, Any, Unpack
 
 import torch
@@ -161,10 +160,8 @@ class ODEInference(AbstractFlowMethod):
 
 
 @component("inference_method.ode", builds=ODEInference)
-class ODEInferenceConfig(ParamsComponent, InferenceMethodConfig):
+class ODEInferenceConfig(ParamsComponent[ODEInferenceParams], InferenceMethodConfig):
     """ODE inference over a trained velocity field."""
-
-    params: ODEInferenceParams = field(default_factory=lambda: ODEInferenceParams())
 
     def build(self, module: torch.nn.Module) -> ODEInference:
         return ODEInference(module, **self.params)

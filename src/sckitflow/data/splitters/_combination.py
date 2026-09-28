@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import field
 from typing import Annotated, Any, TypedDict, Unpack
 
 import numpy as np
@@ -151,10 +150,8 @@ class CombinationSplitter(Splitter):
 
 
 @component("splitter.combination", builds=CombinationSplitter)
-class CombinationSplitterConfig(ParamsComponent, SplitterConfig):
+class CombinationSplitterConfig(ParamsComponent[CombinationSplitterParams], SplitterConfig):
     """Holds out whole condition combinations. See :class:`CombinationSplitter`."""
-
-    params: CombinationSplitterParams = field(default_factory=lambda: CombinationSplitterParams())
 
     def build(self, *, rng: np.random.Generator) -> CombinationSplitter:
         return CombinationSplitter(rng=rng, **self.params)

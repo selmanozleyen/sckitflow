@@ -34,7 +34,7 @@ def _splitter(**overrides) -> CombinationSplitter:
         "control_key": "drug",
         "control_value": "control",
         "test_fraction": 0.2,
-        "rng": 0,
+        "rng": np.random.default_rng(0),
     }
     kwargs.update(overrides)
     return CombinationSplitter(**kwargs)
@@ -81,17 +81,9 @@ class TestCombinationSplitter:
         labels = _splitter(test_fraction=0.0).assign(_make_adata())
         assert (labels != "test").all()
 
-    def test_deterministic_given_int_rng(self):
-        adata = _make_adata()
-        a = _splitter(rng=0).assign(adata)
-        b = _splitter(rng=0).assign(adata)
-        pd.testing.assert_series_equal(a, b)
-
-    def test_generator_rng_matches_its_seed(self):
-        adata = _make_adata()
-        a = _splitter(rng=np.random.default_rng(0)).assign(adata)
-        b = _splitter(rng=0).assign(adata)
-        pd.testing.assert_series_equal(a, b)
+    def test_repeated_calls_give_the_same_split(self):
+        adata, splitter = _make_adata(), _splitter()
+        pd.testing.assert_series_equal(splitter.assign(adata), splitter.assign(adata))
 
     def test_no_control_key_labels_no_controls(self):
         labels = _splitter(control_key=None).assign(_make_adata())
@@ -132,10 +124,10 @@ class TestCombinationSplitter:
     def test_always_train_keys_must_be_subset(self):
         """The message names the offending key and both parameters, not just that something is wrong."""
         with pytest.raises(ValueError, match=r"always_train_keys entries not found in group_keys: \['drug'\]"):
-            CombinationSplitter(group_keys=["cell_line"], always_train_keys=["drug"])
+            CombinationSplitter(group_keys=["cell_line"], always_train_keys=["drug"], rng=np.random.default_rng(0))
 
     def test_missing_column_raises(self):
         with pytest.raises(KeyError, match="nonexistent"):
-            CombinationSplitter(group_keys=["cell_line", "nonexistent"], always_train_keys=["cell_line"]).assign(
-                _make_adata()
-            )
+            CombinationSplitter(
+                group_keys=["cell_line", "nonexistent"], always_train_keys=["cell_line"], rng=np.random.default_rng(0)
+            ).assign(_make_adata())

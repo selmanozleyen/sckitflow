@@ -1,5 +1,6 @@
 from collections.abc import Collection, Sequence
 
+import numpy as np
 import pandas as pd
 import pytest
 from anndata import AnnData
@@ -233,6 +234,7 @@ def _dummy_adata(
         uns_keys_to_nunique_prefix_and_dim=uns_keys_to_nunique_prefix_and_dim,
         obs_columns_to_fixed_val=obs_columns_to_fixed_val,
         control_key=control_key,
+        rng=np.random.default_rng(0),
     )
 
 

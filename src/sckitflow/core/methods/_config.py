@@ -1,31 +1,21 @@
 """Portable configs for the training and inference methods.
 
-Built on :mod:`scfit.registry`, which is scfit's shared foundation for exactly
-this -- a ``type_id`` slug in the class header auto-registers a config, and
-:func:`scfit.registry.to_spec` turns it into a portable
-``{type, version, config}`` dict. Using it rather than a private registry means
-a sckitflow spec is readable by anything else in the ecosystem built on scfit.
-
-The split it gives us:
-
-* a **config** holds the portable parameters and nothing else;
-* ``build(context)`` makes the runtime method, taking the non-portable pieces --
-  the neural module above all -- from the ``context``;
-* anything live that ends up *on* a config is marked with
-  :func:`scfit.registry.register_live`, so constructing and training with it
-  works while :func:`to_spec` raises :class:`~scfit.registry.PortabilityError`
-  rather than silently dropping it.
+A config holds the portable parameters; ``build(module)`` makes the runtime
+method around the neural module. Anything live on a config is marked with
+:func:`scfit.registry.register_live`, so it still builds but refuses to
+serialize.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Any
 
 import torch
-from scfit.registry import Component, register_live
+from scfit.registry import Component, component, register_live
 
 from sckitflow.core._types import SamplerFn
+from sckitflow.core.methods._base import SupportsInference, SupportsTraining
 from sckitflow.core.methods.inference._ode import ODEInference
 from sckitflow.core.methods.training._cfm import CFMTraining
 from sckitflow.core.probability_paths._config import ProbabilityPathConfig
@@ -48,17 +38,23 @@ register_live(torch.Generator)
 register_live(BaseProbabilityPath)
 
 
-# No `type_id`: these stay unregistered so they can be the `expected` family in
-# `Family.from_spec(spec)`, which then rejects a spec of the wrong family.
 class TrainingMethodConfig(Component):
     """Family base for anything that configures a training method."""
+
+    def build(self, module: torch.nn.Module) -> SupportsTraining:
+        """The training method around ``module``."""
+        raise NotImplementedError
 
 
 class InferenceMethodConfig(Component):
     """Family base for anything that configures an inference method."""
 
+    def build(self, module: torch.nn.Module) -> SupportsInference:
+        """The inference method around ``module``."""
+        raise NotImplementedError
 
-@dataclass(frozen=True)
+
+@component()
 class _FlowConfig(Component):
     """The flow parameters every flow method shares.
 
@@ -86,17 +82,16 @@ class _FlowConfig(Component):
         }
 
 
-@dataclass(frozen=True)
-class CFMConfig(_FlowConfig, TrainingMethodConfig, type_id="training_method.cfm", version=1):
+@component("training_method.cfm")
+class CFMConfig(_FlowConfig, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
-    def build(self, context: torch.nn.Module) -> CFMTraining:
-        """:param context: The neural module to train."""
-        return CFMTraining(module=context, **self._flow_kwargs())
+    def build(self, module: torch.nn.Module) -> CFMTraining:
+        return CFMTraining(module=module, **self._flow_kwargs())
 
 
-@dataclass(frozen=True)
-class ODEConfig(_FlowConfig, InferenceMethodConfig, type_id="inference_method.ode", version=1):
+@component("inference_method.ode")
+class ODEConfig(_FlowConfig, InferenceMethodConfig):
     """ODE inference over a trained velocity field."""
 
     solver_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -104,10 +99,9 @@ class ODEConfig(_FlowConfig, InferenceMethodConfig, type_id="inference_method.od
     n_steps: int = 100
     n_samples: int | None = None
 
-    def build(self, context: torch.nn.Module) -> ODEInference:
-        """:param context: The neural module to integrate."""
+    def build(self, module: torch.nn.Module) -> ODEInference:
         return ODEInference(
-            module=context,
+            module=module,
             solver_kwargs=dict(self.solver_kwargs),
             return_trajectory=self.return_trajectory,
             n_steps=self.n_steps,

@@ -3,11 +3,11 @@ import json
 import torch
 from anndata import AnnData
 
-from sckitflow import RunSpec, load_run, save_run
+from sckitflow import RunConfig, load_run, save_run
 from sckitflow.core.methods.inference._ode import ODEInferenceConfig
 from sckitflow.core.methods.training._cfm import CFMTrainingConfig
 from sckitflow.data._config import FlowDataModuleConfig
-from sckitflow.data._group_encoders import OneHot
+from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.data.splitters._combination import CombinationSplitterConfig
 
 SPLITTER = CombinationSplitterConfig(
@@ -22,14 +22,14 @@ DATA = FlowDataModuleConfig(
     conditions={"drug": ("drug",)},
     conditions_reps={"drug": "drug"},
     groups=("cell_line",),
-    groups_encoding={"cell_line": OneHot()},
+    groups_encoding={"cell_line": OneHotEncoderConfig()},
     batch_size=4,
 )
 
 
 def test_load_run_round_trips(tmp_path, adata_small: AnnData):
     module = torch.nn.Linear(2, 2)
-    spec = RunSpec(
+    spec = RunConfig(
         data=DATA,
         training=CFMTrainingConfig(),
         inference=ODEInferenceConfig(params={"n_steps": 5}),

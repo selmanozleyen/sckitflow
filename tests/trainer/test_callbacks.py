@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, Mock, patch
 import numpy as np
 import pytest
 import torch
+
 from sckitflow.trainer._callbacks import (
     BaseCallback,
     ComputationalCallback,

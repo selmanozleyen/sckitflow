@@ -11,15 +11,15 @@ from sckitflow.core._data_utils import (
     prepare_latent_inference,
 )
 from sckitflow.core._types import PredictionData, StepData
-from sckitflow.core.methods._base import AbstractFlowMethod, FlowParams, InferenceMethodConfig
+from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodParams, InferenceMethodConfig
 from sckitflow.core.methods.inference._utils import aggregate_predictions
 from sckitflow.core.solvers import ODESolver
 
 __all__ = ["ODEInference", "ODEInferenceParams", "ODEInferenceConfig"]
 
 
-class ODEInferenceParams(FlowParams, total=False):
-    """`FlowParams` plus the ODE solver settings."""
+class ODEInferenceParams(AbstractFlowMethodParams, total=False):
+    """`AbstractFlowMethodParams` plus the ODE solver settings."""
 
     solver_kwargs: Annotated[dict[str, Any], Default({})]
     """Forwarded to the ODE solver. ``method`` defaults to ``"euler"``."""

@@ -10,7 +10,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_train,
 )
 from sckitflow.core._types import StepData
-from sckitflow.core.methods._base import AbstractFlowMethod, FlowParams, TrainingMethodConfig
+from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodParams, TrainingMethodConfig
 
 __all__ = ["CFMTraining", "CFMTrainingConfig"]
 
@@ -69,7 +69,7 @@ class CFMTraining(AbstractFlowMethod):
 class CFMTrainingConfig(ParamsComponent, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
-    params: FlowParams = field(default_factory=lambda: FlowParams())
+    params: AbstractFlowMethodParams = field(default_factory=lambda: AbstractFlowMethodParams())
 
     def build(self, module: torch.nn.Module) -> CFMTraining:
         return CFMTraining(module, **self.params)

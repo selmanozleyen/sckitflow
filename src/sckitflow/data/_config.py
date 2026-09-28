@@ -16,7 +16,7 @@ from anndata import AnnData
 from scfit.registry import Component, component
 
 from sckitflow.data._datamodule import FlowDataModule
-from sckitflow.data._group_encoders import GroupEncoder
+from sckitflow.data._group_encoders import GroupEncoderConfig
 from sckitflow.data.splitters._base import Splitter
 
 __all__ = ["FlowDataModuleConfig"]
@@ -43,8 +43,8 @@ class FlowDataModuleConfig(Component):
     condition_state_key: str | None = None
     groups: tuple[str, ...] | None = None
     groups_reps: dict[str, str] | None = None
-    groups_encoding: dict[str, GroupEncoder] | None = None
-    """Per-group encoder, e.g. ``{"g": OneHot()}``. Write ``Label()`` rather than the ``"label"`` shorthand."""
+    groups_encoding: dict[str, GroupEncoderConfig] | None = None
+    """Per-group encoder, e.g. ``{"g": OneHotEncoderConfig()}``. Write ``LabelEncoderConfig()`` rather than the ``"label"`` shorthand."""
     target_categorical_covs_dict: dict[str, Literal["label", "one-hot", "functional"]] | None = None
     target_continuous_covs: tuple[str, ...] | None = None
 

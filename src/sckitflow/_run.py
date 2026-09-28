@@ -1,7 +1,7 @@
 """Saving and loading a run as its spec plus weights.
 
-A run is a :class:`RunSpec`, the data schema, the methods and the two seeds, plus the learned
-parameters. ``specs.json`` holds ``RunSpec.to_spec()``, ``weights.pt`` a plain ``state_dict``.
+A run is a :class:`RunConfig`, the data schema, the methods and the two seeds, plus the learned
+parameters. ``specs.json`` holds ``RunConfig.to_spec()``, ``weights.pt`` a plain ``state_dict``.
 Nothing is pickled, so a saved run survives our own classes being renamed.
 
 The run's seeds live on the spec and nowhere else, one per consumer of randomness.
@@ -9,7 +9,7 @@ The neural module is supplied on load:
 
 .. code-block:: python
 
-    spec = RunSpec(data=FlowDataModuleConfig(...), training=CFMTrainingConfig(), loader_seed=0)
+    spec = RunConfig(data=FlowDataModuleConfig(...), training=CFMTrainingConfig(), loader_seed=0)
     save_run("run", spec, module)
 
     dmod, plan = load_run("run", adata, module=MLPVelocity(...))
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import torch
@@ -35,14 +35,21 @@ if TYPE_CHECKING:
 
     from sckitflow.data._datamodule import FlowDataModule
 
-__all__ = ["RunSpec", "save_run", "load_run"]
+__all__ = ["Run", "RunConfig", "save_run", "load_run"]
 
 SPECS_NAME = "specs.json"
 WEIGHTS_NAME = "weights.pt"
 
 
-@component("run")
-class RunSpec(Component):
+class Run(NamedTuple):
+    """A built run: its data module and its plan."""
+
+    datamodule: FlowDataModule
+    plan: TrainingPlan
+
+
+@component("run", builds=Run)
+class RunConfig(Component):
     """Everything portable about a run: what ``specs.json`` holds."""
 
     data: FlowDataModuleConfig
@@ -55,9 +62,7 @@ class RunSpec(Component):
     splitter_seed: int = 0
     """Seeds the split, so retraining with another ``loader_seed`` keeps it."""
 
-    def build(
-        self, adata: AnnData, module: torch.nn.Module, *, optimizer: torch.optim.Optimizer | None = None
-    ) -> tuple[FlowDataModule, TrainingPlan]:
+    def build(self, adata: AnnData, module: torch.nn.Module, *, optimizer: torch.optim.Optimizer | None = None) -> Run:
         """The data module over ``adata`` and a plan over ``module``."""
         splitter = (
             self.splitter.build(rng=np.random.default_rng(self.splitter_seed)) if self.splitter is not None else None
@@ -69,10 +74,10 @@ class RunSpec(Component):
             inference_method=self.inference.build(module) if self.inference is not None else None,
             val_names=datamodule.val_names,
         )
-        return datamodule, plan
+        return Run(datamodule, plan)
 
 
-def save_run(path: str | Path, spec: RunSpec, module: torch.nn.Module, *, allow_overwrite: bool = False) -> None:
+def save_run(path: str | Path, spec: RunConfig, module: torch.nn.Module, *, allow_overwrite: bool = False) -> None:
     """Writes ``spec`` and the weights of ``module`` to the directory ``path``.
 
     :raises FileExistsError: If files exist and `allow_overwrite` is `False`.
@@ -97,7 +102,7 @@ def load_run(
     *,
     optimizer: torch.optim.Optimizer | None = None,
     map_location: str | None = "cpu",
-) -> tuple[FlowDataModule, TrainingPlan]:
+) -> Run:
     """Rebuilds a run from ``path``: the data module, and a plan over ``module``.
 
     :param adata: The data to attach; the schema comes from the saved spec, not from this.
@@ -105,6 +110,6 @@ def load_run(
     :param optimizer: Optional; omit for a run you only mean to predict with.
     """
     src = Path(path)
-    spec = RunSpec.from_spec(json.loads((src / SPECS_NAME).read_text()))
+    spec = RunConfig.from_spec(json.loads((src / SPECS_NAME).read_text()))
     module.load_state_dict(torch.load(src / WEIGHTS_NAME, map_location=map_location))
     return spec.build(adata, module, optimizer=optimizer)

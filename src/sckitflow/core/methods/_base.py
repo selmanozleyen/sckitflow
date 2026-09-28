@@ -19,7 +19,7 @@ __all__ = [
     # implementations that inherit nothing from us as well.
     "AbstractMethod",
     "AbstractFlowMethod",
-    "FlowParams",
+    "AbstractFlowMethodParams",
     # Config families
     "TrainingMethodConfig",
     "InferenceMethodConfig",
@@ -95,7 +95,7 @@ class AbstractMethod:
         return self._module
 
 
-class FlowParams(TypedDict, total=False):
+class AbstractFlowMethodParams(TypedDict, total=False):
     """The flow configuration every flow method shares."""
 
     probability_path: Annotated[ProbabilityPathConfig | BaseProbabilityPath | None, Default(None)]
@@ -111,10 +111,10 @@ class FlowParams(TypedDict, total=False):
 class AbstractFlowMethod(AbstractMethod):
     """Adds the flow configuration that flow trainers and flow predictors share.
 
-    Subclasses with more parameters extend `FlowParams` and unpack that in their own ``__init__``.
+    Subclasses with more parameters extend `AbstractFlowMethodParams` and unpack that in their own ``__init__``.
     """
 
-    def __init__(self, module: torch.nn.Module, **params: Unpack[FlowParams]) -> None:
+    def __init__(self, module: torch.nn.Module, **params: Unpack[AbstractFlowMethodParams]) -> None:
         """:param module: An initialized neural module the method builds upon."""
         super().__init__(module)
         self._params = p = resolve_init_params(self, params)

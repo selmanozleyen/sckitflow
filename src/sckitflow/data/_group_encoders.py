@@ -2,14 +2,14 @@
 
 Each encoder is a frozen dataclass of plain scalars -- no callables -- so it pickles trivially, compares by
 value, AND exports a portable ``{type, version, config}`` spec via ``.to_spec()`` (round-tripped with
-``GroupEncoder.from_spec``). ``build`` fits and returns a transformer exposing ``transform`` (and, for the
+``GroupEncoderConfig.from_spec``). ``build`` fits and returns a transformer exposing ``transform`` (and, for the
 functional encoders, ``inverse_transform``). This replaces the string encoder ids + raw
 ``groups_encoding_transform_fn`` callables, which could not be serialized inside a ``DataManager``.
 
-``GroupEncoder`` is the family base; each concrete encoder is registered with ``@component(type_id)``.
-Add a new encoder the same way: subclass ``GroupEncoder``, decorate it, own its ``build``.
+``GroupEncoderConfig`` is the family base; each config is registered with ``@component(type_id, builds=X)``
+and named ``XConfig`` after the transformer ``X`` it builds. Add a new encoder the same way.
 
-The stateful encoders (:class:`Label`, :class:`OneHot`) accept an optional **pinned vocabulary** so a
+The stateful encoders (:class:`LabelEncoderConfig`, :class:`OneHotEncoderConfig`) accept an optional **pinned vocabulary** so a
 serialized config rebuilds the *exact* same mapping instead of re-deriving one from whatever data ``build``
 happens to see. Unknown categories always **raise** -- never silently ignored -- so train/predict skew
 fails loudly rather than producing quietly wrong codes.
@@ -27,14 +27,17 @@ from sklearn.preprocessing import FunctionTransformer, LabelEncoder, OneHotEncod
 from sckitflow._types import TargetCovariatesEncoderCls
 
 __all__ = [
-    "GroupEncoder",
+    "GroupEncoderConfig",
     "GroupEncoderContext",
     "GroupEncoderId",
-    "Identity",
-    "Label",
-    "OneHot",
-    "Affine",
-    "Log1p",
+    "LabelEncoderConfig",
+    "OneHotEncoderConfig",
+    "IdentityTransformer",
+    "IdentityTransformerConfig",
+    "Log1pTransformer",
+    "Log1pTransformerConfig",
+    "AffineTransformer",
+    "AffineTransformerConfig",
     "as_group_encoder",
 ]
 
@@ -49,15 +52,15 @@ class GroupEncoderContext:
     data: np.ndarray
 
 
-class GroupEncoder(Component):
+class GroupEncoderConfig(Component):
     """Family base for serializable group encoders. ``build(context)`` returns a fitted transformer."""
 
     def build(self, context: GroupEncoderContext) -> TargetCovariatesEncoderCls:
         raise NotImplementedError
 
 
-@component("group_encoder.label")
-class Label(GroupEncoder):
+@component("group_encoder.label", builds=LabelEncoder)
+class LabelEncoderConfig(GroupEncoderConfig):
     """Integer-codes a categorical column.
 
     :param classes: Pinned vocabulary. ``None`` derives it from the data at fit time (order is
@@ -74,8 +77,8 @@ class Label(GroupEncoder):
         return LabelEncoder().fit(values)
 
 
-@component("group_encoder.one_hot")
-class OneHot(GroupEncoder):
+@component("group_encoder.one_hot", builds=OneHotEncoder)
+class OneHotEncoderConfig(GroupEncoderConfig):
     """One-hot encodes a categorical column.
 
     :param categories: Pinned vocabulary. ``None`` derives it from the data at fit time. When set, it fixes
@@ -93,24 +96,52 @@ class OneHot(GroupEncoder):
         return OneHotEncoder(categories=categories, handle_unknown="error").fit(np.asarray(context.data).reshape(-1, 1))
 
 
-@component("group_encoder.identity")
-class Identity(GroupEncoder):
+class IdentityTransformer(FunctionTransformer):
+    """Passes values through unchanged."""
+
+    def __init__(self) -> None:
+        super().__init__(check_inverse=False)
+
+
+class Log1pTransformer(FunctionTransformer):
+    """``log1p``, inverted by ``expm1``."""
+
+    def __init__(self) -> None:
+        super().__init__(func=np.log1p, inverse_func=np.expm1, check_inverse=False)
+
+
+class AffineTransformer(FunctionTransformer):
+    """``x * scale + shift``, inverted by ``(x - shift) / scale``."""
+
+    def __init__(self, scale: float = 1.0, shift: float = 0.0) -> None:
+        self.scale, self.shift = scale, shift
+        super().__init__(func=self._forward, inverse_func=self._inverse, check_inverse=False)
+
+    def _forward(self, x: np.ndarray) -> np.ndarray:
+        return x * self.scale + self.shift
+
+    def _inverse(self, x: np.ndarray) -> np.ndarray:
+        return (x - self.shift) / self.scale
+
+
+@component("group_encoder.identity", builds=IdentityTransformer)
+class IdentityTransformerConfig(GroupEncoderConfig):
     """Passes the column through unchanged."""
 
-    def build(self, context: GroupEncoderContext) -> FunctionTransformer:
-        return FunctionTransformer(check_inverse=False).fit(context.data)
+    def build(self, context: GroupEncoderContext) -> IdentityTransformer:
+        return IdentityTransformer().fit(context.data)
 
 
-@component("group_encoder.log1p")
-class Log1p(GroupEncoder):
+@component("group_encoder.log1p", builds=Log1pTransformer)
+class Log1pTransformerConfig(GroupEncoderConfig):
     """Applies ``log1p`` (inverse ``expm1``) to a continuous column."""
 
-    def build(self, context: GroupEncoderContext) -> FunctionTransformer:
-        return FunctionTransformer(func=np.log1p, inverse_func=np.expm1, check_inverse=False).fit(context.data)
+    def build(self, context: GroupEncoderContext) -> Log1pTransformer:
+        return Log1pTransformer().fit(context.data)
 
 
-@component("group_encoder.affine")
-class Affine(GroupEncoder):
+@component("group_encoder.affine", builds=AffineTransformer)
+class AffineTransformerConfig(GroupEncoderConfig):
     """Scales and shifts a continuous column (``x * scale + shift``).
 
     :param scale: Multiplicative factor. Defaults to ``1.0``.
@@ -123,41 +154,36 @@ class Affine(GroupEncoder):
     scale: float = 1.0
     shift: float = 0.0
 
-    def build(self, context: GroupEncoderContext) -> FunctionTransformer:
-        s, b = self.scale, self.shift
-        return FunctionTransformer(
-            func=lambda x: x * s + b,
-            inverse_func=lambda x: (x - b) / s,
-            check_inverse=False,
-        ).fit(context.data)
+    def build(self, context: GroupEncoderContext) -> AffineTransformer:
+        return AffineTransformer(scale=self.scale, shift=self.shift).fit(context.data)
 
 
 #: The string ids, mapped to their component equivalent. Deliberately only the parameter-free encoders:
 #: the legacy ``"functional"`` id carried its transform in the separate ``groups_encoding_transform_fn``
-#: callables, so with those gone it has no meaning as a string -- pass :class:`Identity`, :class:`Log1p`
-#: or :class:`Affine` explicitly instead.
-_ENCODER_BY_ID: dict[str, type[GroupEncoder]] = {
-    "label": Label,
-    "one-hot": OneHot,
+#: callables, so with those gone it has no meaning as a string -- pass :class:`IdentityTransformerConfig`,
+#: :class:`Log1pTransformerConfig` or :class:`AffineTransformerConfig` explicitly instead.
+_ENCODER_BY_ID: dict[str, type[GroupEncoderConfig]] = {
+    "label": LabelEncoderConfig,
+    "one-hot": OneHotEncoderConfig,
 }
 
 
-def as_group_encoder(value: GroupEncoder | GroupEncoderId) -> GroupEncoder:
-    """Coerces a string encoder id into a :class:`GroupEncoder`, passing instances through.
+def as_group_encoder(value: GroupEncoderConfig | GroupEncoderId) -> GroupEncoderConfig:
+    """Coerces a string encoder id into a :class:`GroupEncoderConfig`, passing instances through.
 
     Strings are a convenience accepted only at the public interfaces (``DataManager`` /
     ``GroupsDataSchema``); everything downstream stores components. Only the parameter-free encoders have
-    string ids -- reach for the instance (``Affine(scale=2.0)``, ``OneHot(categories=(...))``) when you need
+    string ids -- reach for the instance (``AffineTransformerConfig(scale=2.0)``, ``OneHotEncoderConfig(categories=(...))``) when you need
     parameters or a pinned vocabulary.
 
-    :param value: A :class:`GroupEncoder` instance, or one of ``"label"`` / ``"one-hot"``.
-    :type value: class: `GroupEncoder | GroupEncoderId`
+    :param value: A :class:`GroupEncoderConfig` instance, or one of ``"label"`` / ``"one-hot"``.
+    :type value: class: `GroupEncoderConfig | GroupEncoderId`
     """
-    if isinstance(value, GroupEncoder):
+    if isinstance(value, GroupEncoderConfig):
         return value
     try:
         encoder_cls = _ENCODER_BY_ID[value]
     except (KeyError, TypeError):
-        msg = f"Group encoder {value!r} not available. Pass a GroupEncoder instance or one of {sorted(_ENCODER_BY_ID)}."
+        msg = f"Group encoder {value!r} not available. Pass a GroupEncoderConfig instance or one of {sorted(_ENCODER_BY_ID)}."
         raise ValueError(msg) from None
     return encoder_cls()

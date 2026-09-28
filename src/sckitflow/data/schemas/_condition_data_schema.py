@@ -73,9 +73,10 @@ class ConditionDataSchema(StrictDataSchema):
 
             .. code-block:: python
                 >>> # importing libraries
+                >>> import numpy as np
                 >>> from sckitflow.data import schemas, sim
                 >>> # annotated data
-                >>> adata = sim.get_dummy_adata()
+                >>> adata = sim.get_dummy_adata(rng=np.random.default_rng(0))
                 ... AnnData object with n_obs × n_vars = 60000 × 400
                 ... obs: 'drugA', 'drugB', 'koA', 'koB', 'target', 'source_split', 'is_control'
                 ... uns: 'drug', 'ko', 'source_split'

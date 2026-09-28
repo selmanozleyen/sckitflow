@@ -23,7 +23,7 @@ def small_tensors():
 # ===============================================================
 def test_independent_coupling_returns_indices(small_tensors):
     source, target = small_tensors
-    src_idx, tgt_idx = independent_coupling(source, target)
+    src_idx, tgt_idx = independent_coupling(source, target, rng=np.random.default_rng(0))
 
     # Basic type and shape checks
     assert isinstance(src_idx, np.ndarray)
@@ -49,7 +49,7 @@ def test_independent_coupling_reproducibility(small_tensors):
 @pytest.mark.parametrize("method", ["exact", "sinkhorn"])
 def test_ot_linear_coupling_basic(method, small_tensors):
     source, target = small_tensors
-    src_idx, tgt_idx = ot_linear_coupling(source, target, method=method)
+    src_idx, tgt_idx = ot_linear_coupling(source, target, method=method, rng=np.random.default_rng(0))
 
     assert isinstance(src_idx, np.ndarray)
     assert isinstance(tgt_idx, np.ndarray)
@@ -62,13 +62,15 @@ def test_ot_linear_coupling_basic(method, small_tensors):
 def test_ot_linear_coupling_invalid_method_raises(small_tensors):
     source, target = small_tensors
     with pytest.raises(ValueError):
-        ot_linear_coupling(source, target, method="invalid", reg=5e-1)
+        ot_linear_coupling(source, target, method="invalid", reg=5e-1, rng=np.random.default_rng(0))
 
 
 @pytest.mark.parametrize("scale_cost", ["mean", "max", "median", 1.0])
 def test_ot_linear_coupling_scale_modes(scale_cost, small_tensors):
     source, target = small_tensors
-    src_idx, tgt_idx = ot_linear_coupling(source, target, scale_cost=scale_cost, method="sinkhorn")
+    src_idx, tgt_idx = ot_linear_coupling(
+        source, target, scale_cost=scale_cost, method="sinkhorn", rng=np.random.default_rng(0)
+    )
 
     dim_out = min(len(src_idx), len(tgt_idx))
     assert isinstance(src_idx, np.ndarray)
@@ -99,6 +101,7 @@ def test_ot_quadratic_coupling_basic(quadratic_inputs, method):
         source_lin=src_xy,
         target_lin=tgt_xy,
         method=method,
+        rng=np.random.default_rng(0),
     )
 
     dim_out = min(len(src_xx), len(tgt_yy))
@@ -121,6 +124,7 @@ def test_ot_quadratic_coupling_without_xy_couplings(quadratic_inputs):
         source_quad=src_xx,
         target_quad=tgt_yy,
         method="entropic_gromov_wasserstein",
+        rng=np.random.default_rng(0),
     )
 
     dim_out = min(len(src_xx), len(tgt_yy))
@@ -133,4 +137,6 @@ def test_ot_quadratic_coupling_without_xy_couplings(quadratic_inputs):
 def test_ot_quadratic_coupling_invalid_method_raises(quadratic_inputs):
     src_xx, tgt_yy, *_ = quadratic_inputs
     with pytest.raises(ValueError):
-        ot_quadratic_coupling(source_quad=src_xx, target_quad=tgt_yy, method="invalid_method")
+        ot_quadratic_coupling(
+            source_quad=src_xx, target_quad=tgt_yy, method="invalid_method", rng=np.random.default_rng(0)
+        )

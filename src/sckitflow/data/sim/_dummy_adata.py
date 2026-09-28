@@ -197,11 +197,10 @@ def get_dummy_adata(
     uns_keys_to_nunique_prefix_and_dim: dict[str, Any] = uns_keys_to_nunique_prefix_and_dim,
     obs_columns_to_fixed_val: dict[str, str] = obs_columns_to_fixed_val,
     control_key: str = control_key,
-    rng: np.random.Generator | None = None,
+    *,
+    rng: np.random.Generator,
 ) -> AnnData:
     """"""  # noqa
-    rng = rng if rng is not None else np.random.default_rng()
-
     # perturbation adata
     pert_adata = _get_perturbed_adata(
         rng,

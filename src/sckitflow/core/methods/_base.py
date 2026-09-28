@@ -119,9 +119,6 @@ class AbstractFlowMethod(AbstractMethod):
         super().__init__(module)
         self._params = p = resolve_init_params(self, params)
 
-        if p["generate_from_noise"] and p["noise_sampler"] is None:
-            raise TypeError("When generating from noise, you need to provide a noise_sampler.")
-
         path = p["probability_path"]
         if isinstance(path, ProbabilityPathConfig):
             path = path.build()

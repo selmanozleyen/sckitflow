@@ -76,8 +76,6 @@ class ODEInference(AbstractFlowMethod):
         # ---- 0. Guard, when generating from noise we need n_samples ----
         if self.generate_from_noise and self.n_samples is None:
             raise ValueError("When generating from noise, you need to provide the number of samples with `n_samples`")
-        if self.generate_from_noise and self.noise_sampler is None:
-            raise TypeError("When generating from noise, you need to provide a noise_sampler.")
 
         # ----- 1. Prepare latent (noise) -----
         target_state = step_data["target_state"]

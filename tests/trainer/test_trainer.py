@@ -81,7 +81,8 @@ class DummyInferenceProtocol(BaseInferenceProtocol):
     """Concrete inference method: returns a `PredictionData` with `.X`."""
 
     def predict(self, step_data, *args, **kwargs):
-        return DummyPredictionData(np.random.randn(10, 5), traj=None, raw_samples=None)
+        rng = np.random.default_rng(0)
+        return DummyPredictionData(rng.standard_normal((10, 5)), traj=None, raw_samples=None)
 
 
 # Module-level so `cloudpickle` can serialize it (not needed for these tests, but

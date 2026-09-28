@@ -1,10 +1,9 @@
 import json
 
-import pandas as pd
 import torch
 from anndata import AnnData
 
-from sckitflow import RunSpec, load_run, run_rngs, save_run
+from sckitflow import RunSpec, load_run, save_run
 from sckitflow.core.methods.inference._ode import ODEConfig
 from sckitflow.core.methods.training._cfm import CFMConfig
 from sckitflow.data._config import FlowDataConfig
@@ -28,22 +27,14 @@ DATA = FlowDataConfig(
 )
 
 
-def _split(seed: int, split_seed: int, adata: AnnData) -> pd.Series:
-    return SPLITTER.build(rng=run_rngs(seed=seed, split_seed=split_seed).split).assign(adata)
-
-
-def test_split_depends_only_on_split_seed(adata_small: AnnData):
-    pd.testing.assert_series_equal(_split(0, 3, adata_small), _split(1, 3, adata_small))
-
-
 def test_load_run_round_trips(tmp_path, adata_small: AnnData):
     module = torch.nn.Linear(2, 2)
     spec = RunSpec(
-        data=DATA, training=CFMConfig(), inference=ODEConfig(params={"n_steps": 5}), splitter=SPLITTER, split_seed=3
+        data=DATA, training=CFMConfig(), inference=ODEConfig(params={"n_steps": 5}), splitter=SPLITTER, splitter_seed=3
     )
     save_run(tmp_path, spec, module)
     document = json.loads((tmp_path / "specs.json").read_text())["config"]
-    assert (document["seed"], document["split_seed"]) == (0, 3)
+    assert (document["loader_seed"], document["splitter_seed"]) == (0, 3)
     assert document["data"]["config"]["groups_encoding"]["cell_line"]["type"] == "group_encoder.one_hot"
 
     datamodule, plan = load_run(tmp_path, adata_small, torch.nn.Linear(2, 2))

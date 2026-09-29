@@ -216,7 +216,9 @@ class TestSplitOwnership:
         with pytest.raises(ValueError, match="not both"):
             _make_manager(
                 split_by="split",
-                splitter=CombinationSplitter(group_keys=["cell_line", "drug"], always_train_keys=["cell_line"]),
+                splitter=CombinationSplitter(
+                    group_keys=["cell_line", "drug"], always_train_keys=["cell_line"], rng=np.random.default_rng(0)
+                ),
             )
 
     def test_a_splitter_derives_the_split_without_touching_the_caller(self, adata_small: AnnData):
@@ -224,6 +226,7 @@ class TestSplitOwnership:
         dm = _make_manager(
             control_values_dict={"drug": "control"},
             splitter=CombinationSplitter(
+                rng=np.random.default_rng(0),
                 group_keys=["cell_line", "drug"],
                 always_train_keys=["cell_line"],
                 control_key="drug",
@@ -269,6 +272,7 @@ class TestStreamingLeavesTheCallersDataAlone:
             "splitter": _make_manager(
                 control_values_dict={"drug": "control"},
                 splitter=CombinationSplitter(
+                    rng=np.random.default_rng(0),
                     group_keys=["cell_line", "drug"],
                     always_train_keys=["cell_line"],
                     control_key="drug",

@@ -50,8 +50,8 @@ class MatchFn(Protocol):
 class SamplerFn(Protocol):
     """Samples a tensor of `shape`, on the given device and dtype.
 
-    `torch.rand` and `torch.randn` satisfy this, which is why they are the
-    defaults for the time and noise samplers. ``device`` and ``dtype`` are named
+    `torch.rand` and `torch.randn` do not match it themselves (their overloaded
+    signatures differ), so the defaults wrap them. ``device`` and ``dtype`` are named
     rather than swept into ``**kwargs`` so a caller that forgets to place the
     sample where the batch already is fails to type-check instead of silently
     allocating on the wrong device.

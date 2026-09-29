@@ -7,7 +7,8 @@ from sckitflow.core.probability_paths._probability_paths import (
 )
 
 __all__ = [
-    "BaseProbabilityPathLinearDiracProbabilityPath",
+    "BaseProbabilityPath",
+    "LinearDiracProbabilityPath",
     "LinearGaussianProbabilityPath",
     "SchrodingerBridgeProbabilityPath",
     "VariancePreservingDiracProbabilityPath",

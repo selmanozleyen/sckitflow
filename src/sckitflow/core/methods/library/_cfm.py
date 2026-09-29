@@ -8,7 +8,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_inference,
     prepare_latent_train,
 )
-from sckitflow.core._types import PredictionData, StepData
+from sckitflow.core._types import PredictionData, StepData, standard_normal, uniform
 from sckitflow.core.coupling._coupling import independent_coupling
 from sckitflow.core.methods._base import GenerativeFlow
 from sckitflow.core.nn._vf import BaseVelocityField, MLPVelocity
@@ -28,9 +28,9 @@ class CFM(GenerativeFlow):
         if self._match_fn is None:
             self._match_fn = independent_coupling
         if self._noise_sampler is None:
-            self._noise_sampler = torch.randn
+            self._noise_sampler = standard_normal
         if self._time_sampler is None:
-            self._time_sampler = torch.rand
+            self._time_sampler = uniform
         if self._probability_path is None:
             self._probability_path = LinearDiracProbabilityPath()
 

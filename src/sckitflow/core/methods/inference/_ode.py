@@ -34,8 +34,7 @@ class ODEInference(AbstractFlowMethod):
 
     Passing the same module and configuration to a flow training method
     (e.g. :class:`~sckitflow.core.methods.training.CFMTraining`) gives
-    both the same probability path, time sampler, noise sampler, module, dtype,
-    and device.
+    both the same probability path, time sampler, noise sampler, and module.
     """
 
     def __init__(
@@ -83,7 +82,7 @@ class ODEInference(AbstractFlowMethod):
         self._latent = latent
         self._n_samples = n_samples
 
-    def predict(self, step_data: StepData) -> PredictionData:
+    def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData:
         """Integrates the ODE and returns the aggregated prediction.
 
         The dynamics are read through the shared specs: ``self.probability_path``,
@@ -103,6 +102,7 @@ class ODEInference(AbstractFlowMethod):
                 self.noise_sampler,
                 n_samples=self.n_samples,
                 generate_from_noise=self.generate_from_noise,
+                generator=generator,
             )
         else:
             # the only tensor not built by the loader, so the only one to place

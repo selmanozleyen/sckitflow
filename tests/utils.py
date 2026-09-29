@@ -62,9 +62,10 @@ def verify_method_output(
     height: int,
     width: int,
 ) -> None:
-    from torch import zeros
+    from torch import Generator, zeros
 
     tested_method = getattr(probability_path, method)
+    extra = {"generator": Generator().manual_seed(0)} if method == "compute_xt" else {}
 
     # ----- 2D tests -----
     t = zeros((batch_size, 1))
@@ -75,7 +76,7 @@ def verify_method_output(
         xt = zeros((batch_size, num_feats))
         out = tested_method(t, xt, x0, x1)
     else:
-        out = tested_method(t, x0, x1)
+        out = tested_method(t, x0, x1, **extra)
     assert out.shape == (batch_size, num_feats)
 
     # shape mismatch
@@ -85,7 +86,7 @@ def verify_method_output(
             xt = zeros((batch_size, num_feats))
             _ = tested_method(t, xt, x0, x1_bad)
         else:
-            _ = tested_method(t, x0, x1_bad)
+            _ = tested_method(t, x0, x1_bad, **extra)
 
     # ----- 3D tests -----
     t = zeros((batch_size, 1))
@@ -96,7 +97,7 @@ def verify_method_output(
         xt = zeros((batch_size, num_channels, height, width))
         out = tested_method(t, xt, x0, x1)
     else:
-        out = tested_method(t, x0, x1)
+        out = tested_method(t, x0, x1, **extra)
     assert out.shape == (batch_size, num_channels, height, width)
 
     # shape mismatch
@@ -106,4 +107,4 @@ def verify_method_output(
             xt = zeros((batch_size, num_channels, height, width))
             _ = tested_method(t, xt, x0, x1_bad)
         else:
-            _ = tested_method(t, x0, x1_bad)
+            _ = tested_method(t, x0, x1_bad, **extra)

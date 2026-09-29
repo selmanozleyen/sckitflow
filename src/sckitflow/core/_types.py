@@ -48,7 +48,7 @@ class MatchFn(Protocol):
 
 
 class SamplerFn(Protocol):
-    """Samples a tensor of `shape`, on the given device and dtype.
+    """Samples a tensor of `shape` from `generator`, on the given device and dtype.
 
     `torch.rand` and `torch.randn` do not match it themselves (their overloaded
     signatures differ), so the defaults wrap them. ``device`` and ``dtype`` are named
@@ -61,6 +61,7 @@ class SamplerFn(Protocol):
         self,
         shape: tuple[int, ...],
         *,
+        generator: torch.Generator,
         device: torch.types.Device = None,
         dtype: torch.dtype | None = None,
     ) -> torch.Tensor: ...

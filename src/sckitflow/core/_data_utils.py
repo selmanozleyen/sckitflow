@@ -147,6 +147,8 @@ def prepare_latent_train(
     target: torch.Tensor,
     noise_sampler: SamplerFn,
     generate_from_noise: bool = False,
+    *,
+    generator: torch.Generator,
 ) -> torch.Tensor:
     """Called from compute_loss - always returns single noise per batch element.
 
@@ -154,7 +156,7 @@ def prepare_latent_train(
     where the batch already is rather than on whatever the sampler defaults to.
     """
     if source is None or generate_from_noise:
-        return noise_sampler(tuple(target.shape), device=target.device, dtype=target.dtype)
+        return noise_sampler(tuple(target.shape), generator=generator, device=target.device, dtype=target.dtype)
     return source
 
 
@@ -164,6 +166,8 @@ def prepare_latent_inference(
     noise_sampler: SamplerFn,
     n_samples: int | None = None,
     generate_from_noise: bool = False,
+    *,
+    generator: torch.Generator,
 ) -> torch.Tensor:
     """Called from infer.
 
@@ -177,7 +181,7 @@ def prepare_latent_inference(
         if n_samples is not None:
             shape = (n_samples, *shape)
         # device/dtype from the reference, so the latent needs no coercion after
-        return noise_sampler(shape, device=target_reference.device, dtype=target_reference.dtype)
+        return noise_sampler(shape, generator=generator, device=target_reference.device, dtype=target_reference.dtype)
     return source
 
 

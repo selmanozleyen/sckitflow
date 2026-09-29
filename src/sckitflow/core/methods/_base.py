@@ -1,11 +1,14 @@
 import abc
-from typing import Any, Protocol, runtime_checkable
+from typing import Annotated, Any, Protocol, TypedDict, Unpack, runtime_checkable
 
 import numpy as np
 import torch
+from scfit.params import Default, resolve_init_params
+from scfit.registry import Builds, Component
 
 from sckitflow.core._data_utils import subscript_step_data
 from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
+from sckitflow.core.probability_paths._config import ProbabilityPathConfig
 from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath, LinearDiracProbabilityPath
 
 __all__ = [
@@ -17,6 +20,10 @@ __all__ = [
     # implementations that inherit nothing from us as well.
     "AbstractMethod",
     "AbstractFlowMethod",
+    "AbstractFlowMethodParams",
+    # Config families
+    "TrainingMethodConfig",
+    "InferenceMethodConfig",
     # Matching
     "BaseMatcher",
     "Matcher",
@@ -46,6 +53,22 @@ class SupportsInference(Protocol):
     @property
     def module(self) -> torch.nn.Module: ...
     def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData: ...
+
+
+class TrainingMethodConfig[T: SupportsTraining](Builds[T], Component):
+    """Family base for anything that configures a training method; ``T`` is the method it builds."""
+
+    def build(self, module: torch.nn.Module) -> T:
+        """The training method around ``module``."""
+        raise NotImplementedError
+
+
+class InferenceMethodConfig[T: SupportsInference](Builds[T], Component):
+    """Family base for anything that configures an inference method; ``T`` is the method it builds."""
+
+    def build(self, module: torch.nn.Module) -> T:
+        """The inference method around ``module``."""
+        raise NotImplementedError
 
 
 # -------------------- Shared implementation --------------------
@@ -95,36 +118,37 @@ def _standard_normal(
     return torch.randn(shape, generator=generator, device=device, dtype=dtype)
 
 
+class AbstractFlowMethodParams(TypedDict, total=False):
+    """The flow configuration every flow method shares."""
+
+    probability_path: Annotated[ProbabilityPathConfig | BaseProbabilityPath | None, Default(None)]
+    """A path config (portable) or a live path (builds, will not serialize). ``None`` is a linear Dirac path."""
+    time_sampler: Annotated[SamplerFn | None, Default(None)]
+    """Samples times in ``[0, 1]``. ``None`` samples uniformly via `torch.rand`."""
+    noise_sampler: Annotated[SamplerFn | None, Default(None)]
+    """Samples source noise. ``None`` samples a standard normal via `torch.randn`."""
+    generate_from_noise: Annotated[bool, Default(False)]
+    """Interpolate from noise even when source states are present; the source is then extra conditioning."""
+
+
 class AbstractFlowMethod(AbstractMethod):
-    """Adds the flow configuration that flow trainers and flow predictors share."""
+    """Adds the flow configuration that flow trainers and flow predictors share.
 
-    def __init__(
-        self,
-        module: torch.nn.Module,
-        probability_path: BaseProbabilityPath | None = None,
-        time_sampler: SamplerFn | None = None,
-        noise_sampler: SamplerFn | None = None,
-        generate_from_noise: bool = False,
-    ) -> None:
-        """Initializes the module storage plus the flow configuration.
+    Subclasses with more parameters extend `AbstractFlowMethodParams` and unpack that in their own ``__init__``.
+    """
 
-        :param module: An initialized neural module the method builds upon.
-        :param probability_path: Optional `BaseProbabilityPath`. Defaults to a
-            `LinearDiracProbabilityPath`.
-        :param time_sampler: Optional callable sampling times in [0, 1].
-            Defaults to uniform sampling via `torch.rand`.
-        :param noise_sampler: Optional callable sampling source noise.
-            Defaults to standard normal sampling via `torch.randn`.
-        :param generate_from_noise: When `True`, interpolation starts from the
-            noise distribution even if source states are present (source
-            information is passed as extra conditioning instead).
-        """
+    def __init__(self, module: torch.nn.Module, **params: Unpack[AbstractFlowMethodParams]) -> None:
+        """:param module: An initialized neural module the method builds upon."""
         super().__init__(module)
+        self._params = p = resolve_init_params(self, params)
 
-        self._probability_path = LinearDiracProbabilityPath() if probability_path is None else probability_path
-        self._noise_sampler = _standard_normal if noise_sampler is None else noise_sampler
-        self._time_sampler = _uniform if time_sampler is None else time_sampler
-        self._generate_from_noise = generate_from_noise
+        path = p["probability_path"]
+        if isinstance(path, ProbabilityPathConfig):
+            path = path.build()
+        self._probability_path = LinearDiracProbabilityPath() if path is None else path
+        self._noise_sampler = _standard_normal if p["noise_sampler"] is None else p["noise_sampler"]
+        self._time_sampler = _uniform if p["time_sampler"] is None else p["time_sampler"]
+        self._generate_from_noise = p["generate_from_noise"]
 
     @property
     def probability_path(self) -> BaseProbabilityPath:

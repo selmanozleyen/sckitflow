@@ -8,7 +8,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_inference,
     prepare_latent_train,
 )
-from sckitflow.core._types import PredictionData, StepData, standard_normal, uniform
+from sckitflow.core._types import PredictionData, StepData
 from sckitflow.core.coupling._coupling import independent_coupling
 from sckitflow.core.methods._base import GenerativeFlow
 from sckitflow.core.nn._vf import BaseVelocityField, MLPVelocity
@@ -16,6 +16,18 @@ from sckitflow.core.probability_paths._probability_paths import LinearDiracProba
 from sckitflow.core.solvers import BaseSolver, ODESolver
 
 __all__ = ["CFM"]
+
+
+def _uniform(
+    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    return torch.rand(shape, device=device, dtype=dtype)
+
+
+def _standard_normal(
+    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    return torch.randn(shape, device=device, dtype=dtype)
 
 
 class CFM(GenerativeFlow):
@@ -28,9 +40,9 @@ class CFM(GenerativeFlow):
         if self._match_fn is None:
             self._match_fn = independent_coupling
         if self._noise_sampler is None:
-            self._noise_sampler = standard_normal
+            self._noise_sampler = _standard_normal
         if self._time_sampler is None:
-            self._time_sampler = uniform
+            self._time_sampler = _uniform
         if self._probability_path is None:
             self._probability_path = LinearDiracProbabilityPath()
 

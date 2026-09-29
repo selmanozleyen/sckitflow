@@ -51,9 +51,8 @@ class MatchFn(Protocol):
 class SamplerFn(Protocol):
     """Samples a tensor of `shape`, on the given device and dtype.
 
-    :func:`uniform` and :func:`standard_normal` are the defaults for the time and
-    noise samplers. They wrap `torch.rand` and `torch.randn`, whose overloaded
-    signatures do not match this protocol themselves. ``device`` and ``dtype`` are named
+    `torch.rand` and `torch.randn` do not match it themselves (their overloaded
+    signatures differ), so the defaults wrap them. ``device`` and ``dtype`` are named
     rather than swept into ``**kwargs`` so a caller that forgets to place the
     sample where the batch already is fails to type-check instead of silently
     allocating on the wrong device.
@@ -66,18 +65,6 @@ class SamplerFn(Protocol):
         device: torch.types.Device = None,
         dtype: torch.dtype | None = None,
     ) -> torch.Tensor: ...
-
-
-def uniform(shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None) -> Tensor:
-    """`torch.rand` as a `SamplerFn`: uniform on ``[0, 1)``."""
-    return torch.rand(shape, device=device, dtype=dtype)
-
-
-def standard_normal(
-    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
-) -> Tensor:
-    """`torch.randn` as a `SamplerFn`: standard normal."""
-    return torch.randn(shape, device=device, dtype=dtype)
 
 
 class ConditioningFn(Protocol):

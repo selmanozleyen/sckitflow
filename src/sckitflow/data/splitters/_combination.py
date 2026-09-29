@@ -19,7 +19,7 @@ __all__ = ["CombinationSplitter", "CombinationSplitterParams", "CombinationSplit
 class CombinationSplitterParams(TypedDict, total=False):
     """Parameters of :class:`CombinationSplitter`."""
 
-    group_keys: Annotated[tuple[str, ...], Default(())]
+    group_keys: tuple[str, ...]
     """``adata.obs`` columns whose unique combination is the unit of splitting. Required."""
     always_train_keys: Annotated[tuple[str, ...], Default(())]
     """Subset of ``group_keys`` for which every unique value keeps at least one combination in train."""

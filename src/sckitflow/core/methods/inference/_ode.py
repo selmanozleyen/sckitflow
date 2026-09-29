@@ -108,7 +108,7 @@ class ODEInference(AbstractFlowMethod):
         )
 
         # ----- 5. Configure ODE solver -----
-        solver_kwargs = dict(self.solver_kwargs or {})
+        solver_kwargs = dict(self.solver_kwargs)
         solver_kwargs.setdefault("method", "euler")
         method = solver_kwargs.pop("method")
 
@@ -137,7 +137,7 @@ class ODEInference(AbstractFlowMethod):
         return PredictionData(X=X, traj=traj, raw_samples=raw_samples)
 
     @property
-    def solver_kwargs(self) -> dict[str, Any] | None:
+    def solver_kwargs(self) -> dict[str, Any]:
         return self._solver_kwargs
 
     @property

@@ -1,6 +1,6 @@
 """Saving and loading a run as its spec plus weights.
 
-A run is a :class:`RunConfig`, the data schema, the methods and the two seeds, plus the learned
+A run is a :class:`RunConfig`, the data schema, the methods and the three seeds, plus the learned
 parameters. ``specs.json`` holds ``RunConfig.to_spec()``, ``weights.pt`` a plain ``state_dict``.
 Nothing is pickled, so a saved run survives our own classes being renamed.
 

@@ -1,5 +1,6 @@
 from typing import Any
 
+import numpy as np
 import torch
 from scfit.params import ParamsComponent
 from scfit.registry import component
@@ -25,11 +26,13 @@ class CFMTraining(AbstractFlowMethod):
 
     Passing the same module and configuration to a flow inference method
     (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) gives both
-    the same probability path, time sampler, noise sampler, module, dtype, and
-    device.
+    the same probability path, time sampler, noise sampler and module.
     """
 
-    def compute_loss(self, step_data: StepData) -> tuple[torch.Tensor, dict[str, Any]]:
+    def compute_loss(
+        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """The flow-matching loss. Noise, time and path samples are drawn from ``generator``; ``rng`` is unused."""
         # ---- Get source and target states from step data ----
         # The batch is the reference: the loader built it in the module's dtype
         # and Lightning placed it, so nothing here is coerced.
@@ -48,14 +51,15 @@ class CFMTraining(AbstractFlowMethod):
             target,
             self.noise_sampler,
             generate_from_noise=self.generate_from_noise,
+            generator=generator,
         )
         batch_size = latent.shape[0]
 
         # ---- Sample time ----
-        t = self.time_sampler((batch_size,), device=latent.device, dtype=latent.dtype)
+        t = self.time_sampler((batch_size,), generator=generator, device=latent.device, dtype=latent.dtype)
 
         # ---- Sample from probability path: interpolant and velocity ----
-        xt = self.probability_path.compute_xt(t, latent, target)
+        xt = self.probability_path.compute_xt(t, latent, target, generator=generator)
         ut = self.probability_path.compute_ut(t, xt, latent, target)
 
         # ---- Predict velocity field and compute loss ----

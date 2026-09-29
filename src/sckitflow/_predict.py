@@ -17,6 +17,7 @@ import torch
 from anndata import AnnData
 from tqdm import tqdm
 
+from sckitflow._random import generators
 from sckitflow.core._types import PredictionData, StepData, concatenate_predictions
 from sckitflow.core.methods._base import SupportsInference
 from sckitflow.data._datamodule import FlowDataModule
@@ -214,6 +215,7 @@ def predict_adata(
     matched_keys: Mapping[tuple, tuple] | None = None,
     control_adata: AnnData | None = None,
     predict_kwargs: dict[str, Any] | None = None,
+    seed: int = 0,
 ) -> AnnData | tuple[AnnData, PredictionData]:
     """Predicts over ``adata``, one deterministic pass per group, into one `AnnData`.
 
@@ -233,6 +235,7 @@ def predict_adata(
     :param matched_keys: ``{source group key: target group key}`` pairs for fixed matching.
     :param control_adata: Optional separate control (source) pool.
     :param predict_kwargs: Forwarded to the inference method's ``predict``.
+    :param seed: Each group's noise comes from generators derived from it and the group's position.
     """
     loader = datamodule.set_predict_data(
         adata,
@@ -248,8 +251,10 @@ def predict_adata(
     inference_method.module.eval()
     records = []
     try:
-        for step_data, leaf in tqdm(loader, total=len(loader), desc="Predicting"):
-            preds = inference_method.predict(step_data, **predict_kwargs)
+        for i, (step_data, leaf) in enumerate(tqdm(loader, total=len(loader), desc="Predicting")):
+            reference = next((t for t in (step_data["target_state"], step_data["source_state"]) if t is not None), None)
+            generator, _ = generators(seed, i, device=None if reference is None else reference.device)
+            preds = inference_method.predict(step_data, generator=generator, **predict_kwargs)
             records.append(prediction_record(loader, step_data, leaf, preds))
     finally:
         inference_method.module.train(was_training)

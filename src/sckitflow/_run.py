@@ -61,6 +61,8 @@ class RunConfig(Component):
     """Seeds the loaders' sampling schedule."""
     splitter_seed: int = 0
     """Seeds the split, so retraining with another ``loader_seed`` keeps it."""
+    method_seed: int = 0
+    """Seeds every time, noise and coupling draw of training, validation and prediction."""
 
     def build(self, adata: AnnData, module: torch.nn.Module, *, optimizer: torch.optim.Optimizer | None = None) -> Run:
         """The data module over ``adata`` and a plan over ``module``."""
@@ -73,6 +75,7 @@ class RunConfig(Component):
             optimizer,
             inference_method=self.inference.build(module) if self.inference is not None else None,
             val_names=datamodule.val_names,
+            seed=self.method_seed,
         )
         return Run(datamodule, plan)
 

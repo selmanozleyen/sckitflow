@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import warnings
 from typing import Annotated, Any, TypedDict, Unpack
 
@@ -73,20 +74,18 @@ class CombinationSplitter(Splitter):
     drugs keeps all 4. :meth:`assign` warns if that leaves no test split at all.
 
     Control rows (``control_key == control_value``) are labelled ``control_label`` and never take part -- they
-    are the shared source population, not a split. The choice is drawn from ``rng``.
+    are the shared source population, not a split. The choice is drawn from ``rng``, copied on each call, so repeated
+    calls give the same split.
 
     Example, ``group_keys=["cell_line", "drug"]`` and ``always_train_keys=["cell_line"]`` at
     ``test_fraction=0.5``: cell line A with drugs ``d0..d3`` gives up 2 of them to test and keeps 2 in train;
     cell line B with a single drug keeps it; every control row is labelled ``control``.
     """
 
-    def __init__(
-        self, *, rng: int | np.random.Generator | None = 0, **params: Unpack[CombinationSplitterParams]
-    ) -> None:
+    def __init__(self, *, rng: np.random.Generator, **params: Unpack[CombinationSplitterParams]) -> None:
         """Initializes the splitter.
 
-        :param rng: seed or generator for the hold-out choice, normalized with :func:`numpy.random.default_rng`.
-            An int gives the same split on every call; a `Generator` advances between calls.
+        :param rng: generator the hold-out choice is drawn from. Copied on each call, so the split never changes.
         """
         p = resolve_init_params(self, params)
         super().__init__(split_key=p["split_key"])
@@ -117,7 +116,7 @@ class CombinationSplitter(Splitter):
         combos = obs.loc[~is_control, gk].astype(str).drop_duplicates()
 
         # Hold out per stratum (each `always_train_keys` value), always leaving >=1 combination in train.
-        rng = np.random.default_rng(self._rng)
+        rng = copy.deepcopy(self._rng)
         test_combos: list[tuple] = []
         largest_stratum = 0
         strata = combos.groupby(atk, sort=True) if atk else [(None, combos)]

@@ -1,6 +1,7 @@
 import abc
 from typing import Annotated, Any, Protocol, TypedDict, Unpack, runtime_checkable
 
+import numpy as np
 import torch
 from scfit.params import Default, resolve_init_params
 from scfit.registry import Component
@@ -40,7 +41,9 @@ class SupportsTraining(Protocol):
 
     @property
     def module(self) -> torch.nn.Module: ...
-    def compute_loss(self, step_data: StepData) -> tuple[torch.Tensor, dict[str, Any]]: ...
+    def compute_loss(
+        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
+    ) -> tuple[torch.Tensor, dict[str, Any]]: ...
 
 
 @runtime_checkable
@@ -49,7 +52,7 @@ class SupportsInference(Protocol):
 
     @property
     def module(self) -> torch.nn.Module: ...
-    def predict(self, step_data: StepData) -> PredictionData: ...
+    def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData: ...
 
 
 class TrainingMethodConfig(Component):
@@ -95,15 +98,35 @@ class AbstractMethod:
         return self._module
 
 
+def _uniform(
+    shape: tuple[int, ...],
+    *,
+    generator: torch.Generator,
+    device: torch.types.Device = None,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    return torch.rand(shape, generator=generator, device=device, dtype=dtype)
+
+
+def _standard_normal(
+    shape: tuple[int, ...],
+    *,
+    generator: torch.Generator,
+    device: torch.types.Device = None,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    return torch.randn(shape, generator=generator, device=device, dtype=dtype)
+
+
 class AbstractFlowMethodParams(TypedDict, total=False):
     """The flow configuration every flow method shares."""
 
     probability_path: Annotated[ProbabilityPathConfig | BaseProbabilityPath | None, Default(None)]
     """A path config (portable) or a live path (builds, will not serialize). ``None`` is a linear Dirac path."""
     time_sampler: Annotated[SamplerFn | None, Default(None)]
-    """Samples times in ``[0, 1]``. ``None`` is `torch.rand`."""
+    """Samples times in ``[0, 1]``. ``None`` samples uniformly via `torch.rand`."""
     noise_sampler: Annotated[SamplerFn | None, Default(None)]
-    """Samples source noise. ``None`` is `torch.randn`."""
+    """Samples source noise. ``None`` samples a standard normal via `torch.randn`."""
     generate_from_noise: Annotated[bool, Default(False)]
     """Interpolate from noise even when source states are present; the source is then extra conditioning."""
 
@@ -123,8 +146,8 @@ class AbstractFlowMethod(AbstractMethod):
         if isinstance(path, ProbabilityPathConfig):
             path = path.build()
         self._probability_path = LinearDiracProbabilityPath() if path is None else path
-        self._noise_sampler = p["noise_sampler"] or torch.randn
-        self._time_sampler = p["time_sampler"] or torch.rand
+        self._noise_sampler = _standard_normal if p["noise_sampler"] is None else p["noise_sampler"]
+        self._time_sampler = _uniform if p["time_sampler"] is None else p["time_sampler"]
         self._generate_from_noise = p["generate_from_noise"]
 
     @property
@@ -132,7 +155,7 @@ class AbstractFlowMethod(AbstractMethod):
         return self._probability_path
 
     @property
-    def noise_sampler(self) -> SamplerFn | None:
+    def noise_sampler(self) -> SamplerFn:
         return self._noise_sampler
 
     @property
@@ -160,7 +183,7 @@ class BaseMatcher(abc.ABC):
         self._match_fn = match_fn
 
     @abc.abstractmethod
-    def match(self, step_data: StepData) -> StepData: ...
+    def match(self, step_data: StepData, *, rng: np.random.Generator) -> StepData: ...
 
     @property
     def match_fn(self) -> MatchFn:
@@ -175,8 +198,8 @@ class Matcher(BaseMatcher):
     copy aligned on the matched indices.
     """
 
-    def match(self, step_data: StepData) -> StepData:
-        """Matches the input state data using the underlying `match_fn`.
+    def match(self, step_data: StepData, *, rng: np.random.Generator) -> StepData:
+        """Matches the input state data using the underlying `match_fn`, drawing from ``rng``.
 
         Returns `step_data` unchanged when neither `source_coupling_lin` nor
         `source_coupling_quad` are present, or when `match_fn` returns either
@@ -195,6 +218,7 @@ class Matcher(BaseMatcher):
             target_lin=target_lin,
             source_quad=source_quad,
             target_quad=target_quad,
+            rng=rng,
         )
 
         if src_idxs is None or tgt_idxs is None:
@@ -222,8 +246,11 @@ class MatchedTrainingMethod:
         self._method = method
         self._matcher = matcher
 
-    def compute_loss(self, step_data: StepData) -> tuple[torch.Tensor, dict[str, Any]]:
-        return self._method.compute_loss(self._matcher.match(step_data))
+    def compute_loss(
+        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        matched = self._matcher.match(step_data, rng=rng)
+        return self._method.compute_loss(matched, generator=generator, rng=rng)
 
     @property
     def method(self) -> SupportsTraining:

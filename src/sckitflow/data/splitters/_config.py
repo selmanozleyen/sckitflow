@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 from scfit.registry import Component
 
 from sckitflow.data.splitters._base import Splitter
@@ -48,7 +49,7 @@ class CombinationSplitterConfig(SplitterConfig, type_id="splitter.combination", 
             control_key=self.control_key,
             control_value=self.control_value,
             test_fraction=self.test_fraction,
-            rng=self.seed,
+            rng=np.random.default_rng(self.seed),
             split_key=self.split_key,
             train_label=self.train_label,
             test_label=self.test_label,

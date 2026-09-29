@@ -12,14 +12,11 @@ import lightning.pytorch as pl
 import torch
 
 from sckitflow._predict import prediction_record
-from sckitflow._random import generators
+from sckitflow._random import PREDICT, TRAIN, VALIDATE, generators
 from sckitflow.core._types import StepData
 from sckitflow.core.methods._base import SupportsInference, SupportsTraining
 
 __all__ = ["TrainingPlan"]
-
-# Stream keys: each stage draws from its own generators, never from another stage's.
-_TRAIN, _VALIDATE, _PREDICT = 0, 1, 2
 
 
 class TrainingPlan(pl.LightningModule):
@@ -87,7 +84,7 @@ class TrainingPlan(pl.LightningModule):
         self.seed = seed
 
     def training_step(self, batch: StepData, batch_idx: int) -> torch.Tensor:
-        generator, rng = generators(self.seed, _TRAIN, self.global_step, device=self.device)
+        generator, rng = generators(self.seed, TRAIN, self.global_step, device=self.device)
         loss, metrics = self.training_method.compute_loss(batch, generator=generator, rng=rng)
         self.log_dict(metrics, on_step=True, prog_bar=True)
         return loss
@@ -97,7 +94,7 @@ class TrainingPlan(pl.LightningModule):
         if self.inference_method is None or self.metrics is None:
             return
 
-        generator, _ = generators(self.seed, _VALIDATE, dataloader_idx, batch_idx, device=self.device)
+        generator, _ = generators(self.seed, VALIDATE, dataloader_idx, batch_idx, device=self.device)
         preds = self.inference_method.predict(batch, generator=generator, **self._predict_kwargs)
         preds = getattr(preds, "X", preds)
         targets = batch["target_state"]
@@ -131,7 +128,7 @@ class TrainingPlan(pl.LightningModule):
         if self.inference_method is None:
             raise ValueError("this plan has no inference method: pass one to `TrainingPlan(...)`.")
         step_data, leaf = batch
-        generator, _ = generators(self.seed, _PREDICT, dataloader_idx, batch_idx, device=self.device)
+        generator, _ = generators(self.seed, PREDICT, dataloader_idx, batch_idx, device=self.device)
         preds = self.inference_method.predict(step_data, generator=generator, **self._predict_kwargs)
         return prediction_record(self.trainer.predict_dataloaders, step_data, leaf, preds)
 

@@ -112,9 +112,9 @@ class AbstractFlowMethod(AbstractMethod):
         :param probability_path: Optional `BaseProbabilityPath`. Defaults to a
             `LinearDiracProbabilityPath`.
         :param time_sampler: Optional callable sampling times in [0, 1].
-            Defaults to uniform sampling via `torch.rand`.
+            Defaults to `torch.rand`, drawn from the step's `generator`.
         :param noise_sampler: Optional callable sampling source noise.
-            Defaults to standard normal sampling via `torch.randn`.
+            Defaults to `torch.randn`, drawn from the step's `generator`.
         :param generate_from_noise: When `True`, interpolation starts from the
             noise distribution even if source states are present (source
             information is passed as extra conditioning instead).

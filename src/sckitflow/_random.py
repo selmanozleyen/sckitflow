@@ -5,7 +5,10 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-__all__ = ["generators"]
+__all__ = ["TRAIN", "VALIDATE", "PREDICT", "generators"]
+
+# Stream keys: each stage draws from its own generators, never from another stage's.
+TRAIN, VALIDATE, PREDICT = 0, 1, 2
 
 
 def generators(seed: int, *key: int, device: torch.types.Device = None) -> tuple[torch.Generator, np.random.Generator]:

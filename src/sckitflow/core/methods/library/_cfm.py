@@ -18,6 +18,18 @@ from sckitflow.core.solvers import BaseSolver, ODESolver
 __all__ = ["CFM"]
 
 
+def _uniform(
+    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    return torch.rand(shape, device=device, dtype=dtype)
+
+
+def _standard_normal(
+    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    return torch.randn(shape, device=device, dtype=dtype)
+
+
 class CFM(GenerativeFlow):
     _module_cls: type[BaseVelocityField] = MLPVelocity
     _default_solver_cls: type[BaseSolver] = ODESolver
@@ -28,9 +40,9 @@ class CFM(GenerativeFlow):
         if self._match_fn is None:
             self._match_fn = independent_coupling
         if self._noise_sampler is None:
-            self._noise_sampler = torch.randn
+            self._noise_sampler = _standard_normal
         if self._time_sampler is None:
-            self._time_sampler = torch.rand
+            self._time_sampler = _uniform
         if self._probability_path is None:
             self._probability_path = LinearDiracProbabilityPath()
 

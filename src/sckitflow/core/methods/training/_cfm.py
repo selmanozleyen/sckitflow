@@ -68,8 +68,8 @@ class CFMTraining(AbstractFlowMethod):
         return loss, {"loss": loss.item()}
 
 
-@component("training_method.cfm", builds=CFMTraining)
-class CFMTrainingConfig(ParamsComponent[AbstractFlowMethodParams], TrainingMethodConfig):
+@component("training_method.cfm")
+class CFMTrainingConfig(ParamsComponent[AbstractFlowMethodParams], TrainingMethodConfig[CFMTraining]):
     """Conditional Flow Matching training."""
 
     def build(self, module: torch.nn.Module) -> CFMTraining:

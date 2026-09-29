@@ -157,8 +157,8 @@ class ODEInference(AbstractFlowMethod):
         return self._n_samples
 
 
-@component("inference_method.ode", builds=ODEInference)
-class ODEInferenceConfig(ParamsComponent[ODEInferenceParams], InferenceMethodConfig):
+@component("inference_method.ode")
+class ODEInferenceConfig(ParamsComponent[ODEInferenceParams], InferenceMethodConfig[ODEInference]):
     """ODE inference over a trained velocity field."""
 
     def build(self, module: torch.nn.Module) -> ODEInference:

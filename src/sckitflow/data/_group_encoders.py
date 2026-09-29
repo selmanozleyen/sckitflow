@@ -6,8 +6,8 @@ value, AND exports a portable ``{type, version, config}`` spec via ``.to_spec()`
 functional encoders, ``inverse_transform``). This replaces the string encoder ids + raw
 ``groups_encoding_transform_fn`` callables, which could not be serialized inside a ``DataManager``.
 
-``GroupEncoderConfig`` is the family base; each config is registered with ``@component(type_id, builds=X)``
-and named ``XConfig`` after the transformer ``X`` it builds. Add a new encoder the same way.
+``GroupEncoderConfig`` is the family base; each config subclasses ``GroupEncoderConfig[X]``, is registered
+with ``@component(type_id)`` and named ``XConfig`` after the transformer ``X`` it builds. Add a new encoder the same way.
 
 The stateful encoders (:class:`LabelEncoderConfig`, :class:`OneHotEncoderConfig`) accept an optional **pinned vocabulary** so a
 serialized config rebuilds the *exact* same mapping instead of re-deriving one from whatever data ``build``
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
-from scfit.registry import Component, component
+from scfit.registry import Builds, Component, component
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder, OneHotEncoder
 
 from sckitflow._types import TargetCovariatesEncoderCls
@@ -52,15 +52,15 @@ class GroupEncoderContext:
     data: np.ndarray
 
 
-class GroupEncoderConfig(Component):
-    """Family base for serializable group encoders. ``build(context)`` returns a fitted transformer."""
+class GroupEncoderConfig[T: TargetCovariatesEncoderCls](Builds[T], Component):
+    """Family base for serializable group encoders. ``build(context)`` returns the fitted transformer ``T``."""
 
-    def build(self, context: GroupEncoderContext) -> TargetCovariatesEncoderCls:
+    def build(self, context: GroupEncoderContext) -> T:
         raise NotImplementedError
 
 
-@component("group_encoder.label", builds=LabelEncoder)
-class LabelEncoderConfig(GroupEncoderConfig):
+@component("group_encoder.label")
+class LabelEncoderConfig(GroupEncoderConfig[LabelEncoder]):
     """Integer-codes a categorical column.
 
     :param classes: Pinned vocabulary. ``None`` derives it from the data at fit time (order is
@@ -77,8 +77,8 @@ class LabelEncoderConfig(GroupEncoderConfig):
         return LabelEncoder().fit(values)
 
 
-@component("group_encoder.one_hot", builds=OneHotEncoder)
-class OneHotEncoderConfig(GroupEncoderConfig):
+@component("group_encoder.one_hot")
+class OneHotEncoderConfig(GroupEncoderConfig[OneHotEncoder]):
     """One-hot encodes a categorical column.
 
     :param categories: Pinned vocabulary. ``None`` derives it from the data at fit time. When set, it fixes
@@ -124,24 +124,24 @@ class AffineTransformer(FunctionTransformer):
         return (x - self.shift) / self.scale
 
 
-@component("group_encoder.identity", builds=IdentityTransformer)
-class IdentityTransformerConfig(GroupEncoderConfig):
+@component("group_encoder.identity")
+class IdentityTransformerConfig(GroupEncoderConfig[IdentityTransformer]):
     """Passes the column through unchanged."""
 
     def build(self, context: GroupEncoderContext) -> IdentityTransformer:
         return IdentityTransformer().fit(context.data)
 
 
-@component("group_encoder.log1p", builds=Log1pTransformer)
-class Log1pTransformerConfig(GroupEncoderConfig):
+@component("group_encoder.log1p")
+class Log1pTransformerConfig(GroupEncoderConfig[Log1pTransformer]):
     """Applies ``log1p`` (inverse ``expm1``) to a continuous column."""
 
     def build(self, context: GroupEncoderContext) -> Log1pTransformer:
         return Log1pTransformer().fit(context.data)
 
 
-@component("group_encoder.affine", builds=AffineTransformer)
-class AffineTransformerConfig(GroupEncoderConfig):
+@component("group_encoder.affine")
+class AffineTransformerConfig(GroupEncoderConfig[AffineTransformer]):
     """Scales and shifts a continuous column (``x * scale + shift``).
 
     :param scale: Multiplicative factor. Defaults to ``1.0``.

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import torch
-from scfit.registry import Component, component
+from scfit.registry import Builds, Component, component
 
 from sckitflow.core.methods._base import InferenceMethodConfig, TrainingMethodConfig
 from sckitflow.data._config import FlowDataModuleConfig
@@ -48,8 +48,8 @@ class Run(NamedTuple):
     plan: TrainingPlan
 
 
-@component("run", builds=Run)
-class RunConfig(Component):
+@component("run")
+class RunConfig(Builds[Run], Component):
     """Everything portable about a run: what ``specs.json`` holds."""
 
     data: FlowDataModuleConfig

@@ -4,7 +4,7 @@ from typing import Annotated, Any, Protocol, TypedDict, Unpack, runtime_checkabl
 import numpy as np
 import torch
 from scfit.params import Default, resolve_init_params
-from scfit.registry import Component
+from scfit.registry import Builds, Component
 
 from sckitflow.core._data_utils import subscript_step_data
 from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
@@ -55,18 +55,18 @@ class SupportsInference(Protocol):
     def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData: ...
 
 
-class TrainingMethodConfig(Component):
-    """Family base for anything that configures a training method."""
+class TrainingMethodConfig[T: SupportsTraining](Builds[T], Component):
+    """Family base for anything that configures a training method; ``T`` is the method it builds."""
 
-    def build(self, module: torch.nn.Module) -> SupportsTraining:
+    def build(self, module: torch.nn.Module) -> T:
         """The training method around ``module``."""
         raise NotImplementedError
 
 
-class InferenceMethodConfig(Component):
-    """Family base for anything that configures an inference method."""
+class InferenceMethodConfig[T: SupportsInference](Builds[T], Component):
+    """Family base for anything that configures an inference method; ``T`` is the method it builds."""
 
-    def build(self, module: torch.nn.Module) -> SupportsInference:
+    def build(self, module: torch.nn.Module) -> T:
         """The inference method around ``module``."""
         raise NotImplementedError
 

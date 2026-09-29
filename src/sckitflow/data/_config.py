@@ -13,7 +13,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 from anndata import AnnData
-from scfit.registry import Component, component
+from scfit.registry import Builds, Component, component
 
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import GroupEncoderConfig
@@ -22,8 +22,8 @@ from sckitflow.data.splitters._base import Splitter
 __all__ = ["FlowDataModuleConfig"]
 
 
-@component("data_module.flow", builds=FlowDataModule)
-class FlowDataModuleConfig(Component):
+@component("data_module.flow")
+class FlowDataModuleConfig(Builds[FlowDataModule], Component):
     """The schema and streaming options a run reads its batches with.
 
     Mirrors :class:`~sckitflow.data.DataManagerKwargs` plus the loader knobs

@@ -29,10 +29,10 @@ __all__ = [
 class ProbabilityPathConfig(Component):
     """Family base for the probability paths.
 
-    :param sigma: The path's noise scale.
+    :param sigma: The path's noise scale. Required, except on the deterministic (Dirac) paths, where it defaults to 0.
     """
 
-    sigma: float = 0.0
+    sigma: float
 
     def build(self) -> BaseProbabilityPath:
         raise NotImplementedError
@@ -41,6 +41,8 @@ class ProbabilityPathConfig(Component):
 @component("probability_path.linear_dirac", builds=LinearDiracProbabilityPath)
 class LinearDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation to a Dirac target. Deterministic."""
+
+    sigma: float = 0.0
 
     def build(self) -> LinearDiracProbabilityPath:
         return LinearDiracProbabilityPath(sigma=self.sigma)
@@ -61,7 +63,7 @@ class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig):
     :param eps: The bridge's entropic regularization.
     """
 
-    eps: float = 1e-3
+    eps: float = 1e-35
 
     def build(self) -> SchrodingerBridgeProbabilityPath:
         return SchrodingerBridgeProbabilityPath(sigma=self.sigma, eps=self.eps)
@@ -70,6 +72,8 @@ class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig):
 @component("probability_path.variance_preserving_dirac", builds=VariancePreservingDiracProbabilityPath)
 class VariancePreservingDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Variance-preserving path to a Dirac target. Deterministic."""
+
+    sigma: float = 0.0
 
     def build(self) -> VariancePreservingDiracProbabilityPath:
         return VariancePreservingDiracProbabilityPath(sigma=self.sigma)

@@ -231,10 +231,11 @@ class FlowDataModule(pl.LightningDataModule):
 
     @classmethod
     def load_from_checkpoint(cls, filepath: str, adata: AnnData | None = None) -> FlowDataModule:
-        """Rebuilds the data module from the schema stored in a Lightning checkpoint."""
-        import torch
+        """Rebuilds the data module from the schema stored in a Lightning checkpoint.
 
-        ckpt = torch.load(filepath, weights_only=False, map_location="cpu")
+        Overrides Lightning's, which rebuilds from saved hyperparameters: the schema here is the state itself.
+        """
+        ckpt = torch.load(filepath, weights_only=True, map_location="cpu")  # plain data, nothing unpickled
         # Lightning files the data module state under its class `__qualname__`.
         try:
             state = ckpt[cls.__qualname__]
@@ -244,8 +245,8 @@ class FlowDataModule(pl.LightningDataModule):
                 "that was not given `datamodule=`."
             ) from e
 
-        dmod = cls(*_schema_from_state(state))
-        dmod.load_state_dict(state)
+        streaming = ("train_split", "n_train_steps", "batch_size", "dtype", "loader_kwargs")
+        dmod = cls(*_schema_from_state(state), **{k: state[k] for k in streaming})
         return dmod if adata is None else dmod.attach(adata)
 
     # ---------------- Accessors ----------------

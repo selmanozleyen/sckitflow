@@ -5,6 +5,7 @@ stepping, the progress bar, device placement, validation cadence, logging,
 checkpointing -- comes from Lightning. This file only says what one step is.
 """
 
+import copy
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -42,7 +43,8 @@ class TrainingPlan(pl.LightningModule):
     :param inference_method: The method used for validation. When `None`, or
         when no metrics are given, validation produces nothing.
     :param metrics: ``{name: torchmetrics.Metric}`` scored on every validation
-        batch. Registered as submodules, so Lightning moves and resets them.
+        batch, with one copy per validation set. Registered as submodules, so
+        Lightning moves them.
     :param val_names: Names of the validation sets, positionally matching the
         ``val_dataloaders`` handed to ``lightning.Trainer``. Lightning
         identifies those by index; metrics are logged under a name.
@@ -74,13 +76,20 @@ class TrainingPlan(pl.LightningModule):
         # Registers the method's parameters with Lightning, which is what makes
         # optimizer wiring, device placement and train/eval mode work.
         self.module = training_method.module
-        # `ModuleDict` so the metrics ride along to the accelerator.
-        self.metrics = torch.nn.ModuleDict(dict(metrics)) if metrics else None
+        self._val_names = list(val_names)
+        # one copy per validation set, so sets are scored apart; `ModuleDict` so they ride along to the accelerator
+        self.metrics = (
+            torch.nn.ModuleDict(
+                {val: torch.nn.ModuleDict({k: copy.deepcopy(m) for k, m in metrics.items()}) for val in self._val_names}
+            )
+            if metrics
+            else None
+        )
+        self._scored: set[str] = set()  # validation sets that saw a batch this epoch
 
         self._optimizer = optimizer
         self._lr_scheduler = lr_scheduler
         self._lr_scheduler_interval = lr_scheduler_interval
-        self._val_names = list(val_names)
         self._pred_transform = pred_transform
         self._target_transform = target_transform
         self._predict_kwargs = {} if predict_kwargs is None else predict_kwargs
@@ -106,16 +115,18 @@ class TrainingPlan(pl.LightningModule):
         if self._target_transform is not None:
             targets = self._target_transform(targets)
 
-        for metric in self.metrics.values():
+        val_name = self._val_names[dataloader_idx]
+        for metric in self.metrics[val_name].values():
             metric.update(torch.as_tensor(preds), torch.as_tensor(targets))
+        self._scored.add(val_name)
 
     def on_validation_epoch_end(self) -> None:
-        if self.metrics is None or self.trainer.sanity_checking:
-            return
-        val_name = self._val_names[0] if self._val_names else "val"
-        for name, metric in self.metrics.items():
-            self.log(f"{val_name}/{name}", metric.compute())
-            metric.reset()
+        scored, self._scored = self._scored, set()
+        for val_name in scored:  # empty unless there are metrics and an inference method
+            for name, metric in self.metrics[val_name].items():  # pyright: ignore[reportOptionalSubscript]
+                if not self.trainer.sanity_checking:
+                    self.log(f"{val_name}/{name}", metric.compute())
+                metric.reset()
 
     def predict_step(self, batch: tuple[StepData, tuple], batch_idx: int, dataloader_idx: int = 0) -> dict[str, Any]:
         """Predicts one group and shapes it for reassembly.

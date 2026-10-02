@@ -2,7 +2,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from scfit.params import ParamsComponent
 from scfit.registry import component
 
 from sckitflow.core._data_utils import (
@@ -10,7 +9,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_train,
 )
 from sckitflow.core._types import StepData
-from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodParams, TrainingMethodConfig
+from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodConfig, TrainingMethodConfig
 
 __all__ = ["CFMTraining", "CFMTrainingConfig"]
 
@@ -22,7 +21,7 @@ class CFMTraining(AbstractFlowMethod):
 
     .. code-block:: python
 
-        method = CFMTraining(module, probability_path=..., time_sampler=...)
+        method = CFMTraining(module, CFMTrainingConfig(probability_path=...))
 
     Passing the same module and configuration to a flow inference method
     (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) gives both
@@ -69,8 +68,8 @@ class CFMTraining(AbstractFlowMethod):
 
 
 @component("training_method.cfm")
-class CFMTrainingConfig(ParamsComponent[AbstractFlowMethodParams], TrainingMethodConfig[CFMTraining]):
+class CFMTrainingConfig(AbstractFlowMethodConfig, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
     def build(self, module: torch.nn.Module) -> CFMTraining:
-        return CFMTraining(module, **self.params)
+        return CFMTraining(module, self)

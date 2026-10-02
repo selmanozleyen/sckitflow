@@ -7,7 +7,7 @@ config holds a seed.
 
 from __future__ import annotations
 
-from scfit.registry import Builds, Component, component
+from scfit.registry import Component, component
 
 from sckitflow.core.probability_paths._probability_paths import (
     BaseProbabilityPath,
@@ -26,21 +26,20 @@ __all__ = [
 ]
 
 
-@component()
-class ProbabilityPathConfig[T: BaseProbabilityPath](Builds[T], Component):
-    """Family base for the probability paths; ``T`` is the path it builds.
+class ProbabilityPathConfig(Component):
+    """Family base for the probability paths.
 
     :param sigma: The path's noise scale.
     """
 
     sigma: float = 0.0
 
-    def build(self) -> T:
+    def build(self) -> BaseProbabilityPath:
         raise NotImplementedError
 
 
 @component("probability_path.linear_dirac")
-class LinearDiracProbabilityPathConfig(ProbabilityPathConfig[LinearDiracProbabilityPath]):
+class LinearDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation to a Dirac target. Deterministic."""
 
     def build(self) -> LinearDiracProbabilityPath:
@@ -48,7 +47,7 @@ class LinearDiracProbabilityPathConfig(ProbabilityPathConfig[LinearDiracProbabil
 
 
 @component("probability_path.linear_gaussian")
-class LinearGaussianProbabilityPathConfig(ProbabilityPathConfig[LinearGaussianProbabilityPath]):
+class LinearGaussianProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation with Gaussian noise."""
 
     def build(self) -> LinearGaussianProbabilityPath:
@@ -56,7 +55,7 @@ class LinearGaussianProbabilityPathConfig(ProbabilityPathConfig[LinearGaussianPr
 
 
 @component("probability_path.schrodinger_bridge")
-class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig[SchrodingerBridgeProbabilityPath]):
+class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig):
     """Schrödinger-bridge path.
 
     :param eps: The bridge's entropic regularization.
@@ -69,7 +68,7 @@ class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig[SchrodingerBr
 
 
 @component("probability_path.variance_preserving_dirac")
-class VariancePreservingDiracProbabilityPathConfig(ProbabilityPathConfig[VariancePreservingDiracProbabilityPath]):
+class VariancePreservingDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Variance-preserving path to a Dirac target. Deterministic."""
 
     def build(self) -> VariancePreservingDiracProbabilityPath:

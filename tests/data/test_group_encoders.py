@@ -69,15 +69,16 @@ class TestPortableSpec:
         assert AffineTransformerConfig(scale=2.0).to_spec() == {
             "type": "group_encoder.affine",
             "version": 1,
-            "config": {"scale": 2.0, "shift": 0.0},
+            "scale": 2.0,
+            "shift": 0.0,
         }
 
     @pytest.mark.parametrize(
         "spec",
         [
-            {"type": "group_encoder.affine", "version": 1, "config": {"scal": 2.0}},  # typo'd field
-            {"type": "group_encoder.nope", "version": 1, "config": {}},  # unknown type
-            {"type": "group_encoder.affine", "version": 99, "config": {}},  # unsupported version
+            {"type": "group_encoder.affine", "version": 1, "scal": 2.0},  # typo'd field
+            {"type": "group_encoder.nope", "version": 1},  # unknown type
+            {"type": "group_encoder.affine", "version": 99},  # unsupported version
         ],
     )
     def test_rejects_bad_spec(self, spec: dict) -> None:

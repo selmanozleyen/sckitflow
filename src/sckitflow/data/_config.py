@@ -7,13 +7,12 @@ pickled :class:`DataManager`. ``build(adata, rng=...)`` returns the ready
 
 from __future__ import annotations
 
-from dataclasses import field
 from typing import Any, Literal
 
 import numpy as np
 import torch
 from anndata import AnnData
-from scfit.registry import Builds, Component, component
+from scfit.registry import Component, component
 
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import GroupEncoderConfig
@@ -23,7 +22,7 @@ __all__ = ["FlowDataModuleConfig"]
 
 
 @component("data_module.flow")
-class FlowDataModuleConfig(Builds[FlowDataModule], Component):
+class FlowDataModuleConfig(Component):
     """The schema and streaming options a run reads its batches with.
 
     Mirrors :class:`~sckitflow.data.DataManagerKwargs` plus the loader knobs
@@ -66,7 +65,7 @@ class FlowDataModuleConfig(Builds[FlowDataModule], Component):
     batch_size: int = 128
     dtype: str = "float32"
     """Name of a ``torch`` dtype, e.g. ``"float32"``. A `torch.dtype` is not JSON."""
-    loader_kwargs: dict[str, Any] = field(default_factory=dict)
+    loader_kwargs: dict[str, Any] = {}
     """Forwarded to every loader. No ``seed``: the schedule is drawn from ``rng``."""
 
     def build(self, adata: AnnData, *, rng: np.random.Generator, splitter: Splitter | None = None) -> FlowDataModule:

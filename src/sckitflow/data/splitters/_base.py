@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scfit.registry import Builds, Component
+from scfit.registry import Component
 
 from sckitflow.data._utils import with_derived_obs
 
@@ -84,9 +84,9 @@ class Splitter:
         return self.split(adata, copy=copy)
 
 
-class SplitterConfig[T: Splitter](Builds[T], Component):
-    """Family base for the splitter configs; ``T`` is the splitter it builds. ``build`` takes the run's split ``rng``."""
+class SplitterConfig(Component):
+    """Family base for the splitter configs. ``build`` takes the run's split ``rng``."""
 
-    def build(self, *, rng: np.random.Generator) -> T:
+    def build(self, *, rng: np.random.Generator) -> Splitter:
         """The splitter, drawing its hold-out choice from ``rng``."""
         raise NotImplementedError

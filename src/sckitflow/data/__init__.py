@@ -8,7 +8,7 @@ from sckitflow.data import containers, schemas, sim, splitters
 from sckitflow.data._config import FlowDataModuleConfig
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data._manager import DataManager, DataManagerKwargs, LoaderKwargs
+from sckitflow.data._manager import DataManager, DataManagerConfig, LoaderKwargs
 from sckitflow.data.splitters import CombinationSplitter, CombinationSplitterConfig, Splitter
 
 __all__ = [
@@ -24,7 +24,7 @@ __all__ = [
     "sim",
     "splitters",
     "DataManager",
-    "DataManagerKwargs",
+    "DataManagerConfig",
     "Loader",
     "EvalLoader",
     "LoaderKwargs",

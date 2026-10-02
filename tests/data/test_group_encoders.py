@@ -16,7 +16,7 @@ from sckitflow.data._group_encoders import (
     OneHotEncoderConfig,
     as_group_encoder,
 )
-from sckitflow.data._manager import DataManager
+from sckitflow.data._manager import DataManagerConfig
 
 ALL_ENCODERS = [
     IdentityTransformerConfig(),
@@ -48,12 +48,14 @@ class TestStringIds:
             as_group_encoder(bad)
 
     def test_datamanager_accepts_strings_and_stores_components(self) -> None:
-        dm = DataManager(groups=("drug", "ko"), groups_encoding={"drug": "one-hot", "ko": LabelEncoderConfig()})
+        dm = DataManagerConfig(
+            groups=("drug", "ko"), groups_encoding={"drug": "one-hot", "ko": LabelEncoderConfig()}
+        ).build()
         assert dm.groups_data_schema.groups_encoders == {"drug": OneHotEncoderConfig(), "ko": LabelEncoderConfig()}
 
     def test_datamanager_rejects_unknown_id(self) -> None:
-        with pytest.raises(ValueError, match="not available"):
-            DataManager(groups=("drug",), groups_encoding={"drug": "functional"})
+        with pytest.raises(ValueError, match="groups_encoding"):
+            DataManagerConfig(groups=("drug",), groups_encoding={"drug": "functional"})
 
 
 class TestPortableSpec:
@@ -127,9 +129,9 @@ class TestSerialization:
         assert pickle.loads(pickle.dumps(encoder)) == encoder
 
     def test_datamanager_round_trips(self) -> None:
-        dm = DataManager(
+        dm = DataManagerConfig(
             groups=("cell_line",), groups_encoding={"cell_line": AffineTransformerConfig(scale=2.0, shift=1.0)}
-        )
+        ).build()
 
         for restored in (pickle.loads(pickle.dumps(dm)), cloudpickle.loads(cloudpickle.dumps(dm))):
             encoder = restored.groups_data_schema.groups_encoders["cell_line"]

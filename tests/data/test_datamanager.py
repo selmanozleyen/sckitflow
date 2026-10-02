@@ -4,7 +4,7 @@ import pytest
 from anndata import AnnData
 from tests.data.shared import with_split
 
-from sckitflow.data._manager import DataManager
+from sckitflow.data._manager import DataManager, DataManagerConfig
 from sckitflow.data.containers._categorical import CategoricalData
 from sckitflow.data.containers._coupling import CouplingData
 from sckitflow.data.containers._distribution import DistributionData
@@ -22,7 +22,10 @@ def _make_manager(**overrides) -> DataManager:
         "groups_reps": {"cell_line": "cell_line"},
     }
     defaults.update(overrides)
-    return DataManager(**defaults)
+    splitter = defaults.pop("splitter", None)
+    if (pairs := defaults.pop("matched_keys", None)) is not None:
+        defaults["matched_pairs"] = tuple(pairs.items())
+    return DataManager(DataManagerConfig(**defaults), splitter=splitter)
 
 
 def _make_manager_with_continuous(**overrides) -> DataManager:

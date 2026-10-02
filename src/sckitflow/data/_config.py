@@ -16,51 +16,22 @@ from pydantic import PositiveInt, field_validator
 from scfit.registry import Component, component
 
 from sckitflow.data._datamodule import FlowDataModule
-from sckitflow.data._group_encoders import GroupEncoderConfig
+from sckitflow.data._manager import DataManagerConfig
 from sckitflow.data.splitters._base import Splitter
 
 __all__ = ["FlowDataModuleConfig"]
 
-_STREAMING = {"train_split", "n_train_steps", "batch_size", "dtype", "loader_kwargs", "matched_pairs"}
-
 
 @component("data_module.flow", builds=FlowDataModule)
 class FlowDataModuleConfig(Component):
-    """The schema and streaming options a run reads its batches with.
-
-    Mirrors :class:`~sckitflow.data.DataManagerKwargs` plus the loader knobs
-    :class:`~sckitflow.data.FlowDataModule` takes. ``matched_keys`` is a
-    mapping over tuples, which JSON cannot key on, so it is given here as
-    ``matched_pairs``, a list of ``(source, target)`` pairs.
+    """The schema and the streaming options a run reads its batches with.
 
     The splitter is not a field: it has its own seed, so the run builds it
     beside this config and passes it to :meth:`build`.
     """
 
-    # --- what each observation is ---
-    sample_rep: str | None = None
-    conditions: dict[str, tuple[str, ...]] | None = None
-    conditions_reps: dict[str, str] | None = None
-    conditions_covariates: tuple[str, ...] | None = None
-    condition_state_key: str | None = None
-    groups: tuple[str, ...] | None = None
-    groups_reps: dict[str, str] | None = None
-    groups_encoding: dict[str, GroupEncoderConfig] | None = None
-    """Per-group encoder, e.g. ``{"g": OneHotEncoderConfig()}``. Write ``LabelEncoderConfig()`` rather than the ``"label"`` shorthand."""
-    target_categorical_covs_dict: dict[str, Literal["label", "one-hot", "functional"]] | None = None
-    target_continuous_covs: tuple[str, ...] | None = None
-
-    # --- which observations flow into which ---
-    control_values_dict: dict[str, str] | None = None
-    matched_pairs: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] | None = None
-    """``[(source key, target key), ...]``, the portable form of ``matched_keys``."""
-
-    # --- which observations are held out ---
-    split_by: str | None = None
-
-    # --- incomparable spaces ---
-    n_shared_dims: int | None = None
-    source_rep: str | None = None
+    manager: DataManagerConfig = DataManagerConfig()
+    """The schema: what each observation is, which flow into which, and which are held out."""
 
     # --- streaming ---
     train_split: str = "train"
@@ -79,21 +50,18 @@ class FlowDataModuleConfig(Component):
         return kwargs
 
     def build(self, adata: AnnData, *, rng: np.random.Generator, splitter: Splitter | None = None) -> FlowDataModule:
-        """Fits the schema on ``adata`` and returns the data module.
+        """Builds the data manager and returns the data module over ``adata``.
 
         :param adata: The `AnnData` to derive dimensionalities from and stream.
         :param rng: The loaders' sampling schedule is seeded from it.
-        :param splitter: Applied to ``adata`` before streaming; exclusive with ``split_by``.
+        :param splitter: Applied to ``adata`` before streaming; exclusive with ``manager.split_by``.
         """
-        # every other field is the DataManager schema; iterating keeps nested configs as instances
-        schema = {k: v for k, v in self if k not in _STREAMING}
-        schema |= {"matched_keys": dict(self.matched_pairs) if self.matched_pairs else None, "splitter": splitter}
         return FlowDataModule.from_adata(
             adata,
+            self.manager.build(splitter=splitter),
             train_split=self.train_split,
             n_train_steps=self.n_train_steps,
             batch_size=self.batch_size,
             dtype=getattr(torch, self.dtype),
             loader_kwargs={**self.loader_kwargs, "seed": int(rng.integers(2**63))},
-            **{k: v for k, v in schema.items() if v is not None},
         )

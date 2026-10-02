@@ -24,10 +24,6 @@ class CFMTraining(AbstractFlowMethod):
     .. code-block:: python
 
         method = CFMTraining(module, CFMTrainingConfig(probability_path=...))
-
-    Passing the same module and configuration to a flow inference method
-    (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) gives both
-    the same probability path, time sampler, noise sampler and module.
     """
 
     def __init__(self, module: torch.nn.Module, config: CFMTrainingConfig | None = None) -> None:

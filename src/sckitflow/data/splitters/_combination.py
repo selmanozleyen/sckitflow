@@ -49,30 +49,23 @@ class CombinationSplitter(Splitter):
         :param rng: generator the hold-out choice is drawn from. Copied on each call, so the split never changes.
         """
         super().__init__(split_key=config.split_key)
-        self._group_keys = config.group_keys
-        self._always_train_keys = config.always_train_keys
-        self._control_key = config.control_key
-        self._control_value = config.control_value
-        self._test_fraction = config.test_fraction
+        self.config = config
         self._rng = rng
-        self._train_label = config.train_label
-        self._test_label = config.test_label
-        self._control_label = config.control_label
 
     def assign(self, adata: AnnData) -> pd.Series:
         """Assigns each observation to train / test / control (see the class docstring for the policy)."""
         obs = adata.obs
-        needed = (*self._group_keys, *((self._control_key,) if self._control_key else ()))
+        needed = (*self.config.group_keys, *((self.config.control_key,) if self.config.control_key else ()))
         for col in needed:
             if col not in obs.columns:
                 raise KeyError(f"{col!r} not found in adata.obs (columns: {list(obs.columns)}).")
 
         is_control = (
-            obs[self._control_key].astype(str).to_numpy() == str(self._control_value)
-            if self._control_key
+            obs[self.config.control_key].astype(str).to_numpy() == str(self.config.control_value)
+            if self.config.control_key
             else np.zeros(len(obs), dtype=bool)
         )
-        gk, atk = list(self._group_keys), list(self._always_train_keys)
+        gk, atk = list(self.config.group_keys), list(self.config.always_train_keys)
         combos = obs.loc[~is_control, gk].astype(str).drop_duplicates()
 
         # Hold out per stratum (each `always_train_keys` value), always leaving >=1 combination in train.
@@ -83,28 +76,28 @@ class CombinationSplitter(Splitter):
         for _, grp in strata:
             rows = list(map(tuple, grp[gk].to_numpy()))
             largest_stratum = max(largest_stratum, len(rows))
-            n_test = min(int(np.floor(self._test_fraction * len(rows))), len(rows) - 1)
+            n_test = min(int(np.floor(self.config.test_fraction * len(rows))), len(rows) - 1)
             if n_test > 0:
                 test_combos.extend(rows[i] for i in np.sort(rng.choice(len(rows), size=n_test, replace=False)))
 
-        if self._test_fraction > 0 and not test_combos:
+        if self.config.test_fraction > 0 and not test_combos:
             # `floor(test_fraction * k)` rounds down to 0 for every small stratum, so a hold-out was asked for
             # and none happened. Silence here reads as "split done" and only surfaces much later, as training
             # with no validation set.
             warnings.warn(
-                f"nothing was held out: with test_fraction={self._test_fraction} a stratum needs at least "
-                f"{int(np.ceil(1 / self._test_fraction))} combinations before floor(test_fraction * k) reaches "
+                f"nothing was held out: with test_fraction={self.config.test_fraction} a stratum needs at least "
+                f"{int(np.ceil(1 / self.config.test_fraction))} combinations before floor(test_fraction * k) reaches "
                 f"1, and the largest stratum here has {largest_stratum}. Every non-control observation is "
-                f"labelled {self._train_label!r}.",
+                f"labelled {self.config.train_label!r}.",
                 UserWarning,
                 stacklevel=2,
             )
 
-        labels = np.full(len(obs), self._train_label, dtype=object)
+        labels = np.full(len(obs), self.config.train_label, dtype=object)
         if test_combos:
             combo_index = pd.MultiIndex.from_arrays([obs[c].astype(str).to_numpy() for c in gk])
-            labels[combo_index.isin(test_combos) & ~is_control] = self._test_label
-        labels[is_control] = self._control_label
+            labels[combo_index.isin(test_combos) & ~is_control] = self.config.test_label
+        labels[is_control] = self.config.control_label
         return pd.Series(labels, index=obs.index, name=self._split_key)
 
 

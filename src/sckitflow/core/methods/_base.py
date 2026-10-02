@@ -138,7 +138,8 @@ class AbstractFlowMethodConfig(Component):
 class AbstractFlowMethod(AbstractMethod):
     """Adds the flow configuration that flow trainers and flow predictors share.
 
-    Its settings come from one config object, an `AbstractFlowMethodConfig` or a subclass of it.
+    Its settings come from one config object, an `AbstractFlowMethodConfig` or a subclass of it. A training
+    and an inference method given the same module and flow settings share the path, samplers and module.
     """
 
     def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig) -> None:

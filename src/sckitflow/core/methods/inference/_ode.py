@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-from pydantic import model_validator
+from pydantic import Field, PositiveInt, model_validator
 from scfit.registry import component
 
 from sckitflow.core._data_utils import (
@@ -30,10 +30,6 @@ class ODEInference(AbstractFlowMethod):
     .. code-block:: python
 
         inference = ODEInference(module, ODEInferenceConfig(probability_path=..., n_steps=50))
-
-    Passing the same module and configuration to a flow training method
-    (e.g. :class:`~sckitflow.core.methods.training.CFMTraining`) gives
-    both the same probability path, time sampler, noise sampler, and module.
     """
 
     def __init__(
@@ -47,20 +43,15 @@ class ODEInference(AbstractFlowMethod):
             from the noise distribution is skipped. It is moved to the batch's
             device and dtype. Live, so not part of the config.
         """
-        config = ODEInferenceConfig() if config is None else config
-        super().__init__(module, config)
-        self._solver_kwargs = dict(config.solver_kwargs)
-        self._return_trajectory = config.return_trajectory
-        self._n_steps = config.n_steps
+        self.config = ODEInferenceConfig() if config is None else config
+        super().__init__(module, self.config)
         self._latent = latent
-        self._n_samples = config.n_samples
 
     def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData:
         """Integrates the ODE and returns the aggregated prediction.
 
-        The dynamics are read through the shared specs: ``self.probability_path``,
-        ``self.time_sampler``, ``self.noise_sampler``, ``self.generate_from_noise``,
-        ``self.module``. Device and dtype come from the batch itself.
+        The dynamics are read from ``self.probability_path``, ``self.noise_sampler``, ``self.module``
+        and ``self.config``. Device and dtype come from the batch itself.
         """
         # ----- 1. Prepare latent (noise) -----
         target_state = step_data["target_state"]
@@ -69,7 +60,7 @@ class ODEInference(AbstractFlowMethod):
                 step_data["source_state"],
                 step_data["target_state"],
                 self.noise_sampler,
-                n_samples=self.n_samples,
+                n_samples=self.config.n_samples,
                 generate_from_noise=self.generate_from_noise,
                 generator=generator,
             )
@@ -94,11 +85,11 @@ class ODEInference(AbstractFlowMethod):
         )
 
         # ----- 5. Configure ODE solver -----
-        solver_kwargs = dict(self.solver_kwargs)
+        solver_kwargs = dict(self.config.solver_kwargs)
         solver_kwargs.setdefault("method", "euler")
         method = solver_kwargs.pop("method")
 
-        time_grid = torch.linspace(0.0, 1.0, steps=self.n_steps, device=latent.device, dtype=latent.dtype)
+        time_grid = torch.linspace(0.0, 1.0, steps=self.config.n_steps, device=latent.device, dtype=latent.dtype)
         solver = ODESolver(
             self.module,
             method=method,
@@ -111,36 +102,20 @@ class ODEInference(AbstractFlowMethod):
             latent,
             time_grid,
             solver_kwargs=solver_kwargs,
-            return_trajectory=self.return_trajectory,
+            return_trajectory=self.config.return_trajectory,
         )
 
         # ----- 7. Aggregate predictions (averaging, reshaping) -----
         X, traj, raw_samples = aggregate_predictions(
             predictions=predictions,
             latent_shape=latent.shape,
-            return_trajectory=self.return_trajectory,
+            return_trajectory=self.config.return_trajectory,
         )
         return PredictionData(X=X, traj=traj, raw_samples=raw_samples)
 
     @property
-    def solver_kwargs(self) -> dict[str, Any]:
-        return self._solver_kwargs
-
-    @property
-    def return_trajectory(self) -> bool:
-        return self._return_trajectory
-
-    @property
-    def n_steps(self) -> int:
-        return self._n_steps
-
-    @property
     def latent(self) -> torch.Tensor | None:
         return self._latent
-
-    @property
-    def n_samples(self) -> int | None:
-        return self._n_samples
 
 
 @component("inference_method.ode", builds=ODEInference)
@@ -151,9 +126,9 @@ class ODEInferenceConfig(AbstractFlowMethodConfig, InferenceMethodConfig):
     """Forwarded to the ODE solver. ``method`` defaults to ``"euler"``."""
     return_trajectory: bool = False
     """Return the whole trajectory instead of only the endpoint."""
-    n_steps: int = 100
-    """Discretization steps for the solver."""
-    n_samples: int | None = None
+    n_steps: int = Field(default=100, ge=2)
+    """Points on the solver's time grid, both ends included."""
+    n_samples: PositiveInt | None = None
     """Samples per batch element. Required when ``generate_from_noise`` is ``True``."""
 
     @model_validator(mode="after")

@@ -12,6 +12,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 from anndata import AnnData
+from pydantic import PositiveInt, field_validator
 from scfit.registry import Component, component
 
 from sckitflow.data._datamodule import FlowDataModule
@@ -19,6 +20,8 @@ from sckitflow.data._group_encoders import GroupEncoderConfig
 from sckitflow.data.splitters._base import Splitter
 
 __all__ = ["FlowDataModuleConfig"]
+
+_STREAMING = {"train_split", "n_train_steps", "batch_size", "dtype", "loader_kwargs", "matched_pairs"}
 
 
 @component("data_module.flow", builds=FlowDataModule)
@@ -61,12 +64,19 @@ class FlowDataModuleConfig(Component):
 
     # --- streaming ---
     train_split: str = "train"
-    n_train_steps: int = 100_000
-    batch_size: int = 128
-    dtype: str = "float32"
-    """Name of a ``torch`` dtype, e.g. ``"float32"``. A `torch.dtype` is not JSON."""
+    n_train_steps: PositiveInt = 100_000
+    batch_size: PositiveInt = 128
+    dtype: Literal["float16", "bfloat16", "float32", "float64"] = "float32"
+    """Name of a ``torch`` dtype. A `torch.dtype` is not JSON."""
     loader_kwargs: dict[str, Any] = {}
     """Forwarded to every loader. No ``seed``: the schedule is drawn from ``rng``."""
+
+    @field_validator("loader_kwargs")
+    @classmethod
+    def _no_seed(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+        if "seed" in kwargs:
+            raise ValueError("loader_kwargs must not set `seed`; the schedule is drawn from `rng`.")
+        return kwargs
 
     def build(self, adata: AnnData, *, rng: np.random.Generator, splitter: Splitter | None = None) -> FlowDataModule:
         """Fits the schema on ``adata`` and returns the data module.
@@ -75,26 +85,9 @@ class FlowDataModuleConfig(Component):
         :param rng: The loaders' sampling schedule is seeded from it.
         :param splitter: Applied to ``adata`` before streaming; exclusive with ``split_by``.
         """
-        if "seed" in self.loader_kwargs:
-            raise ValueError("loader_kwargs must not set `seed`; the schedule is drawn from `rng`.")
-        schema = {
-            "sample_rep": self.sample_rep,
-            "conditions": self.conditions,
-            "conditions_reps": self.conditions_reps,
-            "conditions_covariates": self.conditions_covariates,
-            "condition_state_key": self.condition_state_key,
-            "groups": self.groups,
-            "groups_reps": self.groups_reps,
-            "groups_encoding": self.groups_encoding,
-            "target_categorical_covs_dict": self.target_categorical_covs_dict,
-            "target_continuous_covs": self.target_continuous_covs,
-            "control_values_dict": self.control_values_dict,
-            "matched_keys": dict(self.matched_pairs) if self.matched_pairs else None,
-            "split_by": self.split_by,
-            "splitter": splitter,
-            "n_shared_dims": self.n_shared_dims,
-            "source_rep": self.source_rep,
-        }
+        # every other field is the DataManager schema; iterating keeps nested configs as instances
+        schema = {k: v for k, v in self if k not in _STREAMING}
+        schema |= {"matched_keys": dict(self.matched_pairs) if self.matched_pairs else None, "splitter": splitter}
         return FlowDataModule.from_adata(
             adata,
             train_split=self.train_split,

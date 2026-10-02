@@ -7,9 +7,7 @@ config holds a seed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from scfit.registry import Component
+from scfit.registry import Component, component
 
 from sckitflow.core.probability_paths._probability_paths import (
     BaseProbabilityPath,
@@ -21,62 +19,61 @@ from sckitflow.core.probability_paths._probability_paths import (
 
 __all__ = [
     "ProbabilityPathConfig",
-    "LinearDiracConfig",
-    "LinearGaussianConfig",
-    "SchrodingerBridgeConfig",
-    "VariancePreservingDiracConfig",
+    "LinearDiracProbabilityPathConfig",
+    "LinearGaussianProbabilityPathConfig",
+    "SchrodingerBridgeProbabilityPathConfig",
+    "VariancePreservingDiracProbabilityPathConfig",
 ]
 
 
-# No `type_id`: the family base stays unregistered so it can be the `expected`
-# family in `ProbabilityPathConfig.from_spec(spec)`.
-@dataclass(frozen=True)
 class ProbabilityPathConfig(Component):
     """Family base for the probability paths.
 
-    :param sigma: The path's noise scale.
+    :param sigma: The path's noise scale. Required, except on the deterministic (Dirac) paths, where it defaults to 0.
     """
 
-    sigma: float = 0.0
+    sigma: float
 
-    def build(self, context: None = None) -> BaseProbabilityPath:
+    def build(self) -> BaseProbabilityPath:
         raise NotImplementedError
 
 
-@dataclass(frozen=True)
-class LinearDiracConfig(ProbabilityPathConfig, type_id="probability_path.linear_dirac", version=1):
+@component("probability_path.linear_dirac", builds=LinearDiracProbabilityPath)
+class LinearDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation to a Dirac target. Deterministic."""
 
-    def build(self, context: None = None) -> LinearDiracProbabilityPath:
+    sigma: float = 0.0
+
+    def build(self) -> LinearDiracProbabilityPath:
         return LinearDiracProbabilityPath(sigma=self.sigma)
 
 
-@dataclass(frozen=True)
-class LinearGaussianConfig(ProbabilityPathConfig, type_id="probability_path.linear_gaussian", version=1):
+@component("probability_path.linear_gaussian", builds=LinearGaussianProbabilityPath)
+class LinearGaussianProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation with Gaussian noise."""
 
-    def build(self, context: None = None) -> LinearGaussianProbabilityPath:
+    def build(self) -> LinearGaussianProbabilityPath:
         return LinearGaussianProbabilityPath(sigma=self.sigma)
 
 
-@dataclass(frozen=True)
-class SchrodingerBridgeConfig(ProbabilityPathConfig, type_id="probability_path.schrodinger_bridge", version=1):
+@component("probability_path.schrodinger_bridge", builds=SchrodingerBridgeProbabilityPath)
+class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig):
     """Schrödinger-bridge path.
 
     :param eps: The bridge's entropic regularization.
     """
 
-    eps: float = 1e-3
+    eps: float = 1e-35
 
-    def build(self, context: None = None) -> SchrodingerBridgeProbabilityPath:
+    def build(self) -> SchrodingerBridgeProbabilityPath:
         return SchrodingerBridgeProbabilityPath(sigma=self.sigma, eps=self.eps)
 
 
-@dataclass(frozen=True)
-class VariancePreservingDiracConfig(
-    ProbabilityPathConfig, type_id="probability_path.variance_preserving_dirac", version=1
-):
+@component("probability_path.variance_preserving_dirac", builds=VariancePreservingDiracProbabilityPath)
+class VariancePreservingDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Variance-preserving path to a Dirac target. Deterministic."""
 
-    def build(self, context: None = None) -> VariancePreservingDiracProbabilityPath:
+    sigma: float = 0.0
+
+    def build(self) -> VariancePreservingDiracProbabilityPath:
         return VariancePreservingDiracProbabilityPath(sigma=self.sigma)

@@ -5,9 +5,6 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
-from sckitflow.core.methods._opt import OptimizationManager
-from sckitflow.trainer._callbacks import ComputationalCallback, LoggingCallback
-from sckitflow.trainer._trainer import Trainer
 
 from sckitflow.core.methods._base import (
     BaseInferenceProtocol,
@@ -18,7 +15,10 @@ from sckitflow.core.methods._base import (
     SupportsProtocol,
     SupportsTraining,
 )
+from sckitflow.core.methods._opt import OptimizationManager
 from sckitflow.core.nn._modules import BaseModule
+from sckitflow.trainer._callbacks import ComputationalCallback, LoggingCallback
+from sckitflow.trainer._trainer import Trainer
 
 
 # -----------------------------------------------------------------------------

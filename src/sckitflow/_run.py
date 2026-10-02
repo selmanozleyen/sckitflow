@@ -1,18 +1,16 @@
-"""Saving and loading a run as config plus weights.
+"""Saving and loading a run as its spec plus weights.
 
-A run is three things -- the data schema, the methods, and the learned
-parameters -- and each is stored as what it is: the first two as portable
-`scfit.registry` specs in ``specs.json``, the third as a plain
-``state_dict`` in ``weights.pt``. Nothing is pickled, so a saved run survives
-our own classes being renamed, and the specs are readable without loading
-torch at all.
+A run is a :class:`RunConfig`, the data schema, the methods and the three seeds, plus the learned
+parameters. ``specs.json`` holds ``RunConfig.to_spec()``, ``weights.pt`` a plain ``state_dict``.
+Nothing is pickled, so a saved run survives our own classes being renamed.
 
-The neural module is supplied by the caller on load, the same way every
-`Component.build` takes its runtime dependency as ``context``:
+The run's seeds live on the spec and nowhere else, one per consumer of randomness.
+The neural module is supplied on load:
 
 .. code-block:: python
 
-    save_run("run", data_config=data_cfg, method_configs={"training": tcfg}, module=module)
+    spec = RunConfig(data=FlowDataModuleConfig(...), training=CFMTrainingConfig(), loader_seed=0)
+    save_run("run", spec, module)
 
     dmod, plan = load_run("run", adata, module=MLPVelocity(...))
 """
@@ -20,14 +18,16 @@ The neural module is supplied by the caller on load, the same way every
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, NamedTuple
 
+import numpy as np
 import torch
-from scfit.registry import Component, parse
+from scfit.registry import Component, component
 
-from sckitflow.data._config import FlowDataConfig
+from sckitflow.core.methods._base import InferenceMethodConfig, TrainingMethodConfig
+from sckitflow.data._config import FlowDataModuleConfig
+from sckitflow.data.splitters._base import SplitterConfig
 from sckitflow.trainer._plan import TrainingPlan
 
 if TYPE_CHECKING:
@@ -35,32 +35,56 @@ if TYPE_CHECKING:
 
     from sckitflow.data._datamodule import FlowDataModule
 
-__all__ = ["save_run", "load_run"]
+__all__ = ["Run", "RunConfig", "save_run", "load_run"]
 
 SPECS_NAME = "specs.json"
 WEIGHTS_NAME = "weights.pt"
 
 
-def save_run(
-    path: str | Path,
-    *,
-    data_config: FlowDataConfig,
-    method_configs: Mapping[str, Component],
-    module: torch.nn.Module,
-    allow_overwrite: bool = False,
-) -> None:
-    """Writes a run to ``path`` as a directory of specs plus weights.
+class Run(NamedTuple):
+    """A built run: its data module and its plan."""
 
-    :param path: Directory to write into; created if absent.
-    :param data_config: The schema and streaming options.
-    :param method_configs: ``{name: Component}``, e.g.
-        ``{"training": CFMConfig(), "inference": ODEConfig(n_steps=50)}``.
-        ``"training"`` and ``"inference"`` are the names :func:`load_run` reads.
-    :param module: The trained module; its ``state_dict`` is what gets stored.
-    :param allow_overwrite: Whether to replace existing files.
+    datamodule: FlowDataModule
+    plan: TrainingPlan
+
+
+@component("run", builds=Run)
+class RunConfig(Component):
+    """Everything portable about a run: what ``specs.json`` holds."""
+
+    data: FlowDataModuleConfig
+    training: TrainingMethodConfig
+    inference: InferenceMethodConfig | None = None
+    splitter: SplitterConfig | None = None
+    """Derives the split. ``None`` reads it from ``data.split_by`` instead."""
+    loader_seed: int = 0
+    """Seeds the loaders' sampling schedule."""
+    splitter_seed: int = 0
+    """Seeds the split, so retraining with another ``loader_seed`` keeps it."""
+    method_seed: int = 0
+    """Seeds every time, noise and coupling draw of training, validation and prediction."""
+
+    def build(self, adata: AnnData, module: torch.nn.Module, *, optimizer: torch.optim.Optimizer | None = None) -> Run:
+        """The data module over ``adata`` and a plan over ``module``."""
+        splitter = (
+            self.splitter.build(rng=np.random.default_rng(self.splitter_seed)) if self.splitter is not None else None
+        )
+        datamodule = self.data.build(adata, rng=np.random.default_rng(self.loader_seed), splitter=splitter)
+        plan = TrainingPlan(
+            self.training.build(module),
+            optimizer,
+            inference_method=self.inference.build(module) if self.inference is not None else None,
+            val_names=datamodule.val_names,
+            seed=self.method_seed,
+        )
+        return Run(datamodule, plan)
+
+
+def save_run(path: str | Path, spec: RunConfig, module: torch.nn.Module, *, allow_overwrite: bool = False) -> None:
+    """Writes ``spec`` and the weights of ``module`` to the directory ``path``.
+
     :raises FileExistsError: If files exist and `allow_overwrite` is `False`.
-    :raises scfit.registry.PortabilityError: If a config holds a live object,
-        raised before anything is written.
+    :raises scfit.registry.PortabilityError: If the spec holds a live object, before anything is written.
     """
     out = Path(path)
     specs_path, weights_path = out / SPECS_NAME, out / WEIGHTS_NAME
@@ -68,17 +92,9 @@ def save_run(
         for existing in (specs_path, weights_path):
             if existing.exists():
                 raise FileExistsError(f"{existing} already exists. Use allow_overwrite=True.")
-
-    # Build the whole document first: a config holding a live object must fail
-    # before any file is touched.
-    document = {
-        "format_version": 1,
-        "data": data_config.to_spec(),
-        "methods": {name: cfg.to_spec() for name, cfg in method_configs.items()},
-    }
-
+    document = json.dumps(spec.to_spec(), indent=2)  # fails on a live object before any file is touched
     out.mkdir(parents=True, exist_ok=True)
-    specs_path.write_text(json.dumps(document, indent=2))
+    specs_path.write_text(document)
     torch.save(module.state_dict(), weights_path)
 
 
@@ -89,35 +105,14 @@ def load_run(
     *,
     optimizer: torch.optim.Optimizer | None = None,
     map_location: str | None = "cpu",
-) -> tuple[FlowDataModule, TrainingPlan]:
+) -> Run:
     """Rebuilds a run from ``path``: the data module, and a plan over ``module``.
 
-    :param path: Directory written by :func:`save_run`.
-    :param adata: The data to attach; the schema comes from the saved spec, so
-        it is *not* re-derived from this.
-    :param module: A freshly built module of the right shape, e.g.
-        ``MLPVelocity(dmod.data_dims.state_dim)``. Its weights are overwritten
-        from ``weights.pt``.
+    :param adata: The data to attach; the schema comes from the saved spec, not from this.
+    :param module: A freshly built module of the right shape; its weights are loaded from ``weights.pt``.
     :param optimizer: Optional; omit for a run you only mean to predict with.
-    :param map_location: Forwarded to `torch.load`.
-    :return: ``(datamodule, plan)``.
     """
     src = Path(path)
-    document = json.loads((src / SPECS_NAME).read_text())
-
-    datamodule = parse(document["data"]).build(adata)
+    spec = RunConfig.from_spec(json.loads((src / SPECS_NAME).read_text()))
     module.load_state_dict(torch.load(src / WEIGHTS_NAME, map_location=map_location))
-
-    methods: dict[str, Any] = {name: parse(spec).build(module) for name, spec in document["methods"].items()}
-    try:
-        training_method = methods["training"]
-    except KeyError as e:
-        raise KeyError(f"{src / SPECS_NAME} has no 'training' method spec; found {sorted(methods)}.") from e
-
-    plan = TrainingPlan(
-        training_method,
-        optimizer,
-        inference_method=methods.get("inference"),
-        val_names=datamodule.val_names,
-    )
-    return datamodule, plan
+    return spec.build(adata, module, optimizer=optimizer)

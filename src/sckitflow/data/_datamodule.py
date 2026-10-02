@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Unpack
+from typing import TYPE_CHECKING, Any
 
 import cloudpickle
 import lightning.pytorch as pl
@@ -11,7 +11,7 @@ import torch
 from anndata import AnnData
 
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data._manager import DataManager, DataManagerKwargs
+from sckitflow.data._manager import DataManager
 
 if TYPE_CHECKING:
     from sckitflow.data._loader import EvalLoader, Loader
@@ -30,7 +30,8 @@ class FlowDataModule(pl.LightningDataModule):
 
     .. code-block:: python
 
-        dmod = FlowDataModule.from_adata(adata, conditions=..., groups=..., split_by="split")
+        dm = DataManagerConfig(conditions=..., groups=..., split_by="split").build()
+        dmod = FlowDataModule.from_adata(adata, dm)
         module = MLPVelocity(dmod.data_dims.state_dim)
         plan = TrainingPlan(CFMTraining(module=module), torch.optim.Adam(module.parameters()))
         pl.Trainer(max_steps=1000).fit(plan, datamodule=dmod)
@@ -90,6 +91,7 @@ class FlowDataModule(pl.LightningDataModule):
     def from_adata(
         cls,
         adata: AnnData,
+        dm: DataManager,
         *,
         control_adata: AnnData | None = None,
         train_split: str = "train",
@@ -97,14 +99,12 @@ class FlowDataModule(pl.LightningDataModule):
         batch_size: int = 128,
         dtype: torch.dtype = torch.float32,
         loader_kwargs: LoaderKwargs | None = None,
-        **dm_kwargs: Unpack[DataManagerKwargs],
     ) -> FlowDataModule:
-        """Fits the schema on ``adata`` and derives the data dimensionalities.
+        """Derives the data dimensionalities of ``adata`` under ``dm``'s schema.
 
         Any preprocessing of the state representation must already have been
         applied by the caller.
         """
-        dm = DataManager(**dm_kwargs)
         return cls(
             dm,
             dm.get_data_dimensionalities(adata),

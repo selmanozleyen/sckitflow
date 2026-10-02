@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np
 import torch
-from scfit.params import ParamsComponent
 from scfit.registry import component
 
 from sckitflow.core._data_utils import (
@@ -10,7 +11,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_train,
 )
 from sckitflow.core._types import StepData
-from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodParams, TrainingMethodConfig
+from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodConfig, TrainingMethodConfig
 
 __all__ = ["CFMTraining", "CFMTrainingConfig"]
 
@@ -22,12 +23,12 @@ class CFMTraining(AbstractFlowMethod):
 
     .. code-block:: python
 
-        method = CFMTraining(module, probability_path=..., time_sampler=...)
-
-    Passing the same module and configuration to a flow inference method
-    (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) gives both
-    the same probability path, time sampler, noise sampler and module.
+        method = CFMTraining(module, CFMTrainingConfig(probability_path=...))
     """
+
+    def __init__(self, module: torch.nn.Module, config: CFMTrainingConfig | None = None) -> None:
+        """:param config: The flow settings; ``None`` takes every default."""
+        super().__init__(module, CFMTrainingConfig() if config is None else config)
 
     def compute_loss(
         self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
@@ -68,9 +69,9 @@ class CFMTraining(AbstractFlowMethod):
         return loss, {"loss": loss.item()}
 
 
-@component("training_method.cfm")
-class CFMTrainingConfig(ParamsComponent[AbstractFlowMethodParams], TrainingMethodConfig[CFMTraining]):
+@component("training_method.cfm", builds=CFMTraining)
+class CFMTrainingConfig(AbstractFlowMethodConfig, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
     def build(self, module: torch.nn.Module) -> CFMTraining:
-        return CFMTraining(module, **self.params)
+        return CFMTraining(module, self)

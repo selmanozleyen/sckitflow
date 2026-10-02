@@ -1,5 +1,6 @@
 from sckitflow.core.methods._base import (
     AbstractFlowMethod,
+    AbstractFlowMethodConfig,
     AbstractMethod,
     BaseMatcher,
     InferenceMethodConfig,
@@ -9,7 +10,7 @@ from sckitflow.core.methods._base import (
     SupportsTraining,
     TrainingMethodConfig,
 )
-from sckitflow.core.methods.inference._ode import ODEInference, ODEInferenceConfig, ODEInferenceParams
+from sckitflow.core.methods.inference._ode import ODEInference, ODEInferenceConfig
 from sckitflow.core.methods.training._cfm import CFMTraining, CFMTrainingConfig
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "SupportsInference",
     "AbstractMethod",
     "AbstractFlowMethod",
+    "AbstractFlowMethodConfig",
     "BaseMatcher",
     "Matcher",
     "MatchedTrainingMethod",
@@ -26,5 +28,4 @@ __all__ = [
     "InferenceMethodConfig",
     "CFMTrainingConfig",
     "ODEInferenceConfig",
-    "ODEInferenceParams",
 ]

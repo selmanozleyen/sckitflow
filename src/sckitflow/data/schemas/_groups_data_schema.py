@@ -36,7 +36,7 @@ class GroupsDataSchema(StrictDataSchema):
 
         :param groups_encoding: Dictionary mapping each group column to a
             :class:`~sckitflow.data._group_encoders.GroupEncoderConfig` (e.g. ``OneHotEncoderConfig()``, ``LabelEncoderConfig()``,
-            ``AffineTransformerConfig(scale=2.0)``). Encoders are frozen dataclasses that build their fitted
+            ``AffineTransformerConfig(scale=2.0)``). Encoders are frozen configs that build their fitted
             transformer on demand, so they carry no callables and stay serializable. The string ids
             ``"label"`` / ``"one-hot"`` are also accepted as shorthand for the parameter-free encoders and
             are coerced to components here; pass an instance for anything parameterized. Defaults to `None`.

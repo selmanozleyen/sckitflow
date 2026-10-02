@@ -15,7 +15,7 @@ from anndata import AnnData
 from tqdm import tqdm
 
 from sckitflow._types import PredictionData
-from sckitflow.core._types import StepData, TMatchFn
+from sckitflow.core._types import MatchFn, StepData
 from sckitflow.core.methods import INFERENCE_PROTOCOLS_REGISTRY, TRAINING_PROTOCOLS_REGISTRY
 from sckitflow.core.methods._base import (
     FlowSpecs,
@@ -26,7 +26,7 @@ from sckitflow.core.methods._base import (
 )
 from sckitflow.core.methods._opt import OptimConfig, OptimizationManager
 from sckitflow.core.nn._modules import BaseModule
-from sckitflow.data._dims_registry import DataDimensionalitiesRegistry
+from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerKwargs
 from sckitflow.trainer._callbacks import BaseCallback, TrainingCallbacks
 from sckitflow.trainer._trainer import Trainer
@@ -42,14 +42,14 @@ __all__ = ["Model", "ModelBuilder"]
 def _build_module(
     module: BaseModule | None = None,
     module_cls: type[BaseModule] | None = None,
-    data_dims: DataDimensionalitiesRegistry | None = None,
+    data_dims: DataDimensions | None = None,
     module_kwargs: dict[str, Any] | None = None,
 ) -> BaseModule:
     """Returns an instantiated module from the given inputs.
 
     Resolution order:
     1. `module` is returned as-is.
-    2. `module_cls` is instantiated via its `init_from_dims_registry`
+    2. `module_cls` is instantiated via its `init_from_data_dims`
        classmethod, using `data_dims` and `module_kwargs`.
     3. Otherwise, a `ValueError` is raised.
     """
@@ -60,7 +60,7 @@ def _build_module(
         if data_dims is None:
             raise ValueError("When initializing the module with `module_cls`, `data_dims` should be provided.")
         module_kwargs = {} if module_kwargs is None else module_kwargs
-        return module_cls.init_from_dims_registry(data_dims, **module_kwargs)
+        return module_cls.init_from_data_dims(data_dims, **module_kwargs)
 
     raise ValueError("At least one of `module` or `module_cls` must be passed.")
 
@@ -190,7 +190,7 @@ def _build_protocol(
 
 def _get_matched_protocol(
     training_protocol: SupportsTraining,
-    match_fn: TMatchFn | None = None,
+    match_fn: MatchFn | None = None,
 ) -> SupportsTraining:
     """Wrap `training_protocol` with `match_fn` when one is provided.
 
@@ -267,7 +267,7 @@ class ModelKwargs(TypedDict, total=False):
     inference_protocol_cls: type[SupportsInference] | None
     inference_protocol_id: str | None
     inference_protocol_kwargs: dict[str, Any] | None
-    match_fn: TMatchFn | None
+    match_fn: MatchFn | None
 
 
 class ModelBuilder:
@@ -327,9 +327,7 @@ class ModelBuilder:
 
 
 class Model:
-    def __init__(
-        self, dm: DataManager, data_dims: DataDimensionalitiesRegistry, **model_kwargs: Unpack[ModelKwargs]
-    ) -> None:
+    def __init__(self, dm: DataManager, data_dims: DataDimensions, **model_kwargs: Unpack[ModelKwargs]) -> None:
         """Initialize a model from a fitted data manager and its dimensionalities.
 
         Usually constructed through :class:`ModelBuilder` rather than directly.
@@ -338,7 +336,7 @@ class Model:
         :type dm: class: `DataManager`
 
         :param data_dims: The data dimensionalities derived from the registration data.
-        :type data_dims: class: `DataDimensionalitiesRegistry`
+        :type data_dims: class: `DataDimensions`
 
         :param model_kwargs: Module and protocol configuration; see
             :class:`ModelKwargs` for the accepted options.
@@ -351,7 +349,7 @@ class Model:
         self._module: BaseModule = _build_module(
             module=model_kwargs.get("module"),
             module_cls=model_kwargs.get("module_cls"),
-            data_dims=self._dims_registry,
+            data_dims=self._data_dims,
             module_kwargs=model_kwargs.get("module_kwargs"),
         )
 
@@ -585,7 +583,7 @@ class Model:
         inference_protocol_cls: type[SupportsInference] | None = None,
         inference_protocol_id: str | None = None,
         inference_protocol_kwargs: dict[str, Any] | None = None,
-        match_fn: TMatchFn | None = None,
+        match_fn: MatchFn | None = None,
         train_split: str = "train",
         control_adata: AnnData | None = None,
         callbacks: TrainingCallbacks | Sequence[BaseCallback] | None = None,

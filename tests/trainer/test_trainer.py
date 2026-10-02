@@ -31,7 +31,7 @@ class DummyModule(BaseModule):
         super().__init__()
         self.linear = torch.nn.Linear(2, 2)
 
-    def _make_modules(self, dims_registry=None, *args, **kwargs):
+    def _make_modules(self, data_dims=None, *args, **kwargs):
         # BaseModule may call this during setup; keep it a no-op.
         pass
 
@@ -81,7 +81,17 @@ class DummyInferenceProtocol(BaseInferenceProtocol):
     """Concrete inference protocol: returns a `PredictionData` with `.X`."""
 
     def predict(self, step_data, *args, **kwargs):
-        return DummyPredictionData(np.random.randn(10, 5), traj=None, raw_samples=None)
+        rng = np.random.default_rng(0)
+        return DummyPredictionData(
+            rng.standard_normal(
+                (
+                    10,
+                    5,
+                )
+            ),
+            traj=None,
+            raw_samples=None,
+        )
 
 
 # Module-level so `cloudpickle` can serialize it (not needed for these tests, but

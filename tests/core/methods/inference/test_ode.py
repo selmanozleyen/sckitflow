@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from sckitflow.core._types import PredictionData
-from sckitflow.core.methods._base import FlowSpecs
+from sckitflow.core.methods._base import FlowSpecs, _standard_normal
 from sckitflow.core.methods.inference._ode import ODEInference
 
 # Adjust the module path above to wherever ODEInference lives.
@@ -89,7 +89,7 @@ def test_init_stores_flow_specs_and_extras(make_inference, dummy_module):
     assert inference.device_id == "cpu"
     assert inference.dtype == torch.float32
     assert inference.generate_from_noise is False
-    assert inference.noise_sampler is torch.randn
+    assert inference.noise_sampler is _standard_normal
 
     # Extras
     assert inference.solver_kwargs == {"rtol": 1e-5}

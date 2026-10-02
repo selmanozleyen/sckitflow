@@ -117,6 +117,18 @@ class ProtocolSpecs:
         return self._device_id
 
 
+def _uniform(
+    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    return torch.rand(shape, device=device, dtype=dtype)
+
+
+def _standard_normal(
+    shape: tuple[int, ...], *, device: torch.types.Device = None, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    return torch.randn(shape, device=device, dtype=dtype)
+
+
 class FlowSpecs(ProtocolSpecs):
     """Store for the flow specifications.
 
@@ -130,8 +142,8 @@ class FlowSpecs(ProtocolSpecs):
         self,
         module: BaseModule,
         probability_path: BaseProbabilityPath | None = None,
-        time_sampler: TTimeSamplerFn | None = None,
-        noise_sampler: TNoiseSamplerFn | None = None,
+        time_sampler: SamplerFn | None = None,
+        noise_sampler: SamplerFn | None = None,
         generate_from_noise: bool = False,
         dtype: torch.dtype | None = None,
         device_id: str | None = None,
@@ -142,9 +154,9 @@ class FlowSpecs(ProtocolSpecs):
         :param probability_path: Optional `BaseProbabilityPath`. Defaults to a
             `LinearDiracProbabilityPath`.
         :param time_sampler: Optional callable sampling times in [0, 1].
-            Defaults to `torch.rand`.
+            Defaults to uniform samples via `torch.rand`.
         :param noise_sampler: Optional callable sampling source noise.
-            Defaults to `torch.randn`.
+            Defaults to a standard normal via `torch.randn`.
         :param generate_from_noise: When `True`, interpolation starts from the
             noise distribution even if source states are present (source
             information is passed as extra conditioning instead).
@@ -154,8 +166,8 @@ class FlowSpecs(ProtocolSpecs):
         super().__init__(module, dtype=dtype, device_id=device_id)
 
         self._probability_path = LinearDiracProbabilityPath() if probability_path is None else probability_path
-        self._noise_sampler = torch.randn if noise_sampler is None else noise_sampler
-        self._time_sampler = torch.rand if time_sampler is None else time_sampler
+        self._noise_sampler = _standard_normal if noise_sampler is None else noise_sampler
+        self._time_sampler = _uniform if time_sampler is None else time_sampler
         self._generate_from_noise = generate_from_noise
 
     @property
@@ -163,11 +175,11 @@ class FlowSpecs(ProtocolSpecs):
         return self._probability_path
 
     @property
-    def noise_sampler(self) -> TNoiseSamplerFn | None:
+    def noise_sampler(self) -> SamplerFn | None:
         return self._noise_sampler
 
     @property
-    def time_sampler(self) -> TTimeSamplerFn:
+    def time_sampler(self) -> SamplerFn:
         return self._time_sampler
 
     @property
@@ -217,11 +229,11 @@ class _FlowSpecsHolder(_SpecsHolder[FlowSpecs]):
         return self._specs.probability_path
 
     @property
-    def time_sampler(self) -> TTimeSamplerFn:
+    def time_sampler(self) -> SamplerFn:
         return self._specs.time_sampler
 
     @property
-    def noise_sampler(self) -> TNoiseSamplerFn | None:
+    def noise_sampler(self) -> SamplerFn | None:
         return self._specs.noise_sampler
 
     @property
@@ -268,10 +280,10 @@ class BaseMatchingProtocol(abc.ABC):
     Stores the `match_fn` callable used to match source and target populations.
     """
 
-    def __init__(self, match_fn: TMatchFn) -> None:
+    def __init__(self, match_fn: MatchFn) -> None:
         """Initializes the matching protocol.
 
-        :param match_fn: A callable satisfying `TMatchFn`, used to match source
+        :param match_fn: A callable satisfying `MatchFn`, used to match source
             and target populations from a batch of data.
         """
         self._match_fn = match_fn
@@ -280,7 +292,7 @@ class BaseMatchingProtocol(abc.ABC):
     def match(self, step_data: StepData) -> StepData: ...
 
     @property
-    def match_fn(self) -> TMatchFn:
+    def match_fn(self) -> MatchFn:
         return self._match_fn
 
 
@@ -396,11 +408,11 @@ class MatchedTrainingProtocol(TrainingProtocolWrapper):
     been matched by an internal `MatchingProtocol`.
     """
 
-    def __init__(self, protocol: SupportsTraining, match_fn: TMatchFn) -> None:
+    def __init__(self, protocol: SupportsTraining, match_fn: MatchFn) -> None:
         """Initializes the matched training protocol.
 
         :param protocol: The training protocol to wrap around.
-        :param match_fn: The matching function satisfying `TMatchFn`.
+        :param match_fn: The matching function satisfying `MatchFn`.
         """
         super().__init__(protocol)
         self._matcher = MatchingProtocol(match_fn)

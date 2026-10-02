@@ -19,13 +19,15 @@ from sckitflow.core.methods._base import (
     SupportsInference,
     SupportsProtocol,
     SupportsTraining,
+    _standard_normal,
+    _uniform,
 )
 from sckitflow.core.nn._modules import BaseModule
 from sckitflow.data._manager import DataManager
 
 
 # -----------------------------------------------------------------------------
-# Dummy module: picklable, exposes `n_features`, supports `init_from_dims_registry`,
+# Dummy module: picklable, exposes `n_features`, supports `init_from_data_dims`,
 # and implements `_make_modules` (abstract in `BaseModule`).
 # -----------------------------------------------------------------------------
 class DummyModule(BaseModule):
@@ -38,9 +40,9 @@ class DummyModule(BaseModule):
         pass
 
     @classmethod
-    def init_from_dims_registry(cls, dims_registry, n_features=None, **kwargs):
+    def init_from_data_dims(cls, data_dims, n_features=None, **kwargs):
         if n_features is None:
-            n_features = len(dims_registry.feature_names)
+            n_features = len(data_dims.feature_names)
         return cls(n_features=n_features)
 
     def forward(self, *args, **kwargs):
@@ -93,12 +95,12 @@ class DummyInferenceProtocol(BaseInferenceProtocol):
 # them picklable for `Model.save`.
 # -----------------------------------------------------------------------------
 def dummy_time_sampler(shape, device=None, dtype=None):
-    """Valid `TTimeSamplerFn`; returns uniform values in [0, 1)."""
+    """Valid `SamplerFn`; returns uniform values in [0, 1)."""
     return torch.rand(shape, device=device, dtype=dtype)
 
 
 def dummy_noise_sampler(shape, device=None, dtype=None):
-    """Valid `TNoiseSamplerFn`; returns standard-normal samples."""
+    """Valid `SamplerFn`; returns standard-normal samples."""
     return torch.randn(shape, device=device, dtype=dtype)
 
 
@@ -121,7 +123,13 @@ def other_match_fn(source_lin=None, target_lin=None, source_quad=None, target_qu
 # -----------------------------------------------------------------------------
 def _add_continuous_covariate(adata: AnnData, key: str = "X_repr", n_dim: int = 10) -> AnnData:
     """Add a random continuous covariate to `adata.obsm`."""
-    adata.obsm[key] = np.random.randn(adata.n_obs, n_dim)
+    rng = np.random.default_rng(0)
+    adata.obsm[key] = rng.standard_normal(
+        (
+            adata.n_obs,
+            n_dim,
+        )
+    )
     return adata
 
 
@@ -179,7 +187,7 @@ class TestModel:
         assert isinstance(model.dm, DataManager)
         assert model._data_dims is not None
         assert model.is_paired_setting is False
-        assert len(model._dims_registry.feature_names) == adata.n_vars
+        assert len(model._data_dims.feature_names) == adata.n_vars
 
     def test_builder_exposes_dm_and_dims(self, adata: AnnData):
         builder = ModelBuilder.from_adata(adata)
@@ -350,6 +358,7 @@ class TestModel:
 
     def test_predict_without_target_state(self, adata: AnnData):
         """predict(require_target_state=False, max_per_group=1) works with metadata only."""
+        rng = np.random.default_rng(0)
         dm_kwargs = {**_DM_TRAIN_KWARGS, "conditions_covariates": ["X_repr"]}
         model = _make_model(adata, dm_kwargs=dm_kwargs)
 
@@ -549,8 +558,8 @@ class TestModelSpecs:
         specs = model.specs
         assert isinstance(specs, FlowSpecs)
         assert specs.probability_path is not None
-        assert specs.time_sampler is torch.rand
-        assert specs.noise_sampler is torch.randn
+        assert specs.time_sampler is _uniform
+        assert specs.noise_sampler is _standard_normal
         assert specs.generate_from_noise is False
 
     # ---- `flow_kwargs` forwarding --------------------------------------
@@ -910,6 +919,7 @@ class TestModelPredictCombinations:
         view_on_condition_space,
     ):
         """Test prediction with all schema feature combinations."""
+        rng = np.random.default_rng(0)
         if view_on_condition_space and not has_cont_cond:
             pytest.skip("view_on_condition_space requires a continuous condition covariate")
         if not (has_cat_cond or has_groups or has_source):
@@ -938,7 +948,7 @@ class TestModelPredictCombinations:
             control_val = "control"
             unique_vals = adata.obs[cat_col].unique()
             rep_dim = 4
-            adata.uns[realm_col] = {v: np.random.randn(rep_dim) for v in unique_vals}
+            adata.uns[realm_col] = {v: rng.standard_normal(rep_dim) for v in unique_vals}
             if has_source:
                 if control_val not in adata.uns[realm_col]:
                     adata.uns[realm_col][control_val] = rng.standard_normal(rep_dim)
@@ -956,7 +966,7 @@ class TestModelPredictCombinations:
             groups = (group_col,)
             groups_reps[group_col] = group_col
             unique_groups = adata.obs[group_col].unique()
-            adata.uns[group_col] = {v: np.random.randn(2) for v in unique_groups}
+            adata.uns[group_col] = {v: rng.standard_normal(2) for v in unique_groups}
 
         if has_source and not has_cat_cond:
             dummy_col = "dummy_paired"
@@ -967,8 +977,8 @@ class TestModelPredictCombinations:
             conditions[dummy_col] = (dummy_col,)
             conditions_reps[dummy_col] = dummy_col
             adata.uns[dummy_col] = {
-                "control": np.random.randn(2),
-                "treatment": np.random.randn(2),
+                "control": rng.standard_normal(2),
+                "treatment": rng.standard_normal(2),
             }
             control_values_dict = {dummy_col: "control"}
 
@@ -1024,6 +1034,7 @@ class TestModelPredictCombinations:
 
     def test_continuous_covariates_flow_to_step_data_and_obsm(self, adata):
         """Continuous condition covariates ride per-cell into StepData and out to obsm."""
+        rng = np.random.default_rng(0)
         adata = adata.copy()
         cond_key = "paired_condition"
         adata.obsm[cond_key] = rng.standard_normal((adata.n_obs, 3)).astype(np.float32)
@@ -1031,8 +1042,8 @@ class TestModelPredictCombinations:
         cat_cond_col = "drugA"
         group_col = "source_split"
         adata.obs = adata.obs[[cat_cond_col, group_col]].copy()
-        adata.uns[cat_cond_col] = {v: np.random.randn(2) for v in adata.obs[cat_cond_col].unique()}
-        adata.uns[group_col] = {v: np.random.randn(2) for v in adata.obs[group_col].unique()}
+        adata.uns[cat_cond_col] = {v: rng.standard_normal(2) for v in adata.obs[cat_cond_col].unique()}
+        adata.uns[group_col] = {v: rng.standard_normal(2) for v in adata.obs[group_col].unique()}
 
         dm_kwargs = {
             "conditions": {cat_cond_col: (cat_cond_col,)},
@@ -1070,6 +1081,7 @@ class TestModelPredictControlValues:
     """Test the `control_values_dict` argument in `Model.predict`."""
 
     def _setup_paired_data(self, adata, has_continuous=False):
+        rng = np.random.default_rng(0)
         adata = adata.copy()
         adata.obs = adata.obs[["drugA", "source_split"]].copy()
         adata.obs["drugA"] = adata.obs["drugA"].astype(str)
@@ -1078,8 +1090,8 @@ class TestModelPredictControlValues:
         treatment_vals = ["treatment"] * (n_obs - n_obs // 2)
         adata.obs["drugA"] = control_vals + treatment_vals
         adata.uns["drug"] = {
-            "control": np.random.randn(4),
-            "treatment": np.random.randn(4),
+            "control": rng.standard_normal(4),
+            "treatment": rng.standard_normal(4),
         }
         unique_groups = adata.obs["source_split"].unique()
         adata.uns["source_split"] = {g: rng.standard_normal(2) for g in unique_groups}

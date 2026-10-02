@@ -20,6 +20,8 @@ from sckitflow.core.methods._base import (
     SupportsProtocol,
     SupportsTraining,
     TrainingProtocolWrapper,
+    _standard_normal,
+    _uniform,
 )
 
 
@@ -162,8 +164,8 @@ def test_flow_specs_defaults(dummy_module):
     """`FlowSpecs` auto-fills probability path, time and noise samplers."""
     specs = FlowSpecs(dummy_module, device_id="cpu")
     assert specs.probability_path is not None
-    assert specs.time_sampler is torch.rand
-    assert specs.noise_sampler is torch.randn
+    assert specs.time_sampler is _uniform
+    assert specs.noise_sampler is _standard_normal
     assert specs.generate_from_noise is False
 
 

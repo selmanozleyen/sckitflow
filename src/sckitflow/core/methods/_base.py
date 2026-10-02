@@ -1,9 +1,10 @@
 import abc
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import torch
-from pydantic import ConfigDict, SkipValidation
+from pydantic import ConfigDict
 from scfit.registry import Component
 
 from sckitflow.core._data_utils import subscript_step_data
@@ -126,9 +127,9 @@ class AbstractFlowMethodConfig(Component):
 
     probability_path: ProbabilityPathConfig | BaseProbabilityPath | None = None
     """A path config (portable) or a live path. ``None`` is a linear Dirac path."""
-    time_sampler: SkipValidation[SamplerFn] | None = None
+    time_sampler: Callable[..., torch.Tensor] | None = None  # a `SamplerFn`; pydantic checks it is callable
     """Samples times in ``[0, 1]``. ``None`` samples uniformly via `torch.rand`."""
-    noise_sampler: SkipValidation[SamplerFn] | None = None
+    noise_sampler: Callable[..., torch.Tensor] | None = None  # a `SamplerFn`
     """Samples source noise. ``None`` samples a standard normal via `torch.randn`."""
     generate_from_noise: bool = False
     """Interpolate from noise even when source states are present; the source is then extra conditioning."""

@@ -133,7 +133,7 @@ class DataManager:
     Built from a :class:`DataManagerConfig`; see it for the individual options.
     """
 
-    def __init__(self, config: DataManagerConfig | None = None, *, splitter: Splitter | None = None) -> None:
+    def __init__(self, config: DataManagerConfig | None = None, *, splitter: Splitter[Any] | None = None) -> None:
         """Initializes the object.
 
         :param config: The schema; ``None`` declares nothing beyond ``.X`` as the state.
@@ -649,6 +649,11 @@ class DataManager:
         return self._control_values_dict
 
     @property
+    def splitter(self) -> Splitter[Any] | None:
+        """The splitter given at construction, if any."""
+        return self._splitter
+
+    @property
     def matched_keys(self) -> dict[tuple, tuple] | None:
         """Exposes the homonymous attribute set at initialization."""
         return self._matched_keys
@@ -760,6 +765,6 @@ class DataManagerConfig(Component):
     """String identifier for the state representation of source states, used when matching
     distributions over incomparable spaces. Used to initialize the coupling data schema."""
 
-    def build(self, *, splitter: Splitter | None = None) -> DataManager:
+    def build(self, *, splitter: Splitter[Any] | None = None) -> DataManager:
         """The data manager, applying ``splitter`` to the data it streams."""
         return DataManager(self, splitter=splitter)

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-import cloudpickle
 import lightning.pytorch as pl
+import numpy as np
+import pandas as pd
 import torch
 from anndata import AnnData
 
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data._manager import DataManager
+from sckitflow.data._manager import DataManager, DataManagerConfig
+from sckitflow.data.splitters import SplitterConfig
 
 if TYPE_CHECKING:
     from sckitflow.data._loader import EvalLoader, Loader
@@ -204,9 +207,12 @@ class FlowDataModule(pl.LightningDataModule):
         checkpoint should not carry the dataset. Reattach it with :meth:`attach`
         after loading.
         """
+        splitter = self._dm.splitter
         return {
-            "dm": cloudpickle.dumps(self._dm),
-            "data_dims": cloudpickle.dumps(self._data_dims),
+            "dm": self._dm.config.to_spec(),
+            # the rng's state, so a resumed run draws the identical split
+            "splitter": None if splitter is None else (splitter.config.to_spec(), splitter.rng.bit_generator.state),
+            "data_dims": {**dataclasses.asdict(self._data_dims), "feature_names": list(self._data_dims.feature_names)},
             "train_split": self._train_split,
             "n_train_steps": self._n_train_steps,
             "batch_size": self._batch_size,
@@ -215,8 +221,7 @@ class FlowDataModule(pl.LightningDataModule):
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        self._dm = cloudpickle.loads(state_dict["dm"])
-        self._data_dims = cloudpickle.loads(state_dict["data_dims"])
+        self._dm, self._data_dims = _schema_from_state(state_dict)
         self._train_split = state_dict["train_split"]
         self._n_train_steps = state_dict["n_train_steps"]
         self._batch_size = state_dict["batch_size"]
@@ -239,7 +244,7 @@ class FlowDataModule(pl.LightningDataModule):
                 "that was not given `datamodule=`."
             ) from e
 
-        dmod = cls(cloudpickle.loads(state["dm"]), cloudpickle.loads(state["data_dims"]))
+        dmod = cls(*_schema_from_state(state))
         dmod.load_state_dict(state)
         return dmod if adata is None else dmod.attach(adata)
 
@@ -264,3 +269,21 @@ class FlowDataModule(pl.LightningDataModule):
         """Names of the validation splits, in `val_dataloader` order."""
         self.setup()
         return [split for split in self._loaders if split != self._train_split]
+
+
+def _schema_from_state(state: dict[str, Any]) -> tuple[DataManager, DataDimensions]:
+    """The data manager and dimensionalities a :meth:`FlowDataModule.state_dict` holds."""
+    splitter = None
+    if state["splitter"] is not None:
+        spec, rng_state = state["splitter"]
+        bit_generator = getattr(np.random, rng_state["bit_generator"], None)  # e.g. "PCG64", numpy's state format
+        if not (isinstance(bit_generator, type) and issubclass(bit_generator, np.random.BitGenerator)):
+            raise ValueError(f"not a numpy bit generator: {rng_state['bit_generator']!r}.")
+        rng = np.random.Generator(bit_generator())
+        rng.bit_generator.state = rng_state
+        splitter = SplitterConfig.from_spec(spec).build(rng=rng)
+    dims = state["data_dims"]
+    return (
+        DataManagerConfig.from_spec(state["dm"]).build(splitter=splitter),
+        DataDimensions(**{**dims, "feature_names": pd.Index(dims["feature_names"])}),
+    )

@@ -7,6 +7,7 @@ from sckitflow import RunConfig, load_run, save_run
 from sckitflow.core.methods.inference._ode import ODEInferenceConfig
 from sckitflow.core.methods.training._cfm import CFMTrainingConfig
 from sckitflow.data._config import FlowDataModuleConfig
+from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.data._manager import DataManagerConfig
 from sckitflow.data.splitters._combination import CombinationSplitterConfig
@@ -42,3 +43,17 @@ def test_load_run_round_trips(tmp_path, adata_small: AnnData):
     datamodule, plan = load_run(tmp_path, adata_small, torch.nn.Linear(2, 2))
     assert plan.training_method.module.weight.equal(module.weight)
     assert "test" in datamodule.val_names
+
+
+def test_checkpoint_state_is_plain_data(tmp_path, adata_small: AnnData):
+    """The schema and the splitter travel as specs, so the state loads without unpickling."""
+    run = RunConfig(data=DATA, training=CFMTrainingConfig(), splitter=SPLITTER, splitter_seed=3)
+    datamodule = run.build(adata_small, torch.nn.Linear(2, 2)).datamodule
+    torch.save(datamodule.state_dict(), tmp_path / "state.pt")
+
+    restored = FlowDataModule(datamodule.dm, datamodule.data_dims)
+    restored.load_state_dict(torch.load(tmp_path / "state.pt", weights_only=True))
+    assert restored.dm.config == datamodule.dm.config
+    assert restored.data_dims.feature_names.equals(datamodule.data_dims.feature_names)
+    assert restored.data_dims.state_dim == datamodule.data_dims.state_dim
+    assert restored.dm.splitter.assign(adata_small).equals(datamodule.dm.splitter.assign(adata_small))

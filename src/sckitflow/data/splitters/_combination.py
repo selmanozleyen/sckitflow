@@ -16,7 +16,7 @@ from sckitflow.data.splitters._base import Splitter, SplitterConfig
 __all__ = ["CombinationSplitter", "CombinationSplitterConfig"]
 
 
-class CombinationSplitter(Splitter):
+class CombinationSplitter(Splitter["CombinationSplitterConfig"]):
     """Hold out whole ``group_keys`` combinations, so a held-out combination is unseen at training time.
 
     **What is split.** Not observations but *combinations*: the unique values of ``group_keys`` together, e.g. each
@@ -41,16 +41,6 @@ class CombinationSplitter(Splitter):
     ``test_fraction=0.5``: cell line A with drugs ``d0..d3`` gives up 2 of them to test and keeps 2 in train;
     cell line B with a single drug keeps it; every control row is labelled ``control``.
     """
-
-    def __init__(self, config: CombinationSplitterConfig, *, rng: np.random.Generator) -> None:
-        """Initializes the splitter.
-
-        :param config: The splitting policy.
-        :param rng: generator the hold-out choice is drawn from. Copied on each call, so the split never changes.
-        """
-        super().__init__(split_key=config.split_key)
-        self.config = config
-        self._rng = rng
 
     def assign(self, adata: AnnData) -> pd.Series:
         """Assigns each observation to train / test / control (see the class docstring for the policy)."""
@@ -115,8 +105,6 @@ class CombinationSplitterConfig(SplitterConfig):
     """Value of ``control_key`` marking a control row."""
     test_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     """Target fraction of each stratum's combinations to hold out."""
-    split_key: str = "split"
-    """``adata.obs`` column the split label is written to."""
     train_label: str = "train"
     test_label: str = "test"
     control_label: str = "control"

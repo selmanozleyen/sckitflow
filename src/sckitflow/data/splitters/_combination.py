@@ -120,7 +120,7 @@ class CombinationSplitterConfig(SplitterConfig):
     """``adata.obs`` column marking controls, which are never split. ``None`` means no controls."""
     control_value: str = "control"
     """Value of ``control_key`` marking a control row."""
-    test_fraction: float = Field(0.2, ge=0.0, lt=1.0)
+    test_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     """Target fraction of each stratum's combinations to hold out."""
     split_key: str = "split"
     """``adata.obs`` column the split label is written to."""

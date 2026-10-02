@@ -9,7 +9,7 @@ from sckitflow.data._config import FlowDataModuleConfig
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerKwargs, LoaderKwargs
-from sckitflow.data.splitters import CombinationSplitter, Splitter
+from sckitflow.data.splitters import CombinationSplitter, CombinationSplitterConfig, Splitter
 
 __all__ = [
     "FlowDataModule",
@@ -30,6 +30,7 @@ __all__ = [
     "LoaderKwargs",
     "Splitter",
     "CombinationSplitter",
+    "CombinationSplitterConfig",
 ]
 
 _LAZY = frozenset({"Loader", "EvalLoader"})

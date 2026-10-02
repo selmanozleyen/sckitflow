@@ -170,7 +170,7 @@ class DataManagerKwargs(TypedDict, total=False):
     groups_encoding: dict[str, GroupEncoderConfig | GroupEncoderId] | None
     """Mapping from each group column to a :class:`~sckitflow.data._group_encoders.GroupEncoderConfig`
     (e.g. ``OneHotEncoderConfig()``, ``LabelEncoderConfig()``, ``AffineTransformerConfig(scale=2.0)``), used to initialize the grouping data
-    schema. Encoders are serializable dataclasses that build their fitted transformer on demand. The
+    schema. Encoders are frozen configs that build their fitted transformer on demand. The
     string ids ``"label"`` / ``"one-hot"`` are accepted as shorthand for the parameter-free encoders.
     Defaults to `None`."""
 

@@ -140,14 +140,13 @@ class AbstractFlowMethod(AbstractMethod):
     Its settings come from one config object, an `AbstractFlowMethodConfig` or a subclass of it.
     """
 
-    def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig | None = None) -> None:
+    def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig) -> None:
         """Builds the path and samplers from ``config``.
 
         :param module: An initialized neural module the method builds upon.
-        :param config: The flow settings; ``None`` takes every default.
+        :param config: The flow settings, the method's own config.
         """
         super().__init__(module)
-        config = AbstractFlowMethodConfig() if config is None else config
         path = config.probability_path
         if isinstance(path, ProbabilityPathConfig):
             path = path.build()

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np
@@ -27,6 +29,10 @@ class CFMTraining(AbstractFlowMethod):
     (e.g. :class:`~sckitflow.core.methods.inference.ODEInference`) gives both
     the same probability path, time sampler, noise sampler and module.
     """
+
+    def __init__(self, module: torch.nn.Module, config: CFMTrainingConfig | None = None) -> None:
+        """:param config: The flow settings; ``None`` takes every default."""
+        super().__init__(module, CFMTrainingConfig() if config is None else config)
 
     def compute_loss(
         self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator

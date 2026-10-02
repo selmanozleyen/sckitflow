@@ -48,7 +48,7 @@ class Run(NamedTuple):
     plan: TrainingPlan
 
 
-@component("run")
+@component("run", builds=Run)
 class RunConfig(Component):
     """Everything portable about a run: what ``specs.json`` holds."""
 

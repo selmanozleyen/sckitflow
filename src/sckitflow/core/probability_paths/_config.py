@@ -38,7 +38,7 @@ class ProbabilityPathConfig(Component):
         raise NotImplementedError
 
 
-@component("probability_path.linear_dirac")
+@component("probability_path.linear_dirac", builds=LinearDiracProbabilityPath)
 class LinearDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation to a Dirac target. Deterministic."""
 
@@ -46,7 +46,7 @@ class LinearDiracProbabilityPathConfig(ProbabilityPathConfig):
         return LinearDiracProbabilityPath(sigma=self.sigma)
 
 
-@component("probability_path.linear_gaussian")
+@component("probability_path.linear_gaussian", builds=LinearGaussianProbabilityPath)
 class LinearGaussianProbabilityPathConfig(ProbabilityPathConfig):
     """Straight-line interpolation with Gaussian noise."""
 
@@ -54,7 +54,7 @@ class LinearGaussianProbabilityPathConfig(ProbabilityPathConfig):
         return LinearGaussianProbabilityPath(sigma=self.sigma)
 
 
-@component("probability_path.schrodinger_bridge")
+@component("probability_path.schrodinger_bridge", builds=SchrodingerBridgeProbabilityPath)
 class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig):
     """Schrödinger-bridge path.
 
@@ -67,7 +67,7 @@ class SchrodingerBridgeProbabilityPathConfig(ProbabilityPathConfig):
         return SchrodingerBridgeProbabilityPath(sigma=self.sigma, eps=self.eps)
 
 
-@component("probability_path.variance_preserving_dirac")
+@component("probability_path.variance_preserving_dirac", builds=VariancePreservingDiracProbabilityPath)
 class VariancePreservingDiracProbabilityPathConfig(ProbabilityPathConfig):
     """Variance-preserving path to a Dirac target. Deterministic."""
 

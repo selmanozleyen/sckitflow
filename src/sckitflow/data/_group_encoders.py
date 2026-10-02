@@ -7,7 +7,7 @@ functional encoders, ``inverse_transform``). This replaces the string encoder id
 ``groups_encoding_transform_fn`` callables, which could not be serialized inside a ``DataManager``.
 
 ``GroupEncoderConfig`` is the family base; each config subclasses it, is registered with
-``@component(type_id)`` and named ``XConfig`` after the transformer ``X`` its ``build`` returns. Add a new encoder the same way.
+``@component(type_id, builds=X)`` and named ``XConfig`` after the transformer ``X`` it builds. Add a new encoder the same way.
 
 The stateful encoders (:class:`LabelEncoderConfig`, :class:`OneHotEncoderConfig`) accept an optional **pinned vocabulary** so a
 serialized config rebuilds the *exact* same mapping instead of re-deriving one from whatever data ``build``
@@ -59,7 +59,7 @@ class GroupEncoderConfig(Component):
         raise NotImplementedError
 
 
-@component("group_encoder.label")
+@component("group_encoder.label", builds=LabelEncoder)
 class LabelEncoderConfig(GroupEncoderConfig):
     """Integer-codes a categorical column.
 
@@ -77,7 +77,7 @@ class LabelEncoderConfig(GroupEncoderConfig):
         return LabelEncoder().fit(values)
 
 
-@component("group_encoder.one_hot")
+@component("group_encoder.one_hot", builds=OneHotEncoder)
 class OneHotEncoderConfig(GroupEncoderConfig):
     """One-hot encodes a categorical column.
 
@@ -124,7 +124,7 @@ class AffineTransformer(FunctionTransformer):
         return (x - self.shift) / self.scale
 
 
-@component("group_encoder.identity")
+@component("group_encoder.identity", builds=IdentityTransformer)
 class IdentityTransformerConfig(GroupEncoderConfig):
     """Passes the column through unchanged."""
 
@@ -132,7 +132,7 @@ class IdentityTransformerConfig(GroupEncoderConfig):
         return IdentityTransformer().fit(context.data)
 
 
-@component("group_encoder.log1p")
+@component("group_encoder.log1p", builds=Log1pTransformer)
 class Log1pTransformerConfig(GroupEncoderConfig):
     """Applies ``log1p`` (inverse ``expm1``) to a continuous column."""
 
@@ -140,7 +140,7 @@ class Log1pTransformerConfig(GroupEncoderConfig):
         return Log1pTransformer().fit(context.data)
 
 
-@component("group_encoder.affine")
+@component("group_encoder.affine", builds=AffineTransformer)
 class AffineTransformerConfig(GroupEncoderConfig):
     """Scales and shifts a continuous column (``x * scale + shift``).
 

@@ -73,7 +73,7 @@ class CFMTraining(AbstractFlowMethod):
         return loss, {"loss": loss.item()}
 
 
-@component("training_method.cfm")
+@component("training_method.cfm", builds=CFMTraining)
 class CFMTrainingConfig(AbstractFlowMethodConfig, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 

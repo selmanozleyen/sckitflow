@@ -143,7 +143,7 @@ class ODEInference(AbstractFlowMethod):
         return self._n_samples
 
 
-@component("inference_method.ode")
+@component("inference_method.ode", builds=ODEInference)
 class ODEInferenceConfig(AbstractFlowMethodConfig, InferenceMethodConfig):
     """ODE inference over a trained velocity field: the flow settings plus the solver's."""
 

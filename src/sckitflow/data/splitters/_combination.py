@@ -108,7 +108,7 @@ class CombinationSplitter(Splitter):
         return pd.Series(labels, index=obs.index, name=self._split_key)
 
 
-@component("splitter.combination")
+@component("splitter.combination", builds=CombinationSplitter)
 class CombinationSplitterConfig(SplitterConfig):
     """Holds out whole condition combinations. See :class:`CombinationSplitter`."""
 

@@ -21,7 +21,7 @@ from sckitflow.data.splitters._base import Splitter
 __all__ = ["FlowDataModuleConfig"]
 
 
-@component("data_module.flow")
+@component("data_module.flow", builds=FlowDataModule)
 class FlowDataModuleConfig(Component):
     """The schema and streaming options a run reads its batches with.
 

@@ -4,6 +4,7 @@ from sckitflow.core.nn._modules import (
     FunctionalModule,
     Resnet1d,
 )
+from sckitflow.core.nn._set_encoder import SeedAttentionPooling, SetEncoder, TokenAttentionPooling
 from sckitflow.core.nn._time_features import (
     get_time_features_fn,
     make_custom_time_features,
@@ -27,4 +28,7 @@ __all__ = [
     "MLPVelocity",
     "ModuleConfig",
     "MLPVelocityConfig",
+    "SetEncoder",
+    "TokenAttentionPooling",
+    "SeedAttentionPooling",
 ]

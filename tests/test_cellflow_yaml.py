@@ -62,3 +62,10 @@ def test_cellflow_yaml_trains_saves_and_predicts(tmp_path, adata: AnnData):
     pred = predict_adata(datamodule, loaded.inference_method, adata[~adata.obs["is_control"]].copy(), max_per_group=8)
     assert pred.n_obs > 0
     assert torch.isfinite(torch.as_tensor(np.asarray(pred.X))).all()
+
+
+def test_input_dim_comes_from_the_data():
+    module = yaml.safe_load(CELLFLOW.read_text())["module"]
+    module["condition_encoder_input_layers"]["drug"]["input_dim"] = 3
+    with pytest.raises(ValueError, match="comes from the data"):
+        RunConfig.from_spec({**yaml.safe_load(CELLFLOW.read_text()), "module": module})

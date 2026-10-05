@@ -84,8 +84,8 @@ class TestSetEncoder:
         # Build condition dictionary with all covariates present
         condition_dict = {}
         for cov_id, cfg in input_layers.items():
-            input_dim = cfg["input_dim"]
-            condition_dict[cov_id] = torch.randn(batch_size, n_combs, input_dim)
+            n_entries = 1 if cov_id in covariates_not_pooled else n_combs
+            condition_dict[cov_id] = torch.randn(batch_size, n_entries, cfg["input_dim"])
 
         # Forward pass
         encoded = encoder(condition_dict)
@@ -103,8 +103,8 @@ class TestSetEncoder:
             assert proj_layers[cov].in_features == input_layers[cov]["output_dim"]
             assert proj_layers[cov].out_features == pooling_proj_dim
 
-    def test_not_pooled_reads_first_set_element(self) -> None:
-        """A not-pooled covariate is identical across the set, so only its first element is read."""
+    def test_not_pooled_needs_one_entry(self) -> None:
+        """A not-pooled covariate with several entries would have to drop or reorder them, so it is refused."""
         encoder = SetEncoder(
             input_layers=input_layers_double_condition, output_dim=output_dim, covariates_not_pooled=["condition0"]
         )
@@ -112,9 +112,8 @@ class TestSetEncoder:
             "condition0": torch.randn(batch_size, n_combs, condition0_input_dim),
             "condition1": torch.randn(batch_size, n_combs, condition1_input_dim),
         }
-        changed = {**condition_dict, "condition0": condition_dict["condition0"].clone()}
-        changed["condition0"][:, 1:] = 0
-        torch.testing.assert_close(encoder(condition_dict), encoder(changed))
+        with pytest.raises(ValueError, match="'condition0' is not pooled.*found 3"):
+            encoder(condition_dict)
 
     @pytest.mark.xfail(
         reason="https://github.com/theislab/sckitflow/issues/144 - validation raises ValueError, not KeyError",

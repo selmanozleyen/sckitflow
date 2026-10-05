@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 from sckitflow._types import TargetCovariatesEncodingId
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data._group_encoders import GroupEncoder, GroupEncoderId
+from sckitflow.data._group_encoders import GroupEncoderConfig, GroupEncoderId
 from sckitflow.data._utils import with_derived_obs
 from sckitflow.data.containers._categorical import CategoricalData
 from sckitflow.data.containers._coupling import CouplingData
@@ -167,9 +167,9 @@ class DataManagerKwargs(TypedDict, total=False):
     """Mapping for pre-computed representations of grouping covariates, used to initialize the target
     data schema. Defaults to `None`."""
 
-    groups_encoding: dict[str, GroupEncoder | GroupEncoderId] | None
-    """Mapping from each group column to a :class:`~sckitflow.data._group_encoders.GroupEncoder`
-    (e.g. ``OneHot()``, ``Label()``, ``Affine(scale=2.0)``), used to initialize the grouping data
+    groups_encoding: dict[str, GroupEncoderConfig | GroupEncoderId] | None
+    """Mapping from each group column to a :class:`~sckitflow.data._group_encoders.GroupEncoderConfig`
+    (e.g. ``OneHotEncoderConfig()``, ``LabelEncoderConfig()``, ``AffineTransformerConfig(scale=2.0)``), used to initialize the grouping data
     schema. Encoders are serializable dataclasses that build their fitted transformer on demand. The
     string ids ``"label"`` / ``"one-hot"`` are accepted as shorthand for the parameter-free encoders.
     Defaults to `None`."""

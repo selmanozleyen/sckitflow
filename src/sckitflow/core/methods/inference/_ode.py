@@ -1,23 +1,33 @@
-from typing import Any
+from typing import Annotated, Any, Unpack
 
 import torch
+from scfit.params import Default, ParamsComponent
+from scfit.registry import component
 
 from sckitflow.core._data_utils import (
     expand_conditioning,
     get_tensor_dict_from_data,
     prepare_latent_inference,
 )
-from sckitflow.core._types import (
-    PredictionData,
-    SamplerFn,
-    StepData,
-)
-from sckitflow.core.methods._base import AbstractFlowMethod
+from sckitflow.core._types import PredictionData, StepData
+from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodParams, InferenceMethodConfig
 from sckitflow.core.methods.inference._utils import aggregate_predictions
-from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath
 from sckitflow.core.solvers import ODESolver
 
-__all__ = ["ODEInference"]
+__all__ = ["ODEInference", "ODEInferenceParams", "ODEInferenceConfig"]
+
+
+class ODEInferenceParams(AbstractFlowMethodParams, total=False):
+    """`AbstractFlowMethodParams` plus the ODE solver settings."""
+
+    solver_kwargs: Annotated[dict[str, Any], Default({})]
+    """Forwarded to the ODE solver. ``method`` defaults to ``"euler"``."""
+    return_trajectory: Annotated[bool, Default(False)]
+    """Return the whole trajectory instead of only the endpoint."""
+    n_steps: Annotated[int, Default(100)]
+    """Discretization steps for the solver."""
+    n_samples: Annotated[int | None, Default(None)]
+    """Samples per batch element. Required when ``generate_from_noise`` is ``True``."""
 
 
 class ODEInference(AbstractFlowMethod):
@@ -38,49 +48,22 @@ class ODEInference(AbstractFlowMethod):
     """
 
     def __init__(
-        self,
-        module: torch.nn.Module,
-        probability_path: BaseProbabilityPath | None = None,
-        time_sampler: SamplerFn | None = None,
-        noise_sampler: SamplerFn | None = None,
-        generate_from_noise: bool = False,
-        solver_kwargs: dict[str, Any] | None = None,
-        return_trajectory: bool = False,
-        n_steps: int = 100,
-        latent: torch.Tensor | None = None,
-        n_samples: int | None = None,
+        self, module: torch.nn.Module, *, latent: torch.Tensor | None = None, **params: Unpack[ODEInferenceParams]
     ) -> None:
         """Initializes the ODE inference method.
 
-        The leading arguments are the flow configuration and are documented on
-        :class:`~sckitflow.core.methods._base.AbstractFlowMethod`.
-
-        :param solver_kwargs: Keyword arguments forwarded to the ODE solver.
-            ``method`` defaults to ``"euler"`` when not provided.
-        :param return_trajectory: When ``True``, the whole trajectory is returned
-            instead of only the endpoint.
-        :param n_steps: Number of discretization steps for the solver.
+        :param module: An initialized neural module the method builds upon.
         :param latent: Optional initial latent state; when provided, sampling
             from the noise distribution is skipped. Must already be on the
-            configured device and dtype.
-        :param n_samples: Number of samples per batch element used to initialize
-            the dynamics. Required when ``generate_from_noise`` is ``True``.
+            configured device and dtype. Live, so not one of the params.
         """
-        # ---- 0. Initialize the module storage and flow configuration ----
-        super().__init__(
-            module,
-            probability_path=probability_path,
-            time_sampler=time_sampler,
-            noise_sampler=noise_sampler,
-            generate_from_noise=generate_from_noise,
-        )
-
-        # ---- 1. Assign extra attributes ----
-        self._solver_kwargs = solver_kwargs
-        self._return_trajectory = return_trajectory
-        self._n_steps = n_steps
+        super().__init__(module, **params)
+        p = self._params
+        self._solver_kwargs = p["solver_kwargs"]
+        self._return_trajectory = p["return_trajectory"]
+        self._n_steps = p["n_steps"]
         self._latent = latent
-        self._n_samples = n_samples
+        self._n_samples = p["n_samples"]
 
     def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData:
         """Integrates the ODE and returns the aggregated prediction.
@@ -125,7 +108,7 @@ class ODEInference(AbstractFlowMethod):
         )
 
         # ----- 5. Configure ODE solver -----
-        solver_kwargs = dict(self.solver_kwargs or {})
+        solver_kwargs = dict(self.solver_kwargs)
         solver_kwargs.setdefault("method", "euler")
         method = solver_kwargs.pop("method")
 
@@ -154,7 +137,7 @@ class ODEInference(AbstractFlowMethod):
         return PredictionData(X=X, traj=traj, raw_samples=raw_samples)
 
     @property
-    def solver_kwargs(self) -> dict[str, Any] | None:
+    def solver_kwargs(self) -> dict[str, Any]:
         return self._solver_kwargs
 
     @property
@@ -172,3 +155,11 @@ class ODEInference(AbstractFlowMethod):
     @property
     def n_samples(self) -> int | None:
         return self._n_samples
+
+
+@component("inference_method.ode")
+class ODEInferenceConfig(ParamsComponent[ODEInferenceParams], InferenceMethodConfig[ODEInference]):
+    """ODE inference over a trained velocity field."""
+
+    def build(self, module: torch.nn.Module) -> ODEInference:
+        return ODEInference(module, **self.params)

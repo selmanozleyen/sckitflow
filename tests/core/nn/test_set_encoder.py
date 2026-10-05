@@ -172,3 +172,18 @@ class TestSetEncoder:
                 output_dim=output_dim,
                 pooling_mode=pooling_mode,
             )
+
+
+@pytest.mark.parametrize("pooling_mode", ["mean", "sum"])
+def test_padding_is_left_out_of_pooling(pooling_mode: str) -> None:
+    """A set element that is all ``mask_value`` pools as if it were absent."""
+    encoder = SetEncoder(input_layers=input_layers_single_condition, output_dim=output_dim, pooling_mode=pooling_mode)
+    x = torch.randn(batch_size, 2, condition0_input_dim)
+    padded = torch.concatenate([x, torch.zeros(batch_size, 1, condition0_input_dim)], dim=-2)
+    torch.testing.assert_close(encoder({"condition0": padded}), encoder({"condition0": x}))
+
+    unmasked = SetEncoder(
+        input_layers=input_layers_single_condition, output_dim=output_dim, pooling_mode=pooling_mode, mask_value=None
+    )
+    unmasked.load_state_dict(encoder.state_dict())
+    assert not torch.allclose(unmasked({"condition0": padded}), unmasked({"condition0": x}))

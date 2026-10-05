@@ -12,6 +12,17 @@ from sckitflow.core.nn._utils import init_module_from_dict
 __all__ = ["SetEncoder"]
 
 
+def _masked_sum(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Sums ``x`` ``[..., n, d]`` over the elements ``mask`` ``[..., n]`` keeps."""
+    return (x * mask.unsqueeze(-1).to(x.dtype)).sum(dim=-2)
+
+
+def _masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Averages ``x`` over the kept elements; a row with none kept pools to zero."""
+    count = mask.sum(dim=-1, keepdim=True).clamp(min=1).to(x.dtype)
+    return _masked_sum(x, mask) / count
+
+
 class SetEncoder(torch.nn.Module):
     """Encoder for set of conditioning covariates."""
 
@@ -25,6 +36,7 @@ class SetEncoder(torch.nn.Module):
         pooling_proj_bias: bool = True,
         covariates_not_pooled: Collection[str] | None = None,
         output_layers_kwargs: LayersDict | None = None,
+        mask_value: float | None = 0.0,
     ) -> None:
         """Initializes the set encoder.
 
@@ -59,8 +71,14 @@ class SetEncoder(torch.nn.Module):
         :param output_layers_kwargs: Dictionary containing the configurations for the output layer.
             Defaults to `None`.
         :type output_layers_kwargs: class: `LayersDict | None`
+
+        :param mask_value: A pooled set element whose input is entirely this value is padding,
+            e.g. the zero embedding of a ``"control"`` slot in a drug combination, and is left out of
+            the pooling. ``None`` pools every element.
+        :type mask_value: class: `float | None`
         """
         super().__init__()
+        self._mask_value = mask_value
         self._input_layers = input_layers
         self._output_dim = output_dim
         self._pooling_mode = pooling_mode
@@ -123,11 +141,9 @@ class SetEncoder(torch.nn.Module):
     ) -> torch.nn.Module:
         """Initializes the pooling layer."""
         if self._pooling_mode == "mean":
-            pooling_fn = lambda x: torch.mean(x, dim=-2)
-            return FunctionalModule(pooling_fn)
+            return FunctionalModule(_masked_mean)
         elif self._pooling_mode == "sum":
-            pooling_fn = lambda x: torch.sum(x, dim=-2)
-            return FunctionalModule(pooling_fn)
+            return FunctionalModule(_masked_sum)
         elif self._pooling_mode == "attention-token":
             raise NotImplementedError
         elif self._pooling_mode == "attention-seed":
@@ -165,6 +181,7 @@ class SetEncoder(torch.nn.Module):
         # prepare dictionary to store encoded covariates
         encoded_covariates_to_pool = {}
         encoded_covariates_not_pooled = {}
+        masks = {}
 
         # iterating over perturbation covariates
         for covariate_id, covariate_data in condition_dict.items():
@@ -189,11 +206,17 @@ class SetEncoder(torch.nn.Module):
                 # apply projection and update dict
                 z_cov = cov_proj(z_cov)
                 encoded_covariates_to_pool[covariate_id] = z_cov
+                masks[covariate_id] = (
+                    torch.ones(covariate_data.shape[:-1], dtype=torch.bool, device=covariate_data.device)
+                    if self._mask_value is None
+                    else (covariate_data != self._mask_value).any(dim=-1)
+                )
 
         # pooled covariates
         if len(encoded_covariates_to_pool) > 0:
             pooled_covariates = torch.concatenate(tuple(encoded_covariates_to_pool.values()), dim=-2)
-            pooled_covariates = self._condition_encoder["pooling_layer"](pooled_covariates)
+            mask = torch.concatenate(tuple(masks.values()), dim=-1)
+            pooled_covariates = self._condition_encoder["pooling_layer"](pooled_covariates, mask)
         else:
             pooled_covariates = None
 

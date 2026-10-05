@@ -58,10 +58,6 @@ class TestSetEncoder:
     )
     @pytest.mark.parametrize("pooling_mode", ["mean", "sum"])
     @pytest.mark.parametrize("output_layers_kwargs", [{}])
-    @pytest.mark.xfail(
-        reason="https://github.com/theislab/sckitflow/issues/143 - covariates excluded from pooling keep the set axis",
-        strict=True,
-    )
     def test_set_encoder_forward_and_properties(
         self,
         input_layers: NestedLayersDict,
@@ -97,20 +93,28 @@ class TestSetEncoder:
 
         # Also check that the internal modules exist as expected
         pooled_covs = encoder.covariates_pooled
-        not_pooled_covs = [c for c in input_layers.keys() if c not in covariates_not_pooled]
         assert set(pooled_covs) == set(input_layers.keys()) - set(covariates_not_pooled)
 
-        # Verify projection layers exist for pooled covariates
+        # projection layers exist for pooled covariates only
+        proj_layers = encoder._condition_encoder["proj_layers"]
+        assert set(proj_layers.keys()) == set(pooled_covs)
         for cov in pooled_covs:
-            assert f"{cov}_proj" in encoder._condition_encoder
-            proj_layer = encoder._condition_encoder[f"{cov}_proj"]
-            assert isinstance(proj_layer, torch.nn.Linear)
-            assert proj_layer.in_features == input_layers[cov]["output_dim"]
-            assert proj_layer.out_features == pooling_proj_dim
+            assert isinstance(proj_layers[cov], torch.nn.Linear)
+            assert proj_layers[cov].in_features == input_layers[cov]["output_dim"]
+            assert proj_layers[cov].out_features == pooling_proj_dim
 
-        # Verify no projection layers for non-pooled covariates
-        for cov in not_pooled_covs:
-            assert f"{cov}_proj" not in encoder._condition_encoder
+    def test_not_pooled_reads_first_set_element(self) -> None:
+        """A not-pooled covariate is identical across the set, so only its first element is read."""
+        encoder = SetEncoder(
+            input_layers=input_layers_double_condition, output_dim=output_dim, covariates_not_pooled=["condition0"]
+        )
+        condition_dict = {
+            "condition0": torch.randn(batch_size, n_combs, condition0_input_dim),
+            "condition1": torch.randn(batch_size, n_combs, condition1_input_dim),
+        }
+        changed = {**condition_dict, "condition0": condition_dict["condition0"].clone()}
+        changed["condition0"][:, 1:] = 0
+        torch.testing.assert_close(encoder(condition_dict), encoder(changed))
 
     @pytest.mark.xfail(
         reason="https://github.com/theislab/sckitflow/issues/144 - validation raises ValueError, not KeyError",

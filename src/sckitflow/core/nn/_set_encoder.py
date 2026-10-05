@@ -179,7 +179,8 @@ class SetEncoder(torch.nn.Module):
 
             # update dictionaries
             if covariate_id in self._covariates_not_pooled:
-                encoded_covariates_not_pooled[covariate_id] = z_cov
+                # identical across the set, so the first element stands for it
+                encoded_covariates_not_pooled[covariate_id] = z_cov[..., 0, :]
 
             else:
                 # get shared projection layer

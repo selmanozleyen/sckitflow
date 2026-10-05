@@ -18,25 +18,12 @@ __all__ = [
 class BaseProbabilityPath(abc.ABC):
     r"""Base Class for Conditional Probability Paths :math: `p_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1)`.
 
-    :param _require_prng: Whether the path samples noise, drawn from the ``generator`` passed to
-        :meth:`compute_xt`. ``False`` for deterministic paths.
-    :type _require_prng: class: `bool`
+    :param is_deterministic: ``False`` for paths that add noise, drawn from the ``generator`` passed to
+        :meth:`compute_xt`. A plain class attribute, so it reads the same on the class and on an instance.
+    :type is_deterministic: class: `bool`
     """
 
-    _require_prng: bool
     is_deterministic: bool
-
-    def __init_subclass__(cls, **kwargs) -> None:
-        """Keep `is_deterministic` in sync with `_require_prng` on every concrete subclass.
-
-        As non-deterministic probability paths require a Pseudo-Random Numbers Generator,
-        this is `False` when such a generator is required. It is a plain class attribute so
-        that it reads the same on the class and on an instance -- stacking `classmethod` on
-        `property` used to do that, but Python 3.13 removed support for chaining them.
-        """
-        super().__init_subclass__(**kwargs)
-        if "_require_prng" in cls.__dict__:
-            cls.is_deterministic = not cls._require_prng
 
     def __init__(
         self,
@@ -147,7 +134,7 @@ class BaseProbabilityPath(abc.ABC):
 
                 \boldsymbol{x}_t = \mu_t(\boldsymbol{x}_0, \boldsymbol{x}_1) + \sigma_t \boldsymbol{z}, \text{ with }\boldsymbol{z}\sim\mathcal{N}(0_d, \mathbb{I}_d)
 
-        For deterministic probability paths (i.e.: the ones with :attr: `self._require_prng` set to `False`),
+        For deterministic probability paths (i.e.: the ones with :attr: `is_deterministic` set to `True`),
         only the mean :math: `\mu_t(\boldsymbol{x}_0, \boldsymbol{x}_1)` will be returned.
 
         :param t: The current time index.
@@ -169,7 +156,7 @@ class BaseProbabilityPath(abc.ABC):
         # computing coefficients and noise value
         mu_t = self.compute_mu_t(t, x0, x1)
         # sampling noise
-        if self._require_prng:
+        if not self.is_deterministic:
             sigma_t = self.compute_sigma_t(t)
             noise = torch.randn(x0.shape, generator=generator, device=x0.device, dtype=x0.dtype)
             return mu_t + sigma_t * noise
@@ -185,12 +172,7 @@ class LinearProbabilityPath(BaseProbabilityPath, abc.ABC):
         .. math::
             \mu_t(\boldsymbol{x}_0, \boldsymbol{x}_1) = (1 - t)\boldsymbol{x}_0 + t\boldsymbol{x}_1
 
-    :param _require_prng: Whether a Pseudo-Random Numbers Generator is required for the probability path.
-        Pseudo-Random Numbers Generators are required for non-deterministic probability paths.
-    :type _require_prng: class: `bool`
     """
-
-    _require_prng: bool
 
     def __init__(
         self,
@@ -249,10 +231,10 @@ class LinearGaussianProbabilityPath(LinearProbabilityPath):
         .. math::
             u_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1) = \boldsymbol{x}_1 - \boldsymbol{x}_0
 
-    This class requires a Pseudo-Random Numbers Generator to be instantiated (i.e.: :attr: `self._require_prng` is `True`).
+    It adds noise, drawn from the ``generator`` passed to :meth:`compute_xt`.
     """
 
-    _require_prng: bool = True
+    is_deterministic: bool = False
 
     def __init__(
         self,
@@ -331,10 +313,10 @@ class SchrodingerBridgeProbabilityPath(LinearProbabilityPath):
 
     For numerical stability in the computation of :math: `u_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1)` at times :math: `t=0` and :math: `t=1` a small scalar is added to the denominator.
 
-    This class requires a Pseudo-Random Numbers Generator to be instantiated (i.e.: :attr: `self._require_prng` is `True`).
+    It adds noise, drawn from the ``generator`` passed to :meth:`compute_xt`.
     """
 
-    _require_prng: bool = True
+    is_deterministic: bool = False
 
     def __init__(self, sigma: float, eps: float = 1e-35) -> None:
         r"""Initializes the gaussian probability path probability paths.
@@ -411,10 +393,10 @@ class LinearDiracProbabilityPath(LinearProbabilityPath):
         .. math::
             u_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1) = \boldsymbol{x}_1 - \boldsymbol{x}_0
 
-    It is deterministic and it does not require a Pseudo-Random Numbers Generator to be instantiated.
+    It is deterministic.
     """
 
-    _require_prng: bool = False
+    is_deterministic: bool = True
 
     def __init__(
         self,
@@ -483,10 +465,10 @@ class VariancePreservingDiracProbabilityPath(BaseProbabilityPath):
         .. math::
             u_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1) = \frac{1}{2}\pi \cos(\frac{1}{2}\pi t)\boldsymbol{x}_0 - \frac{1}{2}\pi\cos(\frac{1}{2}\pi t)\boldsymbol{x}_1
 
-    It is deterministic and it does not require a Pseudo-Random Numbers Generator to be instantiated.
+    It is deterministic.
     """
 
-    _require_prng: bool = False
+    is_deterministic: bool = True
 
     def __init__(
         self,

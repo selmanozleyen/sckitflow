@@ -61,8 +61,8 @@ class ODEInference(AbstractFlowMethod):
             instead of only the endpoint.
         :param n_steps: Number of discretization steps for the solver.
         :param latent: Optional initial latent state; when provided, sampling
-            from the noise distribution is skipped. Must already be on the
-            configured device and dtype.
+            from the noise distribution is skipped. It is moved to the batch's
+            device and dtype.
         :param n_samples: Number of samples per batch element used to initialize
             the dynamics. Required when ``generate_from_noise`` is ``True``.
         """

@@ -40,10 +40,8 @@ __all__ = [
 
 # Runtime-only types: a config may hold one to build and train with, but asking
 # that config for a portable spec raises instead of dropping it on the floor.
-# Genuinely runtime-only: a module's learned weights belong in a `state_dict`,
-# not a spec, and a `torch.Generator` has no portable form (seed it via config).
+# A module's learned weights belong in a `state_dict`, not a spec.
 register_live(torch.nn.Module)
-register_live(torch.Generator)
 # A live path still builds and trains; prefer `ProbabilityPathConfig`, which serializes.
 register_live(BaseProbabilityPath)
 

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pydantic
 import pytest
 import torch
@@ -14,6 +15,7 @@ from sckitflow.core.methods._base import (
     Matcher,
     SupportsInference,
     SupportsTraining,
+    _placement_of,
     _standard_normal,
     _uniform,
 )
@@ -23,6 +25,29 @@ from sckitflow.core.probability_paths._probability_paths import (
     LinearDiracProbabilityPath,
     LinearGaussianProbabilityPath,
 )
+from sckitflow.data._dims import DataDimensions
+
+
+@pytest.fixture
+def dims() -> DataDimensions:
+    return DataDimensions(
+        state_dim=4,
+        feature_names=pd.Index([f"f{i}" for i in range(4)]),
+        condition_reps_dims=None,
+        condition_continuous_dims=None,
+        response_reps_dims=None,
+        response_continuous_dims=None,
+        groups_reps_dims=None,
+        source_lin_dim=None,
+        source_quad_dim=None,
+        target_lin_dim=None,
+        target_quad_dim=None,
+    )
+
+
+@pytest.fixture
+def module() -> torch.nn.Module:
+    return torch.nn.Linear(4, 4)
 
 
 def my_sampler(shape, *, generator, device=None, dtype=None):
@@ -30,8 +55,13 @@ def my_sampler(shape, *, generator, device=None, dtype=None):
 
 
 class Trainer:
-    def __init__(self, module):
+    """Structural `SupportsTraining` -- carries `dims`, `device`, `dtype`."""
+
+    def __init__(self, module, dims):
         self.module = module
+        self.dims = dims
+        self.device = next(iter(module.parameters())).device
+        self.dtype = next(iter(module.parameters())).dtype
         self.calls = []
 
     def compute_loss(self, step_data, *, generator, rng):
@@ -40,16 +70,16 @@ class Trainer:
 
 
 class Predictor:
-    def __init__(self, module):
+    """Structural `SupportsInference` -- carries `dims`, `device`, `dtype`."""
+
+    def __init__(self, module, dims):
         self.module = module
+        self.dims = dims
+        self.device = next(iter(module.parameters())).device
+        self.dtype = next(iter(module.parameters())).dtype
 
     def predict(self, step_data, *, generator):
         return None
-
-
-@pytest.fixture
-def module():
-    return torch.nn.Linear(4, 4)
 
 
 @pytest.fixture
@@ -63,39 +93,75 @@ def coupled():
     )
 
 
+# -------------------- _placement_of --------------------
+def test_placement_of_reads_the_first_parameter():
+    module = torch.nn.Linear(2, 2).double()
+    device, dtype = _placement_of(module)
+    assert device.type == "cpu"
+    assert dtype is torch.float64
+
+
+def test_placement_of_defaults_on_a_parameterless_module():
+    """A module with nothing to move cannot be on a GPU; CPU/float32 is the truth, not a fallback."""
+    device, dtype = _placement_of(torch.nn.Identity())
+    assert device.type == "cpu"
+    assert dtype is torch.float32
+
+
 # -------------------- AbstractMethod --------------------
-def test_abstract_method_keeps_module_as_given():
+def test_abstract_method_keeps_module_as_given(dims):
     module = torch.nn.Linear(4, 4).double()
-    method = AbstractMethod(module)
+    method = AbstractMethod(module, dims=dims)
     assert method.module is module
     assert next(method.module.parameters()).dtype == torch.float64
     assert next(method.module.parameters()).device.type == "cpu"
 
 
+def test_abstract_method_keeps_dims_by_identity(module, dims):
+    method = AbstractMethod(module, dims=dims)
+    assert method.dims is dims
+
+
+def test_abstract_method_device_and_dtype_track_the_module(module, dims):
+    """Placement is resolved per call, so a moved module is picked up on the next read."""
+    method = AbstractMethod(module, dims=dims)
+    assert method.device.type == "cpu"
+    assert method.dtype is torch.float32
+
+    module.double()  # simulates a precision move
+    assert method.dtype is torch.float64
+
+
 # -------------------- AbstractFlowMethod --------------------
-def test_flow_method_defaults(module):
-    method = AbstractFlowMethod(module, CFMTrainingConfig())
+def test_flow_method_defaults(module, dims):
+    method = AbstractFlowMethod(module, CFMTrainingConfig(), dims=dims)
     assert isinstance(method.probability_path, LinearDiracProbabilityPath)
     assert method.time_sampler is _uniform
     assert method.noise_sampler is _standard_normal
     assert method.generate_from_noise is False
 
 
-def test_flow_method_builds_path_config(module):
+def test_flow_method_builds_path_config(module, dims):
     config = CFMTrainingConfig(probability_path=LinearGaussianProbabilityPathConfig(sigma=0.5))
-    assert isinstance(AbstractFlowMethod(module, config).probability_path, LinearGaussianProbabilityPath)
+    method = AbstractFlowMethod(module, config, dims=dims)
+    assert isinstance(method.probability_path, LinearGaussianProbabilityPath)
 
 
-def test_flow_method_custom_values(module):
+def test_flow_method_custom_values(module, dims):
     path = LinearGaussianProbabilityPath(sigma=0.5)
     config = CFMTrainingConfig(
         probability_path=path, time_sampler=my_sampler, noise_sampler=my_sampler, generate_from_noise=True
     )
-    method = AbstractFlowMethod(module, config)
+    method = AbstractFlowMethod(module, config, dims=dims)
     assert method.probability_path is path
     assert method.time_sampler is my_sampler
     assert method.noise_sampler is my_sampler
     assert method.generate_from_noise is True
+
+
+def test_flow_method_keeps_dims_by_identity(module, dims):
+    method = AbstractFlowMethod(module, CFMTrainingConfig(), dims=dims)
+    assert method.dims is dims
 
 
 @pytest.mark.parametrize("sampler", [_uniform, _standard_normal])
@@ -131,11 +197,26 @@ def test_cfm_config_spec_round_trips():
 
 
 # -------------------- Protocols --------------------
-def test_structural_protocols(module):
-    assert isinstance(Trainer(module), SupportsTraining)
-    assert not isinstance(Trainer(module), SupportsInference)
-    assert isinstance(Predictor(module), SupportsInference)
-    assert not isinstance(Predictor(module), SupportsTraining)
+def test_structural_protocols(module, dims):
+    assert isinstance(Trainer(module, dims), SupportsTraining)
+    assert not isinstance(Trainer(module, dims), SupportsInference)
+    assert isinstance(Predictor(module, dims), SupportsInference)
+    assert not isinstance(Predictor(module, dims), SupportsTraining)
+
+
+def test_protocol_requires_dims(module, dims):
+    """A method without `dims` is not `SupportsTraining` / `SupportsInference`."""
+
+    class NoDims:
+        @property
+        def module(self):
+            return module
+
+        def compute_loss(self, step_data, *, generator, rng):
+            return torch.tensor(0.0), {}
+
+    assert not isinstance(NoDims(), SupportsTraining)
+    assert not isinstance(NoDims(), SupportsInference)
 
 
 # -------------------- Matcher --------------------
@@ -173,8 +254,8 @@ def test_match_subscripts_and_passes_rng(coupled):
 
 
 # -------------------- MatchedTrainingMethod --------------------
-def test_matched_training_method(module, coupled):
-    inner = Trainer(module)
+def test_matched_training_method(module, dims, coupled):
+    inner = Trainer(module, dims)
     matcher = Matcher(lambda **_: (torch.tensor([1]), torch.tensor([2])))
     matched = MatchedTrainingMethod(inner, matcher)
     generator, rng = torch.Generator().manual_seed(0), np.random.default_rng(0)
@@ -191,3 +272,19 @@ def test_matched_training_method(module, coupled):
     assert matched.matcher is matcher
     assert matched.module is module
     assert isinstance(matched, SupportsTraining)
+
+
+def test_matched_training_method_forwards_dims(module, dims, coupled):
+    inner = Trainer(module, dims)
+    matched = MatchedTrainingMethod(inner, Matcher(lambda **_: (None, None)))
+    assert matched.dims is dims
+    assert isinstance(matched, SupportsTraining)
+
+
+def test_matched_training_method_forwards_placement(module, dims, coupled):
+    """`device` / `dtype` are what a downstream consumer of the wrapper would reach for."""
+    module.double()
+    inner = Trainer(module, dims)
+    matched = MatchedTrainingMethod(inner, Matcher(lambda **_: (None, None)))
+    assert matched.dtype is torch.float64
+    assert matched.device.type == "cpu"

@@ -13,6 +13,7 @@ from sckitflow.core._types import PredictionData
 from sckitflow.core.methods import CFMTraining, ODEInference, ODEInferenceConfig
 from sckitflow.core.nn import MLPVelocity
 from sckitflow.data import DataManagerConfig, FlowDataModule
+from sckitflow.data._dims import DataDimensions
 from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.trainer import TrainingPlan
 
@@ -29,6 +30,29 @@ def _adata() -> AnnData:
     adata.var_names = ["g0", "g1"]
     adata.uns["drug"] = {d: rng.standard_normal(3).astype(np.float32) for d in DRUGS}
     return adata
+
+
+@pytest.fixture
+def dims() -> DataDimensions:
+    """Shape spec matching the test module: `MLPVelocity(2, ...)` on 2D data.
+
+    Only `state_dim` is read by the code under test; the covariate fields are
+    populated with the same values the datamodule's manager produces, so a
+    future test that reads them sees a consistent picture.
+    """
+    return DataDimensions(
+        state_dim=2,
+        feature_names=pd.Index(["g0", "g1"]),
+        condition_reps_dims={"drug": 3},
+        condition_continuous_dims=None,
+        response_reps_dims=None,
+        response_continuous_dims=None,
+        groups_reps_dims={"cell_line": 2},
+        source_lin_dim=None,
+        source_quad_dim=None,
+        target_lin_dim=None,
+        target_quad_dim=None,
+    )
 
 
 def _datamodule(adata: AnnData, **dm_kwargs) -> FlowDataModule:
@@ -52,20 +76,24 @@ def _trainer(max_steps: int = 3, **kwargs) -> pl.Trainer:
     )
 
 
-def _inference(module: torch.nn.Module) -> ODEInference:
-    return ODEInference(module, ODEInferenceConfig(n_steps=2))
+def _inference(module: torch.nn.Module, dims: DataDimensions) -> ODEInference:
+    return ODEInference(module, ODEInferenceConfig(n_steps=2), dims=dims)
 
 
-def _fit(module: torch.nn.Module, seed: int) -> dict[str, torch.Tensor]:
-    plan = TrainingPlan(CFMTraining(module), torch.optim.SGD(module.parameters(), lr=0.1), seed=seed)
+def _fit(module: torch.nn.Module, dims: DataDimensions, seed: int) -> dict[str, torch.Tensor]:
+    plan = TrainingPlan(
+        CFMTraining(module, dims=dims),
+        torch.optim.SGD(module.parameters(), lr=0.1),
+        seed=seed,
+    )
     _trainer(limit_val_batches=0).fit(plan, datamodule=_datamodule(_adata(), split_by="split"))
     return {k: v.clone() for k, v in module.state_dict().items()}
 
 
-def test_fit_logs_loss_and_updates_weights():
+def test_fit_logs_loss_and_updates_weights(dims):
     module = _module()
     before = copy.deepcopy(module.state_dict())
-    plan = TrainingPlan(CFMTraining(module), torch.optim.SGD(module.parameters(), lr=0.1))
+    plan = TrainingPlan(CFMTraining(module, dims=dims), torch.optim.SGD(module.parameters(), lr=0.1))
     trainer = _trainer(limit_val_batches=0)
     trainer.fit(plan, datamodule=_datamodule(_adata(), split_by="split"))
 
@@ -74,12 +102,12 @@ def test_fit_logs_loss_and_updates_weights():
     assert any(not before[k].equal(v) for k, v in module.state_dict().items())
 
 
-def _validate(val_names: tuple[str, ...]) -> dict[str, torch.Tensor]:
+def _validate(val_names: tuple[str, ...], dims: DataDimensions) -> dict[str, torch.Tensor]:
     module = _module()
     plan = TrainingPlan(
-        CFMTraining(module),
+        CFMTraining(module, dims=dims),
         torch.optim.SGD(module.parameters(), lr=0.1),
-        inference_method=_inference(module),
+        inference_method=_inference(module, dims),
         metrics={"mse": torchmetrics.MeanSquaredError()},
         val_names=val_names,
     )
@@ -89,60 +117,62 @@ def _validate(val_names: tuple[str, ...]) -> dict[str, torch.Tensor]:
     return trainer.callback_metrics
 
 
-def test_validation_logs_metrics():
-    metrics = _validate(("val1", "val2"))
+def test_validation_logs_metrics(dims):
+    metrics = _validate(("val1", "val2"), dims)
     assert torch.isfinite(metrics["val1/mse"])
 
 
-def test_validation_logs_one_metric_per_val_name():
-    metrics = _validate(("val1", "val2"))
+def test_validation_logs_one_metric_per_val_name(dims):
+    metrics = _validate(("val1", "val2"), dims)
     assert {"val1/mse", "val2/mse"} <= set(metrics)
 
 
-def test_validation_without_inference_logs_nothing():
+def test_validation_without_inference_logs_nothing(dims):
     module = _module()
     plan = TrainingPlan(
-        CFMTraining(module), torch.optim.SGD(module.parameters()), metrics={"mse": torchmetrics.MeanSquaredError()}
+        CFMTraining(module, dims=dims),
+        torch.optim.SGD(module.parameters()),
+        metrics={"mse": torchmetrics.MeanSquaredError()},
     )
     trainer = _trainer(max_steps=2, val_check_interval=2, check_val_every_n_epoch=None, num_sanity_val_steps=0)
     trainer.fit(plan, datamodule=_datamodule(_adata(), split_by="split"))
     assert not any("/" in k for k in trainer.callback_metrics)
 
 
-def test_configure_optimizers():
+def test_configure_optimizers(dims):
     module = _module()
     optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
-    assert TrainingPlan(CFMTraining(module), optimizer).configure_optimizers() is optimizer
+    assert TrainingPlan(CFMTraining(module, dims=dims), optimizer).configure_optimizers() is optimizer
 
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
     config = TrainingPlan(
-        CFMTraining(module), optimizer, lr_scheduler=scheduler, lr_scheduler_interval="epoch"
+        CFMTraining(module, dims=dims), optimizer, lr_scheduler=scheduler, lr_scheduler_interval="epoch"
     ).configure_optimizers()
     assert config == {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
 
     with pytest.raises(ValueError, match="without an optimizer"):
-        TrainingPlan(CFMTraining(module)).configure_optimizers()
+        TrainingPlan(CFMTraining(module, dims=dims)).configure_optimizers()
 
 
-def test_same_seed_same_weights():
+def test_same_seed_same_weights(dims):
     module = _module()
-    first = _fit(copy.deepcopy(module), seed=1)
-    same = _fit(copy.deepcopy(module), seed=1)
-    other = _fit(copy.deepcopy(module), seed=2)
+    first = _fit(copy.deepcopy(module), dims, seed=1)
+    same = _fit(copy.deepcopy(module), dims, seed=1)
+    other = _fit(copy.deepcopy(module), dims, seed=2)
     assert all(first[k].equal(same[k]) for k in first)
     assert any(not first[k].equal(other[k]) for k in first)
 
 
 @pytest.fixture
-def paired():
+def paired(dims):
     """A datamodule with `control` registered as the drug's control value."""
     adata = _adata()
     return _datamodule(adata, **GROUPS, control_values_dict={"drug": "control"}), adata
 
 
-def test_predict_adata_schema(paired):
+def test_predict_adata_schema(paired, dims):
     dmod, adata = paired
-    pred = predict_adata(dmod, _inference(_module()), adata)
+    pred = predict_adata(dmod, _inference(_module(), dims), adata)
     assert isinstance(pred, AnnData)
     assert list(pred.var_names) == list(dmod.data_dims.feature_names) == ["g0", "g1"]
     assert {"cell_line", "drug"} <= set(pred.obs.columns)
@@ -150,16 +180,16 @@ def test_predict_adata_schema(paired):
     assert pred.n_obs == 30
 
 
-def test_predict_adata_return_raw(paired):
+def test_predict_adata_return_raw(paired, dims):
     dmod, adata = paired
-    pred, raw = predict_adata(dmod, _inference(_module()), adata, return_raw=True)
+    pred, raw = predict_adata(dmod, _inference(_module(), dims), adata, return_raw=True)
     assert isinstance(raw, PredictionData)
     np.testing.assert_array_equal(np.asarray(raw.X), pred.X)
 
 
-def test_predict_adata_max_per_group(paired):
+def test_predict_adata_max_per_group(paired, dims):
     dmod, adata = paired
-    pred = predict_adata(dmod, _inference(_module()), adata, max_per_group=2)
+    pred = predict_adata(dmod, _inference(_module(), dims), adata, max_per_group=2)
     assert pred.obs.value_counts(["cell_line", "drug"]).max() <= 2
     assert pred.n_obs == 2 * 6
 
@@ -173,27 +203,27 @@ def test_predict_adata_max_per_group(paired):
         (None, {"drug": "nonexistent"}, set(DRUGS)),
     ],
 )
-def test_predict_adata_control_values(registered, control_values_dict, expected_drugs):
+def test_predict_adata_control_values(registered, control_values_dict, expected_drugs, dims):
     adata = _adata()
     dmod = _datamodule(adata, **GROUPS, control_values_dict=registered)
-    pred = predict_adata(dmod, _inference(_module()), adata, control_values_dict=control_values_dict)
+    pred = predict_adata(dmod, _inference(_module(), dims), adata, control_values_dict=control_values_dict)
     assert set(pred.obs["drug"]) == expected_drugs
 
 
 @pytest.mark.parametrize("training", [True, False])
-def test_predict_adata_restores_mode(paired, training):
+def test_predict_adata_restores_mode(paired, training, dims):
     dmod, adata = paired
     module = _module().train(training)
-    predict_adata(dmod, _inference(module), adata)
+    predict_adata(dmod, _inference(module, dims), adata)
     assert module.training is training
 
 
-def test_checkpoint_restores_datamodule(tmp_path):
+def test_checkpoint_restores_datamodule(tmp_path, dims):
     adata = _adata()
     dmod = _datamodule(adata, split_by="split")
     module = _module()
     trainer = _trainer(max_steps=1, limit_val_batches=0)
-    trainer.fit(TrainingPlan(CFMTraining(module), torch.optim.SGD(module.parameters())), datamodule=dmod)
+    trainer.fit(TrainingPlan(CFMTraining(module, dims=dims), torch.optim.SGD(module.parameters())), datamodule=dmod)
     path = tmp_path / "run.ckpt"
     trainer.save_checkpoint(path)
 

@@ -170,6 +170,7 @@ class DataManager:
             rep_lin=config.rep_lin,
             source_rep_quad=config.source_rep_quad,
             target_rep_quad=config.target_rep_quad,
+            use_linear=config.use_linear,
         )
         self._target_data_schema = ResponseDataSchema(
             categorical_covs_dict=config.target_categorical_covs_dict,
@@ -773,6 +774,13 @@ class DataManagerConfig(Component):
     distributions over incomparable spaces. Used to initialize the coupling data schema.
     This key will hold the features exclusively present in the target distribution.
     """
+
+    use_linear: bool = True
+    """Whether the coupling has a shared linear term. `False` selects pure Gromov-Wasserstein:
+    source and target are matched on their intra-domain geometry alone, with no shared axes.
+    Requires both `source_rep_quad` and `target_rep_quad`, and is mutually exclusive with
+    `rep_lin`. Defaults to `True` (a shared linear term, optionally fused with per-side
+    quadratics)."""
 
     def build(self, *, splitter: Splitter[Any] | None = None) -> DataManager:
         """The data manager, applying ``splitter`` to the data it streams."""

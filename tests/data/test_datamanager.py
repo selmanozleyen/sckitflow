@@ -517,3 +517,50 @@ class TestUnconditionalStreaming:
         assert len(el) == 1  # a single implicit group
         pred_step, _ = next(iter(el))
         assert pred_step["target_state"].shape[0] == ad.n_obs
+
+
+class TestLinearFreeCoupling:
+    """DataManagerConfig(use_linear=False) flows through to linear-free couplings."""
+
+    def _with_quads(self, adata: AnnData) -> AnnData:
+        rng = np.random.default_rng(0)
+        adata.obsm["X_src_quad"] = rng.standard_normal((adata.n_obs, 4)).astype("float32")
+        adata.obsm["X_tgt_quad"] = rng.standard_normal((adata.n_obs, 6)).astype("float32")
+        return adata
+
+    def test_config_flows_to_linear_free_coupling(self, adata_small: AnnData):
+        self._with_quads(adata_small)
+        dm = _make_manager(
+            use_linear=False,
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        distr = dm.get_distribution_data(adata_small)
+
+        assert distr.source_coupling_data.state_lin is None
+        assert distr.target_coupling_data.state_lin is None
+        assert distr.source_coupling_data.state_quad.X.shape[1] == 4
+        assert distr.target_coupling_data.state_quad.X.shape[1] == 6
+        # Both sides linear-free: the check passes, quadratic widths are free to differ.
+        distr.source_coupling_data.assert_same_spatial_dims(distr.target_coupling_data)
+
+    def test_config_rejects_rep_lin(self):
+        with pytest.raises(ValueError, match="redundant"):
+            _make_manager(
+                use_linear=False,
+                rep_lin="X_repr",
+                source_rep_quad="X_src_quad",
+                target_rep_quad="X_tgt_quad",
+            )
+
+    @pytest.mark.parametrize(
+        "source_rep_quad, target_rep_quad",
+        [(None, "X_tgt_quad"), ("X_src_quad", None)],
+    )
+    def test_config_requires_both_quads(self, source_rep_quad, target_rep_quad):
+        with pytest.raises(ValueError, match="requires both"):
+            _make_manager(
+                use_linear=False,
+                source_rep_quad=source_rep_quad,
+                target_rep_quad=target_rep_quad,
+            )

@@ -10,100 +10,86 @@ invalid_key = "invalid_key"
 
 class TestCouplingDataSchema:
     @staticmethod
-    def _is_valid_args(
-        source_rep: str | None,
-        target_rep: str | None,
-        n_shared_dims: int | None,
-    ) -> bool:
-        if n_shared_dims is not None:
-            if n_shared_dims <= 0:
-                return False
-            if target_rep == source_rep:
-                return False
-        return True
-
-    @staticmethod
     def _verify_coupling_data(
         data: CouplingData,
-        data_array: np.ndarray,
-        n_shared_dims: int | None,
+        expected_lin: np.ndarray,
+        expected_quad: np.ndarray | None,
     ) -> None:
         assert isinstance(data, CouplingData)
-        tot_dims = data.state_lin.X.shape[1]
-        if n_shared_dims is None:
+        assert np.array_equal(data.state_lin.X, expected_lin)
+        if expected_quad is None:
             assert data.state_quad is None
         else:
-            tot_dims = tot_dims + data.state_quad.X.shape[1]
             assert isinstance(data.state_quad, StateData)
-        assert data_array.shape[1] == tot_dims
+            assert np.array_equal(data.state_quad.X, expected_quad)
 
-    @pytest.mark.parametrize("source_rep", [None, "X_src", invalid_key])
-    @pytest.mark.parametrize("target_rep", [None, "X_tgt", invalid_key])
-    @pytest.mark.parametrize("n_shared_dims", [None, 0, 10])
+    @pytest.mark.parametrize("rep_lin", [None, "X_repr", invalid_key])
+    @pytest.mark.parametrize("source_rep_quad", [None, "X_src", invalid_key])
+    @pytest.mark.parametrize("target_rep_quad", [None, "X_tgt", invalid_key])
     def test_init(
         self,
-        source_rep: str | None,
-        target_rep: str | None,
-        n_shared_dims: int | None,
+        rep_lin: str | None,
+        source_rep_quad: str | None,
+        target_rep_quad: str | None,
     ) -> None:
-        # verify arguments
-        is_valid_args = self._is_valid_args(source_rep, target_rep, n_shared_dims)
-        if not is_valid_args:
-            with pytest.raises(ValueError):
-                schema = CouplingDataSchema(source_rep=source_rep, target_rep=target_rep, n_shared_dims=n_shared_dims)
-            return None
+        schema = CouplingDataSchema(
+            rep_lin=rep_lin,
+            source_rep_quad=source_rep_quad,
+            target_rep_quad=target_rep_quad,
+        )
+        assert isinstance(schema, CouplingDataSchema)
+        # Properties expose the values passed at init verbatim.
+        assert schema.rep_lin == rep_lin
+        assert schema.source_rep_quad == source_rep_quad
+        assert schema.target_rep_quad == target_rep_quad
 
-        # initialize schema
-        schema = CouplingDataSchema(source_rep=source_rep, target_rep=target_rep, n_shared_dims=n_shared_dims)
-        if n_shared_dims is None:
-            assert not schema.has_incomparable_spaces
+    @pytest.mark.parametrize("rep_lin", [None, "X_repr", invalid_key])
+    @pytest.mark.parametrize("source_rep_quad", [None, "X_src", invalid_key])
+    @pytest.mark.parametrize("target_rep_quad", [None, "X_tgt", invalid_key])
+    def test_verify_schema(
+        self,
+        adata: AnnData,
+        rep_lin: str | None,
+        source_rep_quad: str | None,
+        target_rep_quad: str | None,
+    ) -> None:
+        schema = CouplingDataSchema(
+            rep_lin=rep_lin,
+            source_rep_quad=source_rep_quad,
+            target_rep_quad=target_rep_quad,
+        )
+        has_invalid_key = invalid_key in (rep_lin, source_rep_quad, target_rep_quad)
+        if has_invalid_key:
+            with pytest.raises(KeyError):
+                schema._verify_schema(adata)
         else:
-            assert schema.has_incomparable_spaces
+            # Should not raise for any valid/None combination.
+            schema._verify_schema(adata)
 
-    @pytest.mark.parametrize("source_rep", [None, "X_src", invalid_key])
-    @pytest.mark.parametrize("target_rep", [None, "X_tgt", invalid_key])
-    @pytest.mark.parametrize("n_shared_dims", [None, 10, 16])
+    @pytest.mark.parametrize("rep_lin", [None, "X_repr"])
+    @pytest.mark.parametrize("source_rep_quad", [None, "X_src"])
+    @pytest.mark.parametrize("target_rep_quad", [None, "X_tgt"])
     def test_get_data(
         self,
         adata: AnnData,
-        source_rep: str | None,
-        target_rep: str | None,
-        n_shared_dims: int | None,
+        rep_lin: str | None,
+        source_rep_quad: str | None,
+        target_rep_quad: str | None,
     ) -> None:
-        # skip invalid arguments
-        is_valid_args = self._is_valid_args(source_rep, target_rep, n_shared_dims)
-        if not is_valid_args:
-            pytest.skip()
+        schema = CouplingDataSchema(
+            rep_lin=rep_lin,
+            source_rep_quad=source_rep_quad,
+            target_rep_quad=target_rep_quad,
+        )
 
-        # initialize schema
-        schema = CouplingDataSchema(source_rep=source_rep, target_rep=target_rep, n_shared_dims=n_shared_dims)
+        # Expected arrays: mirror the extraction the schema is supposed to do.
+        expected_lin = schema._extract_array(adata, repr=rep_lin)
+        expected_src_quad = schema._extract_array(adata, repr=source_rep_quad) if source_rep_quad is not None else None
+        expected_tgt_quad = schema._extract_array(adata, repr=target_rep_quad) if target_rep_quad is not None else None
 
-        # wrong identifier
-        if source_rep == invalid_key and n_shared_dims is not None:
-            with pytest.raises(KeyError):
-                _data = schema.get_data(adata)
-            return None
-        if target_rep == invalid_key:
-            with pytest.raises(KeyError):
-                _data = schema.get_data(adata)
-            return None
+        source_coupling, target_coupling = schema._get_data(adata)
 
-        # extract data
-        target_data = schema.extract_array(adata, target_rep)
-        if n_shared_dims is not None:
-            source_data = schema.extract_array(adata, source_rep)
-        else:
-            source_data = target_data
-
-        # wrong dimensions
-        if n_shared_dims is not None:
-            if (n_shared_dims >= source_data.shape[1]) or (n_shared_dims >= target_data.shape[1]):
-                with pytest.raises(ValueError):
-                    _data = schema.get_data(adata)
-                return None
-
-        source_coupling, target_coupling = schema.get_data(adata)
-
-        self._verify_coupling_data(source_coupling, source_data, n_shared_dims)
-        self._verify_coupling_data(target_coupling, target_data, n_shared_dims)
+        # Both source and target share the same linear term.
+        self._verify_coupling_data(source_coupling, expected_lin, expected_src_quad)
+        self._verify_coupling_data(target_coupling, expected_lin, expected_tgt_quad)
         source_coupling.assert_same_spatial_dims(target_coupling)

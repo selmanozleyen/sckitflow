@@ -6,53 +6,27 @@ from sckitflow.data.containers import CouplingData, StateData
 
 
 class TestCouplingData:
-    @pytest.mark.parametrize("n_shared_dims", [None, 1, 5])
-    def test_init_from_state_data_valid(
-        self,
-        adata: AnnData,
-        n_shared_dims: int | None,
-    ) -> None:
-        X = adata.X
-        state_data = StateData(X)
-
-        coupling = CouplingData.init_from_state_data(
-            state_data,
-            n_shared_dims=n_shared_dims,
-        )
+    def test_init_lin_only(self, adata: AnnData) -> None:
+        state_lin = StateData(adata.X)
+        coupling = CouplingData(state_lin=state_lin)
 
         assert isinstance(coupling, CouplingData)
-        assert isinstance(coupling.state_lin, StateData)
-        assert len(coupling) == X.shape[0]
+        assert coupling.state_lin is state_lin
+        assert coupling.state_quad is None
 
-        if n_shared_dims is None:
-            assert coupling.state_quad is None
-            assert coupling.state_lin.X.shape == X.shape
-            np.testing.assert_array_equal(coupling.state_lin.X, X)
-        else:
-            assert isinstance(coupling.state_quad, StateData)
-            assert coupling.state_lin.X.shape[1] == n_shared_dims
-            assert coupling.state_quad.X.shape[1] == X.shape[1] - n_shared_dims
+    def test_init_lin_and_quad(self, adata: AnnData) -> None:
+        state_lin = StateData(adata.X)
+        state_quad = StateData(adata.X)
 
-            reconstructed = np.concatenate(
-                (coupling.state_lin.X, coupling.state_quad.X),
-                axis=1,
-            )
-            np.testing.assert_array_equal(reconstructed, X)
+        coupling = CouplingData(state_lin=state_lin, state_quad=state_quad)
 
-    @pytest.mark.parametrize("n_shared_dims", [0, 9999])
-    def test_init_from_state_data_invalid_n_shared_dims(
-        self,
-        adata: AnnData,
-        n_shared_dims: int,
-    ) -> None:
-        X = adata.X
-        state_data = StateData(X)
+        assert coupling.state_lin is state_lin
+        assert coupling.state_quad is state_quad
 
-        with pytest.raises(ValueError, match="number of shared spatial dimensions"):
-            CouplingData.init_from_state_data(
-                state_data,
-                n_shared_dims=n_shared_dims,
-            )
+    def test_init_default(self) -> None:
+        coupling = CouplingData()
+        assert coupling.state_lin is None
+        assert coupling.state_quad is None
 
     def test_post_init_mismatched_n_obs(self, adata: AnnData) -> None:
         X = adata.X
@@ -62,45 +36,72 @@ class TestCouplingData:
         with pytest.raises(ValueError):
             CouplingData(state_lin=state_lin, state_quad=state_quad)
 
+    def test_post_init_matching_n_obs(self, adata: AnnData) -> None:
+        X = adata.X
+        # Should not raise when n_obs match.
+        CouplingData(state_lin=StateData(X), state_quad=StateData(X))
+
+    def test_post_init_only_lin(self, adata: AnnData) -> None:
+        # No state_quad: length check is skipped.
+        CouplingData(state_lin=StateData(adata.X))
+
     def test_len(self, adata: AnnData) -> None:
-        coupling = CouplingData.init_from_state_data(StateData(adata.X))
+        coupling = CouplingData(state_lin=StateData(adata.X))
+        assert len(coupling) == adata.n_obs
+
+    def test_len_with_quad(self, adata: AnnData) -> None:
+        coupling = CouplingData(
+            state_lin=StateData(adata.X),
+            state_quad=StateData(adata.X),
+        )
         assert len(coupling) == adata.n_obs
 
     @pytest.mark.parametrize("idxs", [slice(0, 5), np.array([0, 2, 4])])
-    def test_getitem(self, adata: AnnData, idxs) -> None:
-        coupling = CouplingData.init_from_state_data(
-            StateData(adata.X),
-            n_shared_dims=3,
-        )
+    def test_getitem_with_quad(self, adata: AnnData, idxs) -> None:
+        state_lin = StateData(adata.X)
+        state_quad = StateData(adata.X)
+        coupling = CouplingData(state_lin=state_lin, state_quad=state_quad)
 
         subset = coupling[idxs]
 
         assert isinstance(subset, CouplingData)
-        assert len(subset) == len(coupling.state_lin[idxs])
-        assert subset.state_lin.X.shape[1] == coupling.state_lin.X.shape[1]
-        assert subset.state_quad.X.shape[1] == coupling.state_quad.X.shape[1]
+        assert subset.state_lin is not state_lin
+        assert subset.state_quad is not state_quad
+        assert subset.state_lin.X.shape[1] == state_lin.X.shape[1]
+        assert subset.state_quad.X.shape[1] == state_quad.X.shape[1]
+        np.testing.assert_array_equal(subset.state_lin.X, state_lin.X[idxs])
+        np.testing.assert_array_equal(subset.state_quad.X, state_quad.X[idxs])
+
+    @pytest.mark.parametrize("idxs", [slice(0, 5), np.array([0, 2, 4])])
+    def test_getitem_no_quad(self, adata: AnnData, idxs) -> None:
+        state_lin = StateData(adata.X)
+        coupling = CouplingData(state_lin=state_lin)
+
+        subset = coupling[idxs]
+
+        assert isinstance(subset, CouplingData)
+        assert subset.state_quad is None
+        np.testing.assert_array_equal(subset.state_lin.X, state_lin.X[idxs])
 
     def test_assert_same_spatial_dims_valid(self, adata: AnnData) -> None:
         state_data = StateData(adata.X)
-
-        c1 = CouplingData.init_from_state_data(state_data, n_shared_dims=3)
-        c2 = CouplingData.init_from_state_data(state_data, n_shared_dims=3)
+        c1 = CouplingData(state_lin=state_data)
+        c2 = CouplingData(state_lin=state_data)
 
         c1.assert_same_spatial_dims(c2)
 
     def test_assert_same_spatial_dims_invalid(self, adata: AnnData) -> None:
-        state_data = StateData(adata.X)
-
-        c1 = CouplingData.init_from_state_data(state_data, n_shared_dims=2)
-        c2 = CouplingData.init_from_state_data(state_data, n_shared_dims=5)
+        n_dims = adata.X.shape[1]
+        c1 = CouplingData(state_lin=StateData(adata.X[:, : n_dims // 2]))
+        c2 = CouplingData(state_lin=StateData(adata.X))
 
         with pytest.raises(ValueError, match="same number of spatial dimensions"):
             c1.assert_same_spatial_dims(c2)
 
-    def test_repr(self, adata: AnnData) -> None:
-        coupling = CouplingData.init_from_state_data(
-            StateData(adata.X),
-            n_shared_dims=3,
+    def test_repr_with_quad(self, adata: AnnData) -> None:
+        coupling = CouplingData(
+            state_lin=StateData(adata.X),
+            state_quad=StateData(adata.X),
         )
 
         rep = repr(coupling)
@@ -108,4 +109,13 @@ class TestCouplingData:
         assert "CouplingData" in rep
         assert "linear" in rep
         assert "quadratic" in rep
+        assert f"n_obs={adata.n_obs}" in rep
+
+    def test_repr_no_quad(self, adata: AnnData) -> None:
+        coupling = CouplingData(state_lin=StateData(adata.X))
+
+        rep = repr(coupling)
+
+        assert "CouplingData" in rep
+        assert "quadratic=None" in rep
         assert f"n_obs={adata.n_obs}" in rep

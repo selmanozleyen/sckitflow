@@ -72,36 +72,3 @@ class CouplingData(BaseData):
                 f"dimensions for the linear term, found {n_dims_self} and {n_dims_other}."
             )
             raise ValueError(msg)
-
-    @classmethod
-    def init_from_state_data(
-        cls,
-        state_data: StateData,
-        n_shared_dims: int | None = None,
-    ) -> "CouplingData":
-        """Initializes the coupling data from base state data and number of shared dimensions.
-
-        The dimensions are assumed to be ordered and the quadratic part will be taken from
-        the last :param: `n_shared_dims`, when provided.
-
-        :param state_data: The underlying state data.
-        :type state_data: class: `StateData`
-
-        :param n_shared_dims: The number of shared dimensions. Defaults to `None` (all dimensions).
-        :type n_shared_dims: class: `int | None`
-        """
-        n_dims = state_data.X.shape[1]
-        if n_shared_dims is not None:
-            if n_shared_dims >= n_dims or n_shared_dims == 0:
-                msg = (
-                    "The number of shared spatial dimensions should be positive and"
-                    " strictly smaller the the number of available dimenions. "
-                    f"Queried {n_shared_dims} on state data of shape {state_data.X.shape}"
-                )
-                raise ValueError(msg)
-            state_lin = StateData(state_data.X[:, :n_shared_dims])
-            state_quad = StateData(state_data.X[:, n_shared_dims:])
-        else:
-            state_lin = state_data
-            state_quad = None
-        return cls(state_lin, state_quad)

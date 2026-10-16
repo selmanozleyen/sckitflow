@@ -18,8 +18,6 @@ __all__ = [
     "SupportsTraining",
     "SupportsInference",
     # Code reuse for implementations -- not contracts.
-    # Completeness is answered by the two Protocols above, which cover
-    # implementations that inherit nothing from us as well.
     "AbstractMethod",
     "AbstractFlowMethod",
     "AbstractFlowMethodConfig",
@@ -35,8 +33,6 @@ __all__ = [
 
 
 # -------------------- The two contracts --------------------
-# These are the only structural types the library dispatches on. Every class
-# below is there to share code between implementations, never to be type-tested.
 @runtime_checkable
 class SupportsTraining(Protocol):
     """A module to train, its shape spec, plus `compute_loss`."""
@@ -82,19 +78,37 @@ class InferenceMethodConfig(Component):
 
 
 # -------------------- Shared implementation --------------------
+def _placement_of(module: torch.nn.Module) -> tuple[torch.device, torch.dtype]:
+    """Where a tensor this method allocates has to live, given its module.
+
+    Read off the module's first parameter: Lightning places parameters, not the
+    tensors a method draws, so the parameters are the reference for anything new.
+    A parameterless module has no placement of its own -- and cannot be on a GPU,
+    since there would be nothing to move -- so CPU / float32 is the default.
+
+    Deliberately not cached: Lightning moves the module inside ``Trainer.fit`` /
+    ``.predict``, after the method was constructed. Reading the parameter on each
+    call is what keeps the placement in sync with the module's current state.
+    """
+    first = next(iter(module.parameters()), None)
+    if first is None:
+        return torch.device("cpu"), torch.float32
+    return first.device, first.dtype
+
+
 class AbstractMethod:
     """Holds the neural module a method is built on, and the shape spec it was built for.
 
-    Purely for code reuse between implementations -- never type-test against
-    this, use `SupportsTraining` / `SupportsInference`.
+    Purely for code reuse between implementations -- never type-test against this,
+    use `SupportsTraining` / `SupportsInference`.
 
-    Construction has no side effects: the module is stored as given, never
-    moved or retyped, so handing one module to a training and an inference
-    method is safe. Placement is the caller's -- ``module.to(device, dtype)``
-    before constructing, and ``module.train(mode)`` to switch modes. Inside
-    `compute_loss` / `predict` the batch is the reference for device and dtype;
-    `dims` is the reference for *shape*, so nothing has to be reverse-engineered
-    from a module attribute or guessed from a config field.
+    Construction has no side effects: the module is stored as given, never moved
+    or retyped, so handing one module to a training and an inference method is
+    safe. Placement is the caller's -- ``module.to(device, dtype)`` before
+    constructing, and ``module.train(mode)`` to switch modes. Inside
+    `compute_loss` / `predict`, `dims` is the reference for *shape* and
+    `device` / `dtype` (read live off the module) are the reference for
+    *placement of anything the method allocates*.
     """
 
     def __init__(self, module: torch.nn.Module, *, dims: DataDimensions) -> None:
@@ -116,6 +130,16 @@ class AbstractMethod:
     @property
     def dims(self) -> DataDimensions:
         return self._dims
+
+    @property
+    def device(self) -> torch.device:
+        """Where a tensor this method allocates has to live; see :func:`_placement_of`."""
+        return _placement_of(self.module)[0]
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """The dtype a tensor this method allocates has to have; see :func:`_placement_of`."""
+        return _placement_of(self.module)[1]
 
 
 def _uniform(
@@ -146,9 +170,9 @@ class AbstractFlowMethodConfig(Component):
 
     probability_path: ProbabilityPathConfig | BaseProbabilityPath | None = None
     """A path config (portable) or a live path. ``None`` is a linear Dirac path."""
-    time_sampler: Callable[..., torch.Tensor] | None = None  # a `SamplerFn`; pydantic checks it is callable
+    time_sampler: Callable[..., torch.Tensor] | None = None
     """Samples times in ``[0, 1]``. ``None`` samples uniformly via `torch.rand`."""
-    noise_sampler: Callable[..., torch.Tensor] | None = None  # a `SamplerFn`
+    noise_sampler: Callable[..., torch.Tensor] | None = None
     """Samples source noise. ``None`` samples a standard normal via `torch.randn`."""
     generate_from_noise: bool = False
     """Interpolate from noise even when source states are present; the source is then extra conditioning."""
@@ -157,10 +181,11 @@ class AbstractFlowMethodConfig(Component):
 class AbstractFlowMethod(AbstractMethod):
     """Adds the flow configuration that flow trainers and flow predictors share.
 
-    Its settings come from one config object, an `AbstractFlowMethodConfig` or a subclass of it. A training
-    and an inference method given the same module and flow settings share the path, samplers and module. The
-    data shape comes from `dims`; it is not carried on the config, because it is a property of the run's data,
-    not of the flow settings.
+    Its settings come from one config object, an `AbstractFlowMethodConfig` or a
+    subclass of it. A training and an inference method given the same module and
+    flow settings share the path, samplers and module. The data shape comes from
+    `dims`; it is not carried on the config, because it is a property of the run's
+    data, not of the flow settings.
     """
 
     def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig, *, dims: DataDimensions) -> None:
@@ -300,3 +325,13 @@ class MatchedTrainingMethod:
     def dims(self) -> DataDimensions:
         """The wrapped method's shape spec; `SupportsTraining` requires it."""
         return self._method.dims
+
+    @property
+    def device(self) -> torch.device:
+        """The wrapped method's placement; forwarded so any caller reaching for it sees the same one."""
+        return self._method.device  # type: ignore[attr-defined]
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """The wrapped method's dtype; forwarded for the same reason as :attr:`device`."""
+        return self._method.dtype  # type: ignore[attr-defined]

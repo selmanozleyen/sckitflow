@@ -50,9 +50,9 @@ class ODEInference(AbstractFlowMethod):
         :param module: An initialized neural module the method builds upon.
         :param config: The flow and solver settings; ``None`` takes every default.
         :param dims: The shape spec of the data the module was built for. Its
-            ``state_dim`` sizes the latent when inference is unpaired.
+            ``state_dim`` sizes the latent.
         :param latent: Optional initial latent state; when provided, sampling from
-            the noise distribution is skipped. It is moved to the batch's device
+            the noise distribution is skipped. It is moved to the module's device
             and dtype. Live, so not part of the config.
         """
         self.config = ODEInferenceConfig() if config is None else config
@@ -62,10 +62,10 @@ class ODEInference(AbstractFlowMethod):
     def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData:
         """Integrates the ODE and returns the aggregated prediction.
 
-        The latent is drawn at ``(B, dims.state_dim)`` (or ``(N, B, dims.state_dim)`` with
-        ``n_samples``), with ``B`` and the reference device/dtype coming from
-        ``source_state`` when present, else the conditioning tensors. A caller-supplied
-        ``latent`` overrides both.
+        The latent is drawn at ``dims.state_dim`` on the module's own device and
+        dtype. Batch shape comes from ``step_data["source_state"]`` when present,
+        else the conditioning tensors; when neither is present, ``n_samples``
+        standalone samples are drawn. A caller-supplied ``latent`` overrides both.
         """
         source_state = step_data["source_state"]
 
@@ -82,16 +82,16 @@ class ODEInference(AbstractFlowMethod):
                 condition_dict,
                 self.noise_sampler,
                 self.dims,
+                device=self.device,
+                dtype=self.dtype,
                 n_samples=self.config.n_samples,
                 generate_from_noise=self.generate_from_noise,
                 generator=generator,
             )
         else:
-            # `self.latent` is the only tensor not built by the loader, so it is the
-            # only one that has to be placed. Reference order matches
-            # `prepare_latent_inference`: source first, else first conditioning tensor.
-            reference = source_state if source_state is not None else next(iter(condition_dict.values()))
-            latent = self.latent.to(device=reference.device, dtype=reference.dtype)
+            # The only tensor the method does not draw itself; placed on the
+            # module's device and dtype, matching what the sampler above produces.
+            latent = self.latent.to(device=self.device, dtype=self.dtype)
 
         # ----- 3. Expand conditioning to match latent dimensions -----
         condition_dict, source_expanded = expand_conditioning(

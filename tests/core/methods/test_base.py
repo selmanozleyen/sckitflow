@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pydantic
 import pytest
 import torch
@@ -14,6 +15,7 @@ from sckitflow.core.methods._base import (
     Matcher,
     SupportsInference,
     SupportsTraining,
+    _placement_of,
     _standard_normal,
     _uniform,
 )
@@ -23,6 +25,29 @@ from sckitflow.core.probability_paths._probability_paths import (
     LinearDiracProbabilityPath,
     LinearGaussianProbabilityPath,
 )
+from sckitflow.data._dims import DataDimensions
+
+
+@pytest.fixture
+def dims() -> DataDimensions:
+    return DataDimensions(
+        state_dim=4,
+        feature_names=pd.Index([f"f{i}" for i in range(4)]),
+        condition_reps_dims=None,
+        condition_continuous_dims=None,
+        response_reps_dims=None,
+        response_continuous_dims=None,
+        groups_reps_dims=None,
+        source_lin_dim=None,
+        source_quad_dim=None,
+        target_lin_dim=None,
+        target_quad_dim=None,
+    )
+
+
+@pytest.fixture
+def module() -> torch.nn.Module:
+    return torch.nn.Linear(4, 4)
 
 
 def my_sampler(shape, *, generator, device=None, dtype=None):
@@ -30,11 +55,13 @@ def my_sampler(shape, *, generator, device=None, dtype=None):
 
 
 class Trainer:
-    """Structural `SupportsTraining` -- carries `dims`, as the protocol now requires."""
+    """Structural `SupportsTraining` -- carries `dims`, `device`, `dtype`."""
 
     def __init__(self, module, dims):
         self.module = module
         self.dims = dims
+        self.device = next(iter(module.parameters())).device
+        self.dtype = next(iter(module.parameters())).dtype
         self.calls = []
 
     def compute_loss(self, step_data, *, generator, rng):
@@ -43,11 +70,13 @@ class Trainer:
 
 
 class Predictor:
-    """Structural `SupportsInference` -- carries `dims`, as the protocol now requires."""
+    """Structural `SupportsInference` -- carries `dims`, `device`, `dtype`."""
 
     def __init__(self, module, dims):
         self.module = module
         self.dims = dims
+        self.device = next(iter(module.parameters())).device
+        self.dtype = next(iter(module.parameters())).dtype
 
     def predict(self, step_data, *, generator):
         return None
@@ -64,6 +93,21 @@ def coupled():
     )
 
 
+# -------------------- _placement_of --------------------
+def test_placement_of_reads_the_first_parameter():
+    module = torch.nn.Linear(2, 2).double()
+    device, dtype = _placement_of(module)
+    assert device.type == "cpu"
+    assert dtype is torch.float64
+
+
+def test_placement_of_defaults_on_a_parameterless_module():
+    """A module with nothing to move cannot be on a GPU; CPU/float32 is the truth, not a fallback."""
+    device, dtype = _placement_of(torch.nn.Identity())
+    assert device.type == "cpu"
+    assert dtype is torch.float32
+
+
 # -------------------- AbstractMethod --------------------
 def test_abstract_method_keeps_module_as_given(dims):
     module = torch.nn.Linear(4, 4).double()
@@ -76,6 +120,16 @@ def test_abstract_method_keeps_module_as_given(dims):
 def test_abstract_method_keeps_dims_by_identity(module, dims):
     method = AbstractMethod(module, dims=dims)
     assert method.dims is dims
+
+
+def test_abstract_method_device_and_dtype_track_the_module(module, dims):
+    """Placement is resolved per call, so a moved module is picked up on the next read."""
+    method = AbstractMethod(module, dims=dims)
+    assert method.device.type == "cpu"
+    assert method.dtype is torch.float32
+
+    module.double()  # simulates a precision move
+    assert method.dtype is torch.float64
 
 
 # -------------------- AbstractFlowMethod --------------------
@@ -151,7 +205,7 @@ def test_structural_protocols(module, dims):
 
 
 def test_protocol_requires_dims(module, dims):
-    """A method that exposes `module` and `compute_loss` but no `dims` is not `SupportsTraining`."""
+    """A method without `dims` is not `SupportsTraining` / `SupportsInference`."""
 
     class NoDims:
         @property
@@ -221,8 +275,16 @@ def test_matched_training_method(module, dims, coupled):
 
 
 def test_matched_training_method_forwards_dims(module, dims, coupled):
-    """`SupportsTraining` requires `dims`, so the wrapper must expose the wrapped method's."""
     inner = Trainer(module, dims)
     matched = MatchedTrainingMethod(inner, Matcher(lambda **_: (None, None)))
     assert matched.dims is dims
     assert isinstance(matched, SupportsTraining)
+
+
+def test_matched_training_method_forwards_placement(module, dims, coupled):
+    """`device` / `dtype` are what a downstream consumer of the wrapper would reach for."""
+    module.double()
+    inner = Trainer(module, dims)
+    matched = MatchedTrainingMethod(inner, Matcher(lambda **_: (None, None)))
+    assert matched.dtype is torch.float64
+    assert matched.device.type == "cpu"

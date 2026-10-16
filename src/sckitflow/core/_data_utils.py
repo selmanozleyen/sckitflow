@@ -45,10 +45,10 @@ def get_tensor_dict_from_data(
 def _index_obj(value: Any, idx: Any | None) -> Any:
     """Row-index one step-data field by ``idx``.
 
-    Handles the three field shapes that appear in a batch: ``None`` (passthrough), a
-    plain ``dict[str, tensor]`` (each value is indexed; ``None`` values pass through), and any
-    row-indexable object -- a ``torch.Tensor`` / array or a container that implements
-    ``__getitem__``. A ``None`` index is a no-op.
+    Handles the three field shapes that appear in a batch: ``None`` (passthrough),
+    a plain ``dict[str, tensor]`` (each value is indexed; ``None`` values pass
+    through), and any row-indexable object -- a ``torch.Tensor`` / array or a
+    container that implements ``__getitem__``. A ``None`` index is a no-op.
     """
     if value is None or idx is None:
         return value
@@ -64,10 +64,11 @@ def subscript_step_data(
 ) -> StepData:
     """Row-slice a batch: the source side by ``src_idxs``, the target side by ``tgt_idxs``.
 
-    Applies a coupling/matching permutation (or subselection) to a batch. Each side is sliced
-    independently; a ``None`` index leaves that side untouched and a ``None`` field stays ``None``.
-    The target side includes ``target_response_data``, so target covariates carried for output
-    reconstruction remain aligned with ``target_state``. Replaces ``BaseMethod._safe_subscript_obj``.
+    Applies a coupling/matching permutation (or subselection) to a batch. Each side
+    is sliced independently; a ``None`` index leaves that side untouched and a
+    ``None`` field stays ``None``. The target side includes ``target_response_data``,
+    so target covariates carried for output reconstruction remain aligned with
+    ``target_state``. Replaces ``BaseMethod._safe_subscript_obj``.
     """
     source_fields = (
         "source_state",
@@ -85,6 +86,9 @@ def subscript_step_data(
         "target_response_data",
     )
 
+    # A field on neither side would keep its row order while the rest of the batch
+    # is permuted -- wrong rows, no error. Checked only when something is actually
+    # permuted: with both `None`, nothing moves, so nothing can fall out of alignment.
     if src_idxs is not None or tgt_idxs is not None:
         unassigned = set(step_data) - {*source_fields, *target_fields}
         if unassigned:
@@ -104,49 +108,85 @@ def expand_conditioning(
     condition_dict: dict[str, torch.Tensor],
     source: torch.Tensor | None,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None]:
-    """
-    Replicate condition_dict and source along the leading dimensions of latent
+    """Replicate ``condition_dict`` and ``source`` along the leading dimension of ``latent``.
 
-    Assumes original condition_dict values and source have shape (batch_size, ...)
-    and latent has shape (n_samples, batch_size, dim) or (batch_size, dim).
-    Returns expanded copies.
+    Assumes original ``condition_dict`` values and ``source`` have shape
+    ``(batch_size, ...)`` and ``latent`` has shape ``(n_samples, batch_size, dim)``
+    or ``(batch_size, dim)``. Returns expanded copies.
     """
     if latent.dim() <= 2:  # no extra sample dimension
         return condition_dict, source
 
     n_samples = latent.shape[0]
-    expanded_cond = {}
-    for k, v in condition_dict.items():
-        # v shape: (batch_size, ...)
-        expanded_cond[k] = v.unsqueeze(0).expand(n_samples, *v.shape)
-    expanded_source = None
-    if source is not None:
-        expanded_source = source.unsqueeze(0).expand(n_samples, *source.shape)
+    expanded_cond = {k: v.unsqueeze(0).expand(n_samples, *v.shape) for k, v in condition_dict.items()}
+    expanded_source = None if source is None else source.unsqueeze(0).expand(n_samples, *source.shape)
     return expanded_cond, expanded_source
+
+
+def _batch_size_from(
+    source: torch.Tensor | None,
+    condition_dict: dict[str, torch.Tensor],
+) -> int | None:
+    """How many rows a batch has, or ``None`` when nothing in it says.
+
+    Two references, tried in order:
+
+    1. ``source`` -- a per-observation tensor whose axis 0 is the row count.
+    2. The first conditioning tensor -- tiled to the same rows by the loader, so
+       its axis 0 is the same number.
+
+    A batch that carries neither is the standalone-sample case (inference only):
+    there is no batch, so there is no batch size. Training never hits it.
+    """
+    if source is not None:
+        return source.shape[0]
+    if condition_dict:
+        return next(iter(condition_dict.values())).shape[0]
+    return None
 
 
 def prepare_latent_train(
     source: torch.Tensor | None,
-    target: torch.Tensor,
+    condition_dict: dict[str, torch.Tensor],
     noise_sampler: SamplerFn,
     dims: DataDimensions,
-    generate_from_noise: bool = False,
     *,
+    device: torch.device,
+    dtype: torch.dtype,
+    batch_size: int | None = None,
+    generate_from_noise: bool = False,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    """Called from ``compute_loss``. Always returns a single noise per batch element.
+    """Sizes and draws the training latent.
 
-    The latent shape is ``(B, dims.state_dim)``, where ``B = target.shape[0]``. ``target``
-    provides device and dtype, so the latent lands where the batch already is rather than
-    on whatever the sampler defaults to. ``dims.state_dim`` is the authoritative width,
-    so a module built for a state width different from ``target.shape[-1]`` (e.g. under
-    the condition-space view) still gets a correctly shaped latent.
+    A training step is always over a batch of observations, so there is no
+    standalone-sample branch. The row count comes from ``batch_size`` when the
+    caller supplies it, else from ``source`` (a per-observation tensor), else
+    from ``condition_dict``. ``CFMTraining.compute_loss`` passes
+    ``batch_size=target.shape[0]`` -- the target is already in hand and its row
+    count is the batch size.
+
+    The state width is ``dims.state_dim`` in every branch; device and dtype come
+    from the caller (pass ``method.device`` / ``method.dtype``), never from the
+    batch. ``source`` present with ``generate_from_noise=False`` short-circuits:
+    it *is* the latent, returned unchanged.
+
+    :raises ValueError: If no batch size can be resolved.
     """
     if source is not None and not generate_from_noise:
         return source
 
-    shape = (target.shape[0], dims.state_dim)
-    return noise_sampler(shape, generator=generator, device=target.device, dtype=target.dtype)
+    if batch_size is None:
+        batch_size = _batch_size_from(source, condition_dict)
+    if batch_size is None:
+        raise ValueError(
+            "cannot size the training latent: no `batch_size`, no source, and no "
+            "conditioning tensor. Training always has a batch -- this is a caller "
+            "problem, not a shape one."
+        )
+
+    shape = (batch_size, dims.state_dim)
+    return noise_sampler(shape, generator=generator, device=device, dtype=dtype)
 
 
 def prepare_latent_inference(
@@ -154,52 +194,49 @@ def prepare_latent_inference(
     condition_dict: dict[str, torch.Tensor],
     noise_sampler: SamplerFn,
     dims: DataDimensions,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
     n_samples: int | None = None,
     generate_from_noise: bool = False,
-    *,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    """Called from ``predict``. The target state is not required.
+    """Sizes and draws the inference latent.
 
-    Three resolutions, in order:
+    Three axes decide the shape -- ``source`` present, conditioning present,
+    ``n_samples`` present -- plus ``generate_from_noise``, which only matters
+    when a source is present:
 
-    1. **Paired, not generating** -- ``source`` is present and ``generate_from_noise`` is
-       ``False``: it *is* the latent, returned unchanged.
-    2. **Paired, generating** -- ``source`` fixes the batch size, and device/dtype.
-    3. **Unpaired** -- no ``source``: batch size and device/dtype come from the first tensor
-       in ``condition_dict``.
+    ========  ============  ===========  ======  =========================
+    source    conditioning  n_samples    noise   result
+    ========  ============  ===========  ======  =========================
+    yes       any           any          off     ``source`` itself
+    yes       any           yes          on      ``(n_samples, B, D)``
+    yes       any           no           on      ``(B, D)``
+    no        yes           yes          any     ``(n_samples, B, D)``
+    no        yes           no           any     ``(B, D)``
+    no        no            yes          any     ``(n_samples, D)``
+    no        no            no           any     ``(1, D)``
+    ========  ============  ===========  ======  =========================
 
-    In every generating case the state dimension comes from ``dims.state_dim``, so the
-    latent matches what the velocity field was built for even when there is no target
-    template in the batch.
-
-    :param source: Source state from the batch, or ``None`` when predicting unpaired.
-    :param condition_dict: The batch's conditioning tensors, used for batch size / device /
-        dtype when ``source`` is absent.
-    :param noise_sampler: Draws noise of a given shape on a given device / dtype.
-    :param dims: The method's shape spec. Its ``state_dim`` is the state width.
-    :param n_samples: Samples per batch element; ``None`` yields a single ``(B, D)`` draw.
-    :param generate_from_noise: Ignore ``source`` and draw noise even when it is present.
-    :param generator: Passed through to ``noise_sampler``.
-    :raises ValueError: If the batch carries neither ``source`` nor a conditioning tensor.
+    ``B`` is the batch's row count, read off ``source`` when present, else off the
+    first conditioning tensor. ``D`` is ``dims.state_dim``. Device and dtype come
+    from the caller; the batch is never asked for them.
     """
+    # Short-circuit: paired and not generating -- the source is the latent.
     if source is not None and not generate_from_noise:
         return source
 
-    if source is not None:
-        reference = source
-        batch_size = source.shape[0]
-    elif condition_dict:
-        reference = next(iter(condition_dict.values()))
-        batch_size = reference.shape[0]
-    else:
-        raise ValueError(
-            "cannot size the latent: the batch carries neither `source` nor a conditioning tensor. "
-            "At least one is needed to know the batch size and device."
-        )
+    batch_size = _batch_size_from(source, condition_dict)
 
+    # Standalone samples: no batch axis, draw `n_samples` (or one).
+    if batch_size is None:
+        n = 1 if n_samples is None else n_samples
+        return noise_sampler((n, dims.state_dim), generator=generator, device=device, dtype=dtype)
+
+    # Batch present: one draw per observation, or `n_samples` per observation.
     shape = (batch_size, dims.state_dim) if n_samples is None else (n_samples, batch_size, dims.state_dim)
-    return noise_sampler(shape, generator=generator, device=reference.device, dtype=reference.dtype)
+    return noise_sampler(shape, generator=generator, device=device, dtype=dtype)
 
 
 class TorchMixedTypeData(MixedTypeData):

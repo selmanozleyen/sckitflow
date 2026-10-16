@@ -22,8 +22,8 @@ class _Field(torch.nn.Module):
 def dims() -> DataDimensions:
     """Shape spec matching `_Field`'s `Linear(3, 3)`.
 
-    The shared conftest fixture uses `state_dim=4`; this file's `_Field` was
-    built for 3, so the training latent has to be 3 as well.
+    The shared conftest fixture uses `state_dim=4`; `_Field` was built for 3, so
+    the training latent has to be 3 as well.
     """
     return DataDimensions(
         state_dim=3,

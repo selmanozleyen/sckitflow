@@ -1,16 +1,17 @@
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 import torch
 from pydantic import ValidationError
 
 from sckitflow.core._types import PredictionData
 from sckitflow.core.methods.inference._ode import ODEInference, ODEInferenceConfig
+from sckitflow.data._dims import DataDimensions
 
 MODULE = "sckitflow.core.methods.inference._ode"
 
 
-# -------------------- Fixtures and helpers --------------------
 class DummyModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -36,17 +37,30 @@ def gen(seed=0):
 
 
 @pytest.fixture
+def dims() -> DataDimensions:
+    return DataDimensions(
+        state_dim=4,
+        feature_names=pd.Index([f"f{i}" for i in range(4)]),
+        condition_reps_dims={"cond": 3},
+        condition_continuous_dims=None,
+        response_reps_dims=None,
+        response_continuous_dims=None,
+        groups_reps_dims={"group": 2},
+        source_lin_dim=None,
+        source_quad_dim=None,
+        target_lin_dim=None,
+        target_quad_dim=None,
+    )
+
+
+@pytest.fixture
 def dummy_module():
     return DummyModule()
 
 
 @pytest.fixture
 def step_data():
-    """A batch with no `target_state`: `predict` no longer reads it.
-
-    Kept around (rather than removed entirely) so a regression that starts
-    depending on `target_state` again fails loudly on a missing key.
-    """
+    """A batch with no `target_state`: `predict` no longer reads it."""
     g = gen(1)
     return {
         "source_state": torch.randn(2, 4, generator=g),
@@ -66,7 +80,6 @@ def make_inference(dummy_module, dims):
 
 @pytest.fixture
 def mocks():
-    """Patches latent preparation, conditioning expansion, the solver and aggregation."""
     with (
         patch(f"{MODULE}.prepare_latent_inference") as prep,
         patch(f"{MODULE}.ODESolver") as solver_cls,
@@ -112,6 +125,14 @@ def test_build_via_config_threads_dims(dummy_module, dims):
     assert isinstance(inference, ODEInference)
 
 
+def test_placement_tracks_the_module(dummy_module, dims):
+    """`device` / `dtype` are read live; a module moved after construction is picked up."""
+    inference = ODEInference(dummy_module, ODEInferenceConfig(n_steps=4), dims=dims)
+    assert inference.dtype is torch.float32
+    dummy_module.double()
+    assert inference.dtype is torch.float64
+
+
 # -------------------- Validation --------------------
 def test_generate_from_noise_requires_n_samples():
     with pytest.raises(ValidationError, match="n_samples"):
@@ -131,21 +152,23 @@ def test_predict_uses_user_supplied_latent(make_inference, step_data, mocks):
     assert mocks["solver_cls"].return_value.solve.call_args.args[0].shape == (5, 4)
 
 
-def test_predict_prepares_latent_from_step_data(make_inference, step_data, mocks, dims):
+def test_predict_prepares_latent_with_dims_and_placement(make_inference, step_data, mocks, dims, dummy_module):
     inference = make_inference(n_samples=4, generate_from_noise=True, noise_sampler=dummy_noise_sampler)
     g = gen()
     mocks["prep"].return_value = torch.zeros(4, 2, dims.state_dim)
     inference.predict(step_data, generator=g)
 
     mocks["prep"].assert_called_once()
-    # 4 positional args, in order: source, condition_dict, noise_sampler, dims
-    source_arg, condition_arg, sampler_arg, dims_arg = mocks["prep"].call_args.args
-    assert source_arg is step_data["source_state"]
-    assert set(condition_arg) == {"cond", "group"}
-    assert sampler_arg is dummy_noise_sampler
-    assert dims_arg is dims
-
-    kwargs = mocks["prep"].call_args.kwargs
+    args, kwargs = mocks["prep"].call_args
+    # Positional: source, condition_dict, noise_sampler, dims.
+    assert args[0] is step_data["source_state"]
+    assert set(args[1]) == {"cond", "group"}
+    assert args[2] is dummy_noise_sampler
+    assert args[3] is dims
+    # Keyword: placement, samples, noise, generator.
+    first_param = next(dummy_module.parameters())
+    assert kwargs["device"] == first_param.device
+    assert kwargs["dtype"] == first_param.dtype
     assert kwargs["n_samples"] == 4
     assert kwargs["generate_from_noise"] is True
     assert kwargs["generator"] is g
@@ -186,16 +209,20 @@ def test_predict_does_not_mutate_config_solver_kwargs(make_inference, step_data,
 
 
 def test_time_grid_uses_n_steps_and_latent_properties(make_inference, step_data, mocks):
-    """The grid is built from the latent's own dtype/device, not from `target_state`."""
-    latent = torch.zeros(2, 4, dtype=torch.float64)
+    """The grid is built from the latent's own dtype/device, not from any batch tensor.
+
+    A user-supplied latent is placed at the module's dtype before the grid is
+    built, so the test's latent has to match the module (float32 here) for the
+    assertion to be about the grid rather than about the placement rule.
+    """
+    latent = torch.zeros(2, 4)  # float32, same as the dummy module
     with patch(f"{MODULE}.torch.linspace", wraps=torch.linspace) as mock_linspace:
         make_inference(latent=latent, n_steps=7).predict(step_data, generator=gen())
 
     kwargs = mock_linspace.call_args.kwargs
     assert kwargs["steps"] == 7
     assert kwargs["device"] == latent.device
-    # `latent` was placed against `source_state` (float32), so the grid matches the source dtype.
-    assert kwargs["dtype"] == step_data["source_state"].dtype
+    assert kwargs["dtype"] == latent.dtype
 
 
 # -------------------- Trajectory forwarding --------------------
@@ -247,36 +274,25 @@ def test_solver_kwargs_may_set_the_tolerances(make_inference, step_data, dims):
     assert out.X.shape == (step_data["source_state"].shape[0], dims.state_dim)
 
 
-# -------------------- dims is what sizes the latent --------------------
-def test_predict_shapes_from_dims_not_target(dummy_module, mocks):
-    """A wrong-width target_state must not change the latent -- dims.state_dim is the width."""
-    import pandas as pd
+# -------------------- Standalone generation --------------------
+def test_standalone_generation_without_source_or_conditioning(dummy_module, dims):
+    """No source, no conditioning: `n_samples` standalone latents are drawn.
 
-    from sckitflow.data._dims import DataDimensions
-
-    dims = DataDimensions(
-        state_dim=11,
-        feature_names=pd.Index([f"f{i}" for i in range(11)]),
-        condition_reps_dims={"cond": 3},
-        condition_continuous_dims=None,
-        response_reps_dims=None,
-        response_continuous_dims=None,
-        groups_reps_dims=None,
-        source_lin_dim=None,
-        source_quad_dim=None,
-        target_lin_dim=None,
-        target_quad_dim=None,
+    Uses the real `prepare_latent_inference` so the drawn shape is observable at
+    the solver. Nothing in the batch says how many rows there are, because there
+    are no rows -- the sample count comes from config, the width from `dims`.
+    """
+    inference = ODEInference(
+        dummy_module,
+        ODEInferenceConfig(n_steps=4, generate_from_noise=True, n_samples=5),
+        dims=dims,
     )
-    inference = ODEInference(dummy_module, ODEInferenceConfig(n_steps=4), dims=dims)
+    batch = {"source_state": None, "target_condition_data": None, "target_group_data": None}
 
-    batch = {
-        "source_state": None,  # unpaired, so dims is the only width source
-        "target_state": torch.randn(2, 999),  # wrong on purpose
-        "target_condition_data": {"cond": torch.randn(2, 3)},
-        "target_group_data": None,
-    }
-    mocks["prep"].return_value = torch.zeros(2, dims.state_dim)
-    inference.predict(batch, generator=gen())
+    with patch(f"{MODULE}.ODESolver") as solver_cls, patch(f"{MODULE}.aggregate_predictions") as agg:
+        solver_cls.return_value.solve.return_value = torch.zeros(5, dims.state_dim)
+        agg.return_value = (torch.zeros(5, dims.state_dim), None, None)
+        inference.predict(batch, generator=gen())
 
-    # The prep call received `dims`, not a target-derived width
-    assert mocks["prep"].call_args.args[3] is dims
+    drawn = solver_cls.return_value.solve.call_args.args[0]
+    assert drawn.shape == (5, dims.state_dim)

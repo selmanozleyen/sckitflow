@@ -38,7 +38,7 @@ class CFMTraining(AbstractFlowMethod):
         *,
         dims: DataDimensions,
     ) -> None:
-        """Initalizes the CFM training.
+        """Initializes CFM training.
 
         :param config: The flow settings; ``None`` takes every default.
         :param dims: The shape spec of the data the module was built for. Its
@@ -52,8 +52,6 @@ class CFMTraining(AbstractFlowMethod):
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         """The flow-matching loss. Noise, time and path samples are drawn from ``generator``; ``rng`` is unused."""
         # ---- Get source and target states from step data ----
-        # The batch is the reference for device and dtype: the loader built it in
-        # the module's dtype and Lightning placed it, so nothing here is coerced.
         target = step_data["target_state"]
         source = step_data["source_state"]
 
@@ -63,14 +61,19 @@ class CFMTraining(AbstractFlowMethod):
             **get_tensor_dict_from_data(step_data["target_group_data"]),
         }
 
-        # ---- Sample latent (noise) -- shape (batch_size, dims.state_dim) -----
-        # `dims.state_dim` is authoritative: the module was built for it, and it is
-        # what the paired source path also has to match.
+        # ---- Sample latent (noise) -- shape (B, dims.state_dim) ----
+        # Row count comes from `source` when present, else from `cond`. Device and
+        # dtype come from the module, which is what will consume the tensor. The
+        # target is not read for placement: its shape is the same B either way, and
+        # the width belongs to `dims`.
         latent = prepare_latent_train(
             source,
-            target,
+            cond,
             self.noise_sampler,
             self.dims,
+            batch_size=target.shape[0],
+            device=self.device,
+            dtype=self.dtype,
             generate_from_noise=self.generate_from_noise,
             generator=generator,
         )

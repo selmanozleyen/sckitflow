@@ -47,8 +47,8 @@ def make_distribution(n=10):
 
     response_data = MixedTypeData(categorical_covariates=cat)
     condition_data = MixedTypeData(categorical_covariates=cat)
-    source_coupling = CouplingData.init_from_state_data(state_data)
-    target_coupling = CouplingData.init_from_state_data(state_data)
+    source_coupling = CouplingData(state_lin=state_data)
+    target_coupling = CouplingData(state_lin=state_data)
 
     return DistributionData(
         state_data=state_data,
@@ -171,3 +171,14 @@ class TestStatePreprocessing:
         pre = StatePreprocessing()
         with pytest.raises(RuntimeError, match="not fitted"):
             pre.transform(distr)
+
+    def test_write_data_passes_coupling_through_unchanged(self):
+        """`_write_data` replaces state but leaves coupling containers untouched (identity)."""
+        distr = make_distribution(n=5)
+        pre = StatePreprocessing()
+        new_X = np.arange(5).reshape(-1, 1) * 100
+
+        new_distr = pre._write_data(new_X, distr)
+
+        assert new_distr.source_coupling_data is distr.source_coupling_data
+        assert new_distr.target_coupling_data is distr.target_coupling_data

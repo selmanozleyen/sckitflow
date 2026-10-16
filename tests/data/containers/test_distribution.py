@@ -60,15 +60,12 @@ class TestDistributionData:
 
         groups = _make_categorical_from_obs(obs_df)
 
-        source_coupling = CouplingData.init_from_state_data(
-            StateData(adata.X),
-            n_shared_dims=2,
+        source_coupling = CouplingData(
+            state_lin=StateData(adata.X[:, :2]),
+            state_quad=StateData(adata.X[:, 2:]),
         )
 
-        target_coupling = CouplingData.init_from_state_data(
-            StateData(adata.X),
-            n_shared_dims=None,
-        )
+        target_coupling = CouplingData(state_lin=StateData(adata.X))
 
         dist = DistributionData(
             state_data=state,
@@ -110,9 +107,9 @@ class TestDistributionData:
 
         groups = _make_categorical_from_obs(obs_df)
 
-        source_coupling = CouplingData.init_from_state_data(
-            StateData(adata.X),
-            n_shared_dims=3,
+        source_coupling = CouplingData(
+            state_lin=StateData(adata.X[:, :3]),
+            state_quad=StateData(adata.X[:, 3:]),
         )
 
         dist = DistributionData(

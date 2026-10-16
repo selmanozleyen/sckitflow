@@ -14,6 +14,7 @@ from scipy import sparse
 
 from sckitflow.data._loader import Loader
 from sckitflow.data._manager import DataManager, DataManagerConfig
+from sckitflow.data.schemas import CouplingDataSchema
 
 LINES = ["s0", "s1"]
 DRUGS = ["control", "d0", "d1"]
@@ -34,6 +35,14 @@ def loader_adata() -> AnnData:
     ad.obsm["Xcond"] = rng.standard_normal((n, COND_DIM)).astype(np.float32)  # continuous condition cov
     ad.obsm["ytgt"] = rng.standard_normal((n, TGT_DIM)).astype(np.float32)  # continuous target cov
     ad.obsm["Xrep"] = rng.standard_normal((n, REP_DIM)).astype(np.float32)  # alternate state rep
+    ad.obsm["Xcond"] = rng.standard_normal((n, COND_DIM)).astype(np.float32)  # continuous condition cov
+    ad.obsm["ytgt"] = rng.standard_normal((n, TGT_DIM)).astype(np.float32)  # continuous target cov
+    ad.obsm["Xrep"] = rng.standard_normal((n, REP_DIM)).astype(np.float32)  # alternate state rep
+    # Coupling reps: shared linear (5) + per-side quadratics (3 / 4), all different widths so a
+    # bug that swaps sides or reads one width twice fails loudly.
+    ad.obsm["X_lin"] = rng.standard_normal((n, 5)).astype(np.float32)
+    ad.obsm["X_src_quad"] = rng.standard_normal((n, 3)).astype(np.float32)
+    ad.obsm["X_tgt_quad"] = rng.standard_normal((n, 4)).astype(np.float32)
     return ad
 
 
@@ -348,3 +357,202 @@ class TestLoaderDtypeAndDevice:
         with pytest.raises(RuntimeError):
             loader._conform(torch.zeros(2, 2))
         assert loader._conform(torch.zeros(2, 2), streamed=False).device.type == "cpu"
+
+
+class TestCouplingLocs:
+    """`_get_coupling_locs` derives rep locs from the schema, one per configured term."""
+
+    def test_none_schema_yields_empty_locs(self):
+        from sckitflow.data._loader import _get_coupling_locs
+
+        assert _get_coupling_locs(None) == ({}, {})
+
+    def test_linear_only_default_rep_lin_aliases_x(self):
+        """`rep_lin=None` means `.X`, so both sides point at `"X"`."""
+        from sckitflow.data._loader import _get_coupling_locs
+
+        src, tgt = _get_coupling_locs(CouplingDataSchema())
+        assert src == {"X": "source_coupling_lin"}
+        assert tgt == {"X": "target_coupling_lin"}
+
+    def test_linear_only_with_obsm_rep(self):
+        from sckitflow.data._loader import _get_coupling_locs
+
+        src, tgt = _get_coupling_locs(CouplingDataSchema(rep_lin="X_lin"))
+        assert src == {"obsm/X_lin": "source_coupling_lin"}
+        assert tgt == {"obsm/X_lin": "target_coupling_lin"}
+
+    def test_fused_carries_shared_lin_and_per_side_quads(self):
+        from sckitflow.data._loader import _get_coupling_locs
+
+        schema = CouplingDataSchema(
+            rep_lin="X_lin",
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        src, tgt = _get_coupling_locs(schema)
+        assert src == {"obsm/X_lin": "source_coupling_lin", "obsm/X_src_quad": "source_coupling_quad"}
+        assert tgt == {"obsm/X_lin": "target_coupling_lin", "obsm/X_tgt_quad": "target_coupling_quad"}
+
+    def test_pure_gw_has_no_linear_locs(self):
+        from sckitflow.data._loader import _get_coupling_locs
+
+        schema = CouplingDataSchema(
+            use_linear=False,
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        src, tgt = _get_coupling_locs(schema)
+        assert src == {"obsm/X_src_quad": "source_coupling_quad"}
+        assert tgt == {"obsm/X_tgt_quad": "target_coupling_quad"}
+
+
+class TestMergeReps:
+    """`_merge_reps` dedupes rep locs -- the shared linear term aliases the state by default."""
+
+    def test_dedupe_preserves_first_occurrence_order(self):
+        from sckitflow.data._loader import _merge_reps
+
+        assert _merge_reps(("a", "b"), ("b", "c"), ("a",)) == ("a", "b", "c")
+
+    def test_empty_groups(self):
+        from sckitflow.data._loader import _merge_reps
+
+        assert _merge_reps() == ()
+        assert _merge_reps({}, ()) == ()
+
+    def test_dict_keys_are_iterated(self):
+        from sckitflow.data._loader import _merge_reps
+
+        assert _merge_reps({"a": 1, "b": 2}, ("c",)) == ("a", "b", "c")
+
+
+class TestLoaderCouplingStreaming:
+    """Loader streams coupling reps alongside the state, one StepData key per configured term."""
+
+    def _coupling_loader(self, ad, schema, **overrides):
+        """Same-adata control weights: no separate pool, but the source side still carries coupling."""
+        return _loader(
+            ad,
+            _dm(),
+            coupling_schema=schema,
+            primary_weights={("s0", "d0"): 1.0},
+            control_weights={("s0", "control"): 1.0},
+            **overrides,
+        )
+
+    def test_no_schema_leaves_every_coupling_key_none(self, loader_adata):
+        """The default: no schema → all four coupling keys are None."""
+        sd = next(iter(_loader(loader_adata, _dm())))
+        assert sd["target_coupling_lin"] is None
+        assert sd["target_coupling_quad"] is None
+        assert sd["source_coupling_lin"] is None
+        assert sd["source_coupling_quad"] is None
+
+    def test_linear_only_default_aliases_state(self, loader_adata):
+        """`rep_lin=None`: the linear coupling term *is* the state, on both sides."""
+        sd = next(iter(self._coupling_loader(loader_adata, CouplingDataSchema())))
+        assert sd["target_coupling_lin"] is not None
+        assert sd["source_coupling_lin"] is not None
+        assert sd["target_coupling_quad"] is None
+        assert sd["source_coupling_quad"] is None
+        torch.testing.assert_close(sd["target_coupling_lin"], sd["target_state"])
+        torch.testing.assert_close(sd["source_coupling_lin"], sd["source_state"])
+
+    def test_linear_only_with_obsm_rep_has_lin_width(self, loader_adata):
+        sd = next(iter(self._coupling_loader(loader_adata, CouplingDataSchema(rep_lin="X_lin"))))
+        b = sd["target_state"].shape[0]
+        assert sd["target_coupling_lin"].shape == (b, 5)
+        assert sd["source_coupling_lin"].shape == (b, 5)
+        assert sd["target_coupling_quad"] is None
+        assert sd["source_coupling_quad"] is None
+
+    def test_fused_streams_shared_lin_and_per_side_quads(self, loader_adata):
+        """Each side reads its own quadratic -- source 3-wide, target 4-wide -- over a shared 5-wide lin."""
+        schema = CouplingDataSchema(
+            rep_lin="X_lin",
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        sd = next(iter(self._coupling_loader(loader_adata, schema)))
+        b = sd["target_state"].shape[0]
+        assert sd["target_coupling_lin"].shape == (b, 5)
+        assert sd["source_coupling_lin"].shape == (b, 5)
+        assert sd["target_coupling_quad"].shape == (b, 4)
+        assert sd["source_coupling_quad"].shape == (b, 3)
+
+    def test_pure_gw_omits_linear_on_both_sides(self, loader_adata):
+        schema = CouplingDataSchema(
+            use_linear=False,
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        sd = next(iter(self._coupling_loader(loader_adata, schema)))
+        assert sd["target_coupling_lin"] is None
+        assert sd["source_coupling_lin"] is None
+        assert sd["target_coupling_quad"].shape[1] == 4
+        assert sd["source_coupling_quad"].shape[1] == 3
+
+    def test_source_and_target_quads_are_independent_reps(self, loader_adata):
+        """The `_target_coupling_dict` iterating the source dicts bug would `KeyError` here: with a
+        fused schema the source and target quad locs are disjoint, and the widths differ on purpose."""
+        schema = CouplingDataSchema(
+            rep_lin="X_lin",
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        sd = next(iter(self._coupling_loader(loader_adata, schema)))
+        assert sd["source_coupling_quad"].shape[1] == 3
+        assert sd["target_coupling_quad"].shape[1] == 4
+
+    def test_unpaired_with_a_coupling_schema_still_streams_target(self, loader_adata):
+        """No control link ⇒ source coupling is None; target coupling still streams (from the primary)."""
+        schema = CouplingDataSchema(rep_lin="X_lin", target_rep_quad="X_tgt_quad")
+        sd = next(
+            iter(
+                _loader(
+                    loader_adata,
+                    _dm(),
+                    coupling_schema=schema,
+                    primary_weights={("s0", "d0"): 1.0},
+                    control_weights=None,
+                )
+            )
+        )
+        assert sd["source_coupling_lin"] is None
+        assert sd["source_coupling_quad"] is None
+        assert sd["target_coupling_lin"].shape[1] == 5
+        assert sd["target_coupling_quad"].shape[1] == 4
+
+
+class TestEvalLoaderNeverStreamsCoupling:
+    """EvalLoader's signature *is* the contract: no `coupling_schema`, so no coupling in the batch."""
+
+    def test_does_not_accept_coupling_schema(self):
+        """Removing the parameter is how the training-only invariant is enforced at the API boundary."""
+        import inspect
+
+        from sckitflow.data._loader import EvalLoader
+
+        params = inspect.signature(EvalLoader.__init__).parameters
+        assert "coupling_schema" not in params, (
+            "EvalLoader must not accept coupling_schema: coupling is a training-time concern. "
+            "If eval-time coupling is ever needed, add `stream_coupling: bool = False` explicitly "
+            "rather than a bare schema (see the class docstring)."
+        )
+
+    def test_eval_batches_carry_no_coupling_keys(self, loader_adata):
+        """All four coupling keys are None, matching the class docstring's promise."""
+        from sckitflow.data._loader import EvalLoader
+
+        el = EvalLoader(
+            loader_adata,
+            **_dm()._loader_schema,  # note: shared schema, not `_training_loader_schema`
+            primary_weights={("s0", "d0"): 1.0},
+            control_weights={("s0", "control"): 1.0},
+        )
+        for sd, _leaf in el:
+            assert sd["target_coupling_lin"] is None
+            assert sd["target_coupling_quad"] is None
+            assert sd["source_coupling_lin"] is None
+            assert sd["source_coupling_quad"] is None

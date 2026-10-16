@@ -19,7 +19,7 @@ without any ``ann_df`` / container round-trip.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     # StepData lives in ``core`` (which imports ``data``); import it for typing only to avoid a
     # runtime import cycle. At runtime we build the plain dict directly (see ``_STEP_DATA_KEYS``).
     from sckitflow.core._types import StepData
-    from sckitflow.data.schemas import ConditionDataSchema, GroupsDataSchema
+    from sckitflow.data.schemas import ConditionDataSchema, CouplingDataSchema, GroupsDataSchema
 
 # The kwargs contract for these loaders is :class:`~sckitflow.data._manager.LoaderKwargs` -- declared
 # there, next to its only consumer (``DataManager.get_dataloaders``), so typing a call site does not
@@ -74,6 +74,12 @@ _CONTROL = "control"
 
 # The implicit single group used when the schema declares no groups or conditions at all.
 _ALL_CELLS = "_sckitflow_all_cells"
+
+# Coupling terms
+_TARGET_LIN_TERM = "target_coupling_lin"
+_TARGET_QUAD_TERM = "target_coupling_quad"
+_SOURCE_LIN_TERM = "source_coupling_lin"
+_SOURCE_QUAD_TERM = "source_coupling_quad"
 
 
 def _state_loc(sample_rep: str | None) -> str:
@@ -134,6 +140,40 @@ def _tile(encoding: torch.Tensor, batch_size: int) -> torch.Tensor:
     return encoding.unsqueeze(0).expand(batch_size, *encoding.shape).contiguous()
 
 
+def _get_coupling_locs(coupling_schema: CouplingDataSchema | None) -> tuple[dict[str, str], dict[str, str]]:
+    """Retrieves the locations from the input coupling schema."""
+    # Return empty dictionaries
+    if coupling_schema is None:
+        return {}, {}
+
+    # Initialize dictionaries.
+    source_coupling_locs: dict[str, str] = {}
+    target_coupling_locs: dict[str, str] = {}
+
+    # Linear term, both source and target
+    if coupling_schema.use_linear:
+        loc_lin = _state_loc(coupling_schema.rep_lin)
+        source_coupling_locs[loc_lin] = _SOURCE_LIN_TERM
+        target_coupling_locs[loc_lin] = _TARGET_LIN_TERM
+
+    # Source quadratic term.
+    if coupling_schema.source_rep_quad:
+        source_coupling_locs[f"obsm/{coupling_schema.source_rep_quad}"] = _SOURCE_QUAD_TERM
+
+    # Target quadratic term.
+    if coupling_schema.target_rep_quad:
+        target_coupling_locs[f"obsm/{coupling_schema.target_rep_quad}"] = _TARGET_QUAD_TERM
+    return source_coupling_locs, target_coupling_locs
+
+
+def _merge_reps(*groups: Iterable[str]) -> tuple[str, ...]:
+    seen: dict[str, None] = {}
+    for g in groups:
+        for loc in g:
+            seen.setdefault(loc, None)
+    return tuple(seen)
+
+
 class _StepDataBridge:
     """Shared scfit-batch -> ``StepData`` machinery for :class:`Loader` and :class:`EvalLoader`.
 
@@ -148,6 +188,7 @@ class _StepDataBridge:
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
+        coupling_schema: CouplingDataSchema | None = None,
         sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         pair_key: str | None = None,
@@ -159,6 +200,7 @@ class _StepDataBridge:
         # everything else the schema declares is read once here, into the locs and columns below.
         self._cond_schema = condition_schema
         self._groups_schema = groups_schema
+        self._coupling_schema = coupling_schema
         self._dtype = dtype
         # Compared by device *type* ("cuda" vs "cuda:0"), matching the module's own device.
         self._device = device
@@ -179,6 +221,10 @@ class _StepDataBridge:
         # Continuous covariates ride as aligned reps: {rep loc -> StepData dict key}.
         self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.conditions_covariates}
         self._resp_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in response_covs}
+
+        # Handle coupling terms and construct coupling locs dictionary
+        self._coupling_schema = coupling_schema
+        self._source_coupling_locs, self._target_coupling_locs = _get_coupling_locs(self._coupling_schema)
 
         # One O(N) drop_duplicates gives the group combos + a representative row per group (no per-obs logic).
         # The categorical -> encoding is deferred to batch time (cached), keyed by the group's id.
@@ -313,6 +359,24 @@ class _StepDataBridge:
 
         return source_state[torch.arange(batch_size, device=source_state.device) % n_source]
 
+    def _source_coupling_dict(self, batch: dict) -> dict[str, torch.Tensor]:
+        """Assembles the source coupling dictionary for a `StepData`."""
+        if _CONTROL not in batch:
+            return {}
+        return {
+            coupling_term: _as_tensor(batch[_CONTROL][coupling_loc])
+            for coupling_loc, coupling_term in self._source_coupling_locs.items()
+        }
+
+    def _target_coupling_dict(self, batch: dict, has_state: bool) -> dict[str, torch.Tensor]:
+        """Assembles the target coupling dictionary for a `StepData`."""
+        if not has_state:
+            return {}
+        return {
+            coupling_term: _as_tensor(batch[_PRIMARY][coupling_loc])
+            for coupling_loc, coupling_term in self._target_coupling_locs.items()
+        }
+
     def _step_data_from_batch(self, batch: dict, gid: int, *, has_state: bool, n_rows: int) -> StepData:
         """Assemble one scfit batch (+ its group id) into a ``StepData``.
 
@@ -337,17 +401,19 @@ class _StepDataBridge:
             key: _as_tensor(batch[_PRIMARY][loc]) for loc, key in self._resp_cont_locs.items() if loc in batch[_PRIMARY]
         }
 
-        # TODO: the ``*_coupling_lin`` / ``*_coupling_quad`` keys stay None, so `_match_observations` is a
-        # no-op and any `match_fn` (OT coupling) never runs. Until then `GenerativeFlow.__init__` refuses a
-        # `match_fn` outright, so nobody gets a silently un-coupled run. To lift that: populate these keys --
-        # the coupling reps default to the state rep, so it is the same streamed tensor unless `source_rep` /
-        # `n_shared_dims` is set -- and verify against OTFM, whose whole point is the coupling.
+        # Get coupling dictionaries
+        src_couplings = self._source_coupling_dict(batch)
+        tgt_couplings = self._target_coupling_dict(batch, has_state)
+
         step_data: dict[str, Any] = dict.fromkeys(_STEP_DATA_KEYS)
         step_data["target_state"] = target_state
         step_data["source_state"] = source_state
         step_data["target_condition_data"] = condition or None
         step_data["target_group_data"] = group or None
         step_data["target_response_data"] = response or None
+        # Update step data with coupling reps
+        step_data.update(src_couplings)
+        step_data.update(tgt_couplings)
         return self._conform_batch(step_data)  # type: ignore[return-value]
 
     def _control_link(
@@ -368,7 +434,7 @@ class _StepDataBridge:
                 _CONTROL,
                 # A separate pool groups on just what it is matched by, plus the pair column when fixed.
                 group_by=group_by if self._pair_cols else list(match_cols or self._group_cols),
-                reps=(self._state_loc,),
+                reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
                 match_on=list(match_cols),
                 **stream_kwargs,
             )
@@ -376,7 +442,7 @@ class _StepDataBridge:
             return None, Stream(
                 _PRIMARY,  # same source as the primary; weights pick out the controls
                 group_by=group_by,
-                reps=(self._state_loc,),
+                reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
                 weights=control_weights,
                 match_on=list(match_cols),
                 **stream_kwargs,
@@ -412,6 +478,13 @@ class Loader(_StepDataBridge):
     :param groups_schema: The groups schema: its columns lead ``group_by`` and are what a control is matched
         on, and it encodes each group's categorical groups.
     :type groups_schema: class: `GroupsDataSchema`
+
+    :param coupling_schema: The optional coupling schema. When provided, its linear
+        (``rep_lin``) and per-side quadratic (``source_rep_quad`` / ``target_rep_quad``)
+        reps are streamed alongside the state and surfaced as the
+        ``source_coupling_*`` / ``target_coupling_*`` keys of each emitted ``StepData``.
+        Defaults to `None`, in which case no coupling data is streamed.
+    :type coupling_schema: class: `CouplingDataSchema | None`
 
     :param sample_rep: The ``obsm`` key holding the state representation, or ``None`` for ``.X``.
     :type sample_rep: class: `str | None`
@@ -468,6 +541,7 @@ class Loader(_StepDataBridge):
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
+        coupling_schema: CouplingDataSchema | None = None,
         sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         split_by: str | None = None,
@@ -489,6 +563,7 @@ class Loader(_StepDataBridge):
             adata,
             condition_schema=condition_schema,
             groups_schema=groups_schema,
+            coupling_schema=coupling_schema,
             sample_rep=sample_rep,
             response_covs=response_covs,
             pair_key=pair_key,
@@ -501,7 +576,15 @@ class Loader(_StepDataBridge):
             chunk_size=chunk_size,
             preload_nchunks=preload_nchunks if preload_nchunks is not None else batch_size // chunk_size,
         )
-        primary_reps = (self._state_loc, *self._cond_cont_locs, *self._resp_cont_locs)
+
+        # Merge representations to avoid duplicates.
+        primary_reps = _merge_reps(
+            (self._state_loc,),
+            self._cond_cont_locs,
+            self._resp_cont_locs,
+            self._target_coupling_locs,
+        )
+
         # With a split column the leaf is ``(split, *group_cols)``, so a weight of 0 excludes the *observations*
         # of another split rather than the whole group -- see `DataManager.get_dataloaders`. The split is
         # only a selector, so `_to_step_data` strips it back off before looking the group's encoding up.
@@ -563,6 +646,17 @@ class Loader(_StepDataBridge):
 
 class EvalLoader(_StepDataBridge):
     """Deterministic, per-group ``(StepData, leaf)`` for prediction, backed by :class:`scfit.data.EvalLoader`.
+
+    .. note::
+        Unlike :class:`Loader`, this loader does **not** stream coupling terms.
+        Coupling is a training-time alignment between source and target populations;
+        at prediction and validation time there is nothing to align against, and the
+        emitted ``StepData`` carries ``None`` for every ``*_coupling_*`` key.
+
+        If you later need coupling at eval -- e.g. for a GW alignment diagnostic --
+        add an explicit opt-in here (``stream_coupling: bool = False``) rather than
+        accepting a bare ``coupling_schema``: the schema-only form invites the caller
+        to pass one and silently get coupling behaviour they did not ask for.
 
     Walks every selected primary group once (full coverage, or a ``max_per_group`` cap that at ``1`` becomes
     predict-once-per-condition), each matched to its control leaf. ``leaf`` is the group's ``group_by`` value
@@ -635,7 +729,12 @@ class EvalLoader(_StepDataBridge):
         self._has_state = require_target_state
         self._max_per_group = max_per_group
         state_reps = (self._state_loc,) if require_target_state else ()
-        primary_reps = (*state_reps, *self._cond_cont_locs, *self._resp_cont_locs)
+        # No coupling reps: this loader never streams coupling (see class docstring).
+        primary_reps = _merge_reps(
+            state_reps,
+            self._cond_cont_locs,
+            self._resp_cont_locs,
+        )
 
         primary = Stream(
             _PRIMARY,

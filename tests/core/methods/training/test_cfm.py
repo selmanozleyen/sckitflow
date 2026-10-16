@@ -61,11 +61,15 @@ def dummy_module():
 
 
 @pytest.fixture
-def make_cfm(dummy_module):
+def make_cfm(dummy_module, dims):
     def _make(module=None, **overrides):
         kwargs = {"probability_path": dummy_probability_path(), "time_sampler": dummy_time_sampler}
         kwargs.update(overrides)
-        return CFMTraining(dummy_module if module is None else module, CFMTrainingConfig(**kwargs))
+        return CFMTraining(
+            dummy_module if module is None else module,
+            CFMTrainingConfig(**kwargs),
+            dims=dims,
+        )
 
     return _make
 
@@ -82,16 +86,18 @@ def step_data():
 
 
 # -------------------- Construction --------------------
-def test_default_config():
-    cfm = CFMTraining(DummyModule())
+def test_default_config(dims):
+    cfm = CFMTraining(DummyModule(), dims=dims)
     assert cfm.generate_from_noise is False
     assert cfm.probability_path is not None
+    assert cfm.dims is dims
 
 
-def test_build_from_config(dummy_module):
-    cfm = CFMTrainingConfig().build(dummy_module)
+def test_build_from_config(dummy_module, dims):
+    cfm = CFMTrainingConfig().build(dummy_module, dims=dims)
     assert isinstance(cfm, CFMTraining)
     assert cfm.module is dummy_module
+    assert cfm.dims is dims
 
 
 # -------------------- Basic flow --------------------
@@ -146,30 +152,35 @@ def test_probability_path_receives_latent_target_and_generator(make_cfm, step_da
 
 
 # -------------------- Loss value --------------------
-def test_loss_matches_mse_between_predicted_and_target_velocity(step_data):
+def test_loss_matches_mse_between_predicted_and_target_velocity(step_data, dims):
     class OnesModule(torch.nn.Module):
         def forward(self, t, x, condition_dict=None, source=None):
             return torch.ones_like(x)
 
     path = dummy_probability_path()
     path.compute_ut.side_effect = lambda t, xt, x0, x1: 2 * torch.ones_like(x0)
-    cfm = CFMTraining(OnesModule(), CFMTrainingConfig(probability_path=path, time_sampler=dummy_time_sampler))
+    cfm = CFMTraining(
+        OnesModule(),
+        CFMTrainingConfig(probability_path=path, time_sampler=dummy_time_sampler),
+        dims=dims,
+    )
     loss, _ = cfm.compute_loss(step_data, generator=gen(), rng=rng())
     assert loss.item() == pytest.approx(1.0)
 
 
 # -------------------- prepare_latent_train --------------------
-def test_prepare_latent_train_called_with_flow_flags(make_cfm, step_data):
+def test_prepare_latent_train_called_with_dims_and_flow_flags(make_cfm, step_data, dims):
     cfm = make_cfm(noise_sampler=dummy_noise_sampler, generate_from_noise=True)
     g = gen()
     with patch(f"{MODULE}.prepare_latent_train") as mock_prep:
-        mock_prep.return_value = torch.zeros(2, 4)
+        mock_prep.return_value = torch.zeros(2, dims.state_dim)
         cfm.compute_loss(step_data, generator=g, rng=rng())
 
     args, kwargs = mock_prep.call_args
     assert args[0] is step_data["source_state"]
     assert args[1] is step_data["target_state"]
     assert args[2] is cfm.noise_sampler
+    assert args[3] is dims
     assert kwargs["generate_from_noise"] is True
     assert kwargs["generator"] is g
 
@@ -186,12 +197,13 @@ def test_loss_dtype_follows_batch(make_cfm, step_data):
 
 # -------------------- Randomness --------------------
 @pytest.mark.parametrize("generate_from_noise", [False, True])
-def test_compute_loss_depends_only_on_generator(step_data, generate_from_noise):
+def test_compute_loss_depends_only_on_generator(step_data, dims, generate_from_noise):
     cfm = CFMTraining(
         LinearModule(),
         CFMTrainingConfig(
             probability_path=LinearGaussianProbabilityPath(sigma=0.1), generate_from_noise=generate_from_noise
         ),
+        dims=dims,
     )
 
     def loss(seed, global_seed):
@@ -200,3 +212,38 @@ def test_compute_loss_depends_only_on_generator(step_data, generate_from_noise):
 
     torch.testing.assert_close(loss(0, 1), loss(0, 2))
     assert not torch.allclose(loss(0, 1), loss(1, 1))
+
+
+# -------------------- dims is what sizes the training latent --------------------
+def test_train_latent_uses_dims_state_dim(dims):
+    """A wrong-width `target_state` must not change the training latent -- `dims.state_dim` is the width."""
+    import pandas as pd
+
+    from sckitflow.core._data_utils import prepare_latent_train
+    from sckitflow.data._dims import DataDimensions
+
+    wide = DataDimensions(
+        state_dim=11,
+        feature_names=pd.Index([f"f{i}" for i in range(11)]),
+        condition_reps_dims=None,
+        condition_continuous_dims=None,
+        response_reps_dims=None,
+        response_continuous_dims=None,
+        groups_reps_dims=None,
+        source_lin_dim=None,
+        source_quad_dim=None,
+        target_lin_dim=None,
+        target_quad_dim=None,
+    )
+    target = torch.randn(2, 999)  # wrong on purpose
+    latent = prepare_latent_train(
+        None,
+        target,
+        dummy_noise_sampler,
+        wide,
+        generate_from_noise=True,
+        generator=gen(),
+    )
+    assert latent.shape == (2, wide.state_dim)
+    assert latent.dtype == target.dtype
+    assert latent.device == target.device

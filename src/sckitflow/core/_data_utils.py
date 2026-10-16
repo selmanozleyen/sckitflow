@@ -6,6 +6,7 @@ import torch
 from sckitflow.core._types import SamplerFn, StepData, TensorMixin
 from sckitflow.core._utils import to_torch_tensor
 from sckitflow.data import mixins
+from sckitflow.data._dims import DataDimensions
 from sckitflow.data.containers import CategoricalData, MixedTypeData
 
 __all__ = [
@@ -42,12 +43,12 @@ def get_tensor_dict_from_data(
 
 
 def _index_obj(value: Any, idx: Any | None) -> Any:
-    """Row-index one :class:`StepData` field by ``idx``.
+    """Row-index one step-data field by ``idx``.
 
-    Handles the three field shapes that appear in a ``StepData``: ``None`` (passthrough), a
+    Handles the three field shapes that appear in a batch: ``None`` (passthrough), a
     plain ``dict[str, tensor]`` (each value is indexed; ``None`` values pass through), and any
-    row-indexable object -- a ``torch.Tensor`` / array or a :class:`BaseData` container that
-    implements ``__getitem__``. A ``None`` index is a no-op.
+    row-indexable object -- a ``torch.Tensor`` / array or a container that implements
+    ``__getitem__``. A ``None`` index is a no-op.
     """
     if value is None or idx is None:
         return value
@@ -61,24 +62,12 @@ def subscript_step_data(
     src_idxs: Any | None = None,
     tgt_idxs: Any | None = None,
 ) -> StepData:
-    """Row-slice a :class:`StepData`: the source side by ``src_idxs``, the target side by ``tgt_idxs``.
+    """Row-slice a batch: the source side by ``src_idxs``, the target side by ``tgt_idxs``.
 
     Applies a coupling/matching permutation (or subselection) to a batch. Each side is sliced
     independently; a ``None`` index leaves that side untouched and a ``None`` field stays ``None``.
     The target side includes ``target_response_data``, so target covariates carried for output
     reconstruction remain aligned with ``target_state``. Replaces ``BaseMethod._safe_subscript_obj``.
-
-    :param step_data: The batch to slice.
-    :type step_data: class: `StepData`
-
-    :param src_idxs: Index/mask applied to every source field. ``None`` leaves the source untouched.
-    :type src_idxs: class: `Any | None`
-
-    :param tgt_idxs: Index/mask applied to every target field. ``None`` leaves the target untouched.
-    :type tgt_idxs: class: `Any | None`
-
-    :raises ValueError: If ``step_data`` carries a field belonging to neither side while that side is
-        being permuted -- such a field would silently keep its original row order.
     """
     source_fields = (
         "source_state",
@@ -93,15 +82,9 @@ def subscript_step_data(
         "target_coupling_quad",
         "target_condition_data",
         "target_group_data",
-        # target-side covariates: not consumed by the model, but must stay row-aligned with
-        # ``target_state`` when the target is permuted/subsampled by matching.
         "target_response_data",
     )
 
-    # A field on neither side is passed through untouched, so it would keep its original row order while
-    # the rest of the batch is permuted -- wrong rows, no error. Checked against the batch itself rather
-    # than against `StepData`, because the loaders build a plain dict and can carry anything. Only when
-    # an index is actually applied: with both `None` nothing moves, so nothing can fall out of alignment.
     if src_idxs is not None or tgt_idxs is not None:
         unassigned = set(step_data) - {*source_fields, *target_fields}
         if unassigned:
@@ -146,43 +129,77 @@ def prepare_latent_train(
     source: torch.Tensor | None,
     target: torch.Tensor,
     noise_sampler: SamplerFn,
+    dims: DataDimensions,
     generate_from_noise: bool = False,
     *,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    """Called from compute_loss - always returns single noise per batch element.
+    """Called from ``compute_loss``. Always returns a single noise per batch element.
 
-    The sampler is given ``target``'s device and dtype, so the latent lands
-    where the batch already is rather than on whatever the sampler defaults to.
+    The latent shape is ``(B, dims.state_dim)``, where ``B = target.shape[0]``. ``target``
+    provides device and dtype, so the latent lands where the batch already is rather than
+    on whatever the sampler defaults to. ``dims.state_dim`` is the authoritative width,
+    so a module built for a state width different from ``target.shape[-1]`` (e.g. under
+    the condition-space view) still gets a correctly shaped latent.
     """
-    if source is None or generate_from_noise:
-        return noise_sampler(tuple(target.shape), generator=generator, device=target.device, dtype=target.dtype)
-    return source
+    if source is not None and not generate_from_noise:
+        return source
+
+    shape = (target.shape[0], dims.state_dim)
+    return noise_sampler(shape, generator=generator, device=target.device, dtype=target.dtype)
 
 
 def prepare_latent_inference(
     source: torch.Tensor | None,
-    target_reference: torch.Tensor,
+    condition_dict: dict[str, torch.Tensor],
     noise_sampler: SamplerFn,
+    dims: DataDimensions,
     n_samples: int | None = None,
     generate_from_noise: bool = False,
     *,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    """Called from infer.
+    """Called from ``predict``. The target state is not required.
 
-    - If source is given and we are NOT generating from noise, return source unchanged.
-    - Otherwise sample noise with shape:
-        if n_samples is None:  (batch_size, dim)
-        else:                  (n_samples, batch_size, dim)
+    Three resolutions, in order:
+
+    1. **Paired, not generating** -- ``source`` is present and ``generate_from_noise`` is
+       ``False``: it *is* the latent, returned unchanged.
+    2. **Paired, generating** -- ``source`` fixes the batch size, and device/dtype.
+    3. **Unpaired** -- no ``source``: batch size and device/dtype come from the first tensor
+       in ``condition_dict``.
+
+    In every generating case the state dimension comes from ``dims.state_dim``, so the
+    latent matches what the velocity field was built for even when there is no target
+    template in the batch.
+
+    :param source: Source state from the batch, or ``None`` when predicting unpaired.
+    :param condition_dict: The batch's conditioning tensors, used for batch size / device /
+        dtype when ``source`` is absent.
+    :param noise_sampler: Draws noise of a given shape on a given device / dtype.
+    :param dims: The method's shape spec. Its ``state_dim`` is the state width.
+    :param n_samples: Samples per batch element; ``None`` yields a single ``(B, D)`` draw.
+    :param generate_from_noise: Ignore ``source`` and draw noise even when it is present.
+    :param generator: Passed through to ``noise_sampler``.
+    :raises ValueError: If the batch carries neither ``source`` nor a conditioning tensor.
     """
-    if source is None or generate_from_noise:
-        shape = tuple(target_reference.shape)
-        if n_samples is not None:
-            shape = (n_samples, *shape)
-        # device/dtype from the reference, so the latent needs no coercion after
-        return noise_sampler(shape, generator=generator, device=target_reference.device, dtype=target_reference.dtype)
-    return source
+    if source is not None and not generate_from_noise:
+        return source
+
+    if source is not None:
+        reference = source
+        batch_size = source.shape[0]
+    elif condition_dict:
+        reference = next(iter(condition_dict.values()))
+        batch_size = reference.shape[0]
+    else:
+        raise ValueError(
+            "cannot size the latent: the batch carries neither `source` nor a conditioning tensor. "
+            "At least one is needed to know the batch size and device."
+        )
+
+    shape = (batch_size, dims.state_dim) if n_samples is None else (n_samples, batch_size, dims.state_dim)
+    return noise_sampler(shape, generator=generator, device=reference.device, dtype=reference.dtype)
 
 
 class TorchMixedTypeData(MixedTypeData):
@@ -190,13 +207,11 @@ class TorchMixedTypeData(MixedTypeData):
 
     def extract_reps(self) -> TensorMixin:
         """Extracts the representations for the underlying data."""
-        # extract categorical covariates
         if self.categorical_covariates is not None:
             cat_reps = self.categorical_covariates.extract_reps()
         else:
             cat_reps = TensorMixin({})
 
-        # update with continuous covariates
         if self.continuous_covariates is not None:
             return TensorMixin(
                 {
@@ -204,7 +219,6 @@ class TorchMixedTypeData(MixedTypeData):
                     **cat_reps.mapping,
                 }
             )
-        # otherwise return only categorical covariates
         return cat_reps
 
     @classmethod
@@ -225,7 +239,6 @@ class TorchMixedTypeData(MixedTypeData):
             Defaults to `None`, in which case the container will be created from scratch.
         :type base_container: class: `MixedTypeData | None`
         """
-        # ---- 1. Retrieve additional covariates from base container when available ----
         if base_container is not None:
             categorical_covariates = base_container.categorical_covariates
             continuous_covariates = base_container.continuous_covariates
@@ -233,16 +246,13 @@ class TorchMixedTypeData(MixedTypeData):
             categorical_covariates = None
             continuous_covariates = None
 
-        # ---- 2. Override continuous covariates with the input data at the given key ----
         if continuous_covariates is not None:
             mapping = continuous_covariates.mapping
             mapping[key] = x_cond
         else:
             mapping = {key: x_cond}
 
-        # ---- 3. Handle data type for other covariates and initialize mixin ----
         mapping = {k: to_torch_tensor(v) for k, v in mapping.items()}
         mixin = TensorMixin(mapping)
 
-        # ---- 4. Initialize class ----
         return cls(categorical_covariates=categorical_covariates, continuous_covariates=mixin)

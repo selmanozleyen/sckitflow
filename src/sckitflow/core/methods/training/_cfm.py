@@ -12,6 +12,7 @@ from sckitflow.core._data_utils import (
 )
 from sckitflow.core._types import StepData
 from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodConfig, TrainingMethodConfig
+from sckitflow.data._dims import DataDimensions
 
 __all__ = ["CFMTraining", "CFMTrainingConfig"]
 
@@ -19,24 +20,40 @@ __all__ = ["CFMTraining", "CFMTrainingConfig"]
 class CFMTraining(AbstractFlowMethod):
     """Conditional Flow Matching training method.
 
-    Constructed from the module and the flow configuration:
+    Constructed from the module, the flow configuration, and the data shape spec:
 
     .. code-block:: python
 
-        method = CFMTraining(module, CFMTrainingConfig(probability_path=...))
+        method = CFMTraining(
+            module,
+            CFMTrainingConfig(probability_path=...),
+            dims=dm.get_data_dimensionalities(adata),
+        )
     """
 
-    def __init__(self, module: torch.nn.Module, config: CFMTrainingConfig | None = None) -> None:
-        """:param config: The flow settings; ``None`` takes every default."""
-        super().__init__(module, CFMTrainingConfig() if config is None else config)
+    def __init__(
+        self,
+        module: torch.nn.Module,
+        config: CFMTrainingConfig | None = None,
+        *,
+        dims: DataDimensions,
+    ) -> None:
+        """Initalizes the CFM training.
+
+        :param config: The flow settings; ``None`` takes every default.
+        :param dims: The shape spec of the data the module was built for. Its
+            ``state_dim`` sizes the training latent.
+        """
+        self.config = CFMTrainingConfig() if config is None else config
+        super().__init__(module, self.config, dims=dims)
 
     def compute_loss(
         self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         """The flow-matching loss. Noise, time and path samples are drawn from ``generator``; ``rng`` is unused."""
         # ---- Get source and target states from step data ----
-        # The batch is the reference: the loader built it in the module's dtype
-        # and Lightning placed it, so nothing here is coerced.
+        # The batch is the reference for device and dtype: the loader built it in
+        # the module's dtype and Lightning placed it, so nothing here is coerced.
         target = step_data["target_state"]
         source = step_data["source_state"]
 
@@ -46,11 +63,14 @@ class CFMTraining(AbstractFlowMethod):
             **get_tensor_dict_from_data(step_data["target_group_data"]),
         }
 
-        # ---- Sample latent (noise) – shape (batch_size, dim) -----
+        # ---- Sample latent (noise) -- shape (batch_size, dims.state_dim) -----
+        # `dims.state_dim` is authoritative: the module was built for it, and it is
+        # what the paired source path also has to match.
         latent = prepare_latent_train(
             source,
             target,
             self.noise_sampler,
+            self.dims,
             generate_from_noise=self.generate_from_noise,
             generator=generator,
         )
@@ -73,5 +93,5 @@ class CFMTraining(AbstractFlowMethod):
 class CFMTrainingConfig(AbstractFlowMethodConfig, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
-    def build(self, module: torch.nn.Module) -> CFMTraining:
-        return CFMTraining(module, self)
+    def build(self, module: torch.nn.Module, *, dims: DataDimensions) -> CFMTraining:
+        return CFMTraining(module, self, dims=dims)

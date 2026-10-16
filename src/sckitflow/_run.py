@@ -65,15 +65,22 @@ class RunConfig(Component):
     """Seeds every time, noise and coupling draw of training, validation and prediction."""
 
     def build(self, adata: AnnData, module: torch.nn.Module, *, optimizer: torch.optim.Optimizer | None = None) -> Run:
-        """The data module over ``adata`` and a plan over ``module``."""
+        """The data module over ``adata`` and a plan over ``module``.
+
+        The shape spec comes off the freshly-built data module rather than the config: the module
+        was built against the data, and the methods have to agree with the module. Reading
+        ``datamodule.data_dims`` is the one place that agreement is enforced, and it keeps the two
+        builds (training, inference) sharing the same spec by construction.
+        """
         splitter = (
             self.splitter.build(rng=np.random.default_rng(self.splitter_seed)) if self.splitter is not None else None
         )
         datamodule = self.data.build(adata, rng=np.random.default_rng(self.loader_seed), splitter=splitter)
+        dims = datamodule.data_dims
         plan = TrainingPlan(
-            self.training.build(module),
+            self.training.build(module, dims=dims),
             optimizer,
-            inference_method=self.inference.build(module) if self.inference is not None else None,
+            inference_method=self.inference.build(module, dims=dims) if self.inference is not None else None,
             val_names=datamodule.val_names,
             seed=self.method_seed,
         )

@@ -30,8 +30,11 @@ def my_sampler(shape, *, generator, device=None, dtype=None):
 
 
 class Trainer:
-    def __init__(self, module):
+    """Structural `SupportsTraining` -- carries `dims`, as the protocol now requires."""
+
+    def __init__(self, module, dims):
         self.module = module
+        self.dims = dims
         self.calls = []
 
     def compute_loss(self, step_data, *, generator, rng):
@@ -40,16 +43,14 @@ class Trainer:
 
 
 class Predictor:
-    def __init__(self, module):
+    """Structural `SupportsInference` -- carries `dims`, as the protocol now requires."""
+
+    def __init__(self, module, dims):
         self.module = module
+        self.dims = dims
 
     def predict(self, step_data, *, generator):
         return None
-
-
-@pytest.fixture
-def module():
-    return torch.nn.Linear(4, 4)
 
 
 @pytest.fixture
@@ -64,38 +65,49 @@ def coupled():
 
 
 # -------------------- AbstractMethod --------------------
-def test_abstract_method_keeps_module_as_given():
+def test_abstract_method_keeps_module_as_given(dims):
     module = torch.nn.Linear(4, 4).double()
-    method = AbstractMethod(module)
+    method = AbstractMethod(module, dims=dims)
     assert method.module is module
     assert next(method.module.parameters()).dtype == torch.float64
     assert next(method.module.parameters()).device.type == "cpu"
 
 
+def test_abstract_method_keeps_dims_by_identity(module, dims):
+    method = AbstractMethod(module, dims=dims)
+    assert method.dims is dims
+
+
 # -------------------- AbstractFlowMethod --------------------
-def test_flow_method_defaults(module):
-    method = AbstractFlowMethod(module, CFMTrainingConfig())
+def test_flow_method_defaults(module, dims):
+    method = AbstractFlowMethod(module, CFMTrainingConfig(), dims=dims)
     assert isinstance(method.probability_path, LinearDiracProbabilityPath)
     assert method.time_sampler is _uniform
     assert method.noise_sampler is _standard_normal
     assert method.generate_from_noise is False
 
 
-def test_flow_method_builds_path_config(module):
+def test_flow_method_builds_path_config(module, dims):
     config = CFMTrainingConfig(probability_path=LinearGaussianProbabilityPathConfig(sigma=0.5))
-    assert isinstance(AbstractFlowMethod(module, config).probability_path, LinearGaussianProbabilityPath)
+    method = AbstractFlowMethod(module, config, dims=dims)
+    assert isinstance(method.probability_path, LinearGaussianProbabilityPath)
 
 
-def test_flow_method_custom_values(module):
+def test_flow_method_custom_values(module, dims):
     path = LinearGaussianProbabilityPath(sigma=0.5)
     config = CFMTrainingConfig(
         probability_path=path, time_sampler=my_sampler, noise_sampler=my_sampler, generate_from_noise=True
     )
-    method = AbstractFlowMethod(module, config)
+    method = AbstractFlowMethod(module, config, dims=dims)
     assert method.probability_path is path
     assert method.time_sampler is my_sampler
     assert method.noise_sampler is my_sampler
     assert method.generate_from_noise is True
+
+
+def test_flow_method_keeps_dims_by_identity(module, dims):
+    method = AbstractFlowMethod(module, CFMTrainingConfig(), dims=dims)
+    assert method.dims is dims
 
 
 @pytest.mark.parametrize("sampler", [_uniform, _standard_normal])
@@ -131,11 +143,26 @@ def test_cfm_config_spec_round_trips():
 
 
 # -------------------- Protocols --------------------
-def test_structural_protocols(module):
-    assert isinstance(Trainer(module), SupportsTraining)
-    assert not isinstance(Trainer(module), SupportsInference)
-    assert isinstance(Predictor(module), SupportsInference)
-    assert not isinstance(Predictor(module), SupportsTraining)
+def test_structural_protocols(module, dims):
+    assert isinstance(Trainer(module, dims), SupportsTraining)
+    assert not isinstance(Trainer(module, dims), SupportsInference)
+    assert isinstance(Predictor(module, dims), SupportsInference)
+    assert not isinstance(Predictor(module, dims), SupportsTraining)
+
+
+def test_protocol_requires_dims(module, dims):
+    """A method that exposes `module` and `compute_loss` but no `dims` is not `SupportsTraining`."""
+
+    class NoDims:
+        @property
+        def module(self):
+            return module
+
+        def compute_loss(self, step_data, *, generator, rng):
+            return torch.tensor(0.0), {}
+
+    assert not isinstance(NoDims(), SupportsTraining)
+    assert not isinstance(NoDims(), SupportsInference)
 
 
 # -------------------- Matcher --------------------
@@ -173,8 +200,8 @@ def test_match_subscripts_and_passes_rng(coupled):
 
 
 # -------------------- MatchedTrainingMethod --------------------
-def test_matched_training_method(module, coupled):
-    inner = Trainer(module)
+def test_matched_training_method(module, dims, coupled):
+    inner = Trainer(module, dims)
     matcher = Matcher(lambda **_: (torch.tensor([1]), torch.tensor([2])))
     matched = MatchedTrainingMethod(inner, matcher)
     generator, rng = torch.Generator().manual_seed(0), np.random.default_rng(0)
@@ -190,4 +217,12 @@ def test_matched_training_method(module, coupled):
     assert matched.method is inner
     assert matched.matcher is matcher
     assert matched.module is module
+    assert isinstance(matched, SupportsTraining)
+
+
+def test_matched_training_method_forwards_dims(module, dims, coupled):
+    """`SupportsTraining` requires `dims`, so the wrapper must expose the wrapped method's."""
+    inner = Trainer(module, dims)
+    matched = MatchedTrainingMethod(inner, Matcher(lambda **_: (None, None)))
+    assert matched.dims is dims
     assert isinstance(matched, SupportsTraining)

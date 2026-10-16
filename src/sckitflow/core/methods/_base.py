@@ -11,6 +11,7 @@ from sckitflow.core._data_utils import subscript_step_data
 from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
 from sckitflow.core.probability_paths._config import ProbabilityPathConfig
 from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath, LinearDiracProbabilityPath
+from sckitflow.data._dims import DataDimensions
 
 __all__ = [
     # The two contracts
@@ -38,10 +39,14 @@ __all__ = [
 # below is there to share code between implementations, never to be type-tested.
 @runtime_checkable
 class SupportsTraining(Protocol):
-    """A module to train, plus `compute_loss`."""
+    """A module to train, its shape spec, plus `compute_loss`."""
 
     @property
     def module(self) -> torch.nn.Module: ...
+
+    @property
+    def dims(self) -> DataDimensions: ...
+
     def compute_loss(
         self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
     ) -> tuple[torch.Tensor, dict[str, Any]]: ...
@@ -49,32 +54,36 @@ class SupportsTraining(Protocol):
 
 @runtime_checkable
 class SupportsInference(Protocol):
-    """A module to run, plus `predict`."""
+    """A module to run, its shape spec, plus `predict`."""
 
     @property
     def module(self) -> torch.nn.Module: ...
+
+    @property
+    def dims(self) -> DataDimensions: ...
+
     def predict(self, step_data: StepData, *, generator: torch.Generator) -> PredictionData: ...
 
 
 class TrainingMethodConfig(Component):
     """Family base for anything that configures a training method."""
 
-    def build(self, module: torch.nn.Module) -> SupportsTraining:
-        """The training method around ``module``."""
+    def build(self, module: torch.nn.Module, *, dims: DataDimensions) -> SupportsTraining:
+        """The training method around ``module``, for the given data shape."""
         raise NotImplementedError
 
 
 class InferenceMethodConfig(Component):
     """Family base for anything that configures an inference method."""
 
-    def build(self, module: torch.nn.Module) -> SupportsInference:
-        """The inference method around ``module``."""
+    def build(self, module: torch.nn.Module, *, dims: DataDimensions) -> SupportsInference:
+        """The inference method around ``module``, for the given data shape."""
         raise NotImplementedError
 
 
 # -------------------- Shared implementation --------------------
 class AbstractMethod:
-    """Holds the neural module a method is built on.
+    """Holds the neural module a method is built on, and the shape spec it was built for.
 
     Purely for code reuse between implementations -- never type-test against
     this, use `SupportsTraining` / `SupportsInference`.
@@ -83,20 +92,30 @@ class AbstractMethod:
     moved or retyped, so handing one module to a training and an inference
     method is safe. Placement is the caller's -- ``module.to(device, dtype)``
     before constructing, and ``module.train(mode)`` to switch modes. Inside
-    `compute_loss` / `predict` the batch is the reference for device and dtype.
+    `compute_loss` / `predict` the batch is the reference for device and dtype;
+    `dims` is the reference for *shape*, so nothing has to be reverse-engineered
+    from a module attribute or guessed from a config field.
     """
 
-    def __init__(self, module: torch.nn.Module) -> None:
-        """Keeps `module` as given.
+    def __init__(self, module: torch.nn.Module, *, dims: DataDimensions) -> None:
+        """Keeps `module` and `dims` as given.
 
         :param module: An initialized `torch.nn.Module` the method builds upon,
             already on the device and dtype you want to run in.
+        :param dims: The shape spec of the data the module was built for.
+            ``state_dim`` sizes the latent; the covariate and coupling dims
+            describe what the model expects on the conditioning side.
         """
         self._module = module
+        self._dims = dims
 
     @property
     def module(self) -> torch.nn.Module:
         return self._module
+
+    @property
+    def dims(self) -> DataDimensions:
+        return self._dims
 
 
 def _uniform(
@@ -139,16 +158,19 @@ class AbstractFlowMethod(AbstractMethod):
     """Adds the flow configuration that flow trainers and flow predictors share.
 
     Its settings come from one config object, an `AbstractFlowMethodConfig` or a subclass of it. A training
-    and an inference method given the same module and flow settings share the path, samplers and module.
+    and an inference method given the same module and flow settings share the path, samplers and module. The
+    data shape comes from `dims`; it is not carried on the config, because it is a property of the run's data,
+    not of the flow settings.
     """
 
-    def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig) -> None:
+    def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig, *, dims: DataDimensions) -> None:
         """Builds the path and samplers from ``config``.
 
         :param module: An initialized neural module the method builds upon.
         :param config: The flow settings, the method's own config.
+        :param dims: The shape spec of the data the module was built for.
         """
-        super().__init__(module)
+        super().__init__(module, dims=dims)
         path = config.probability_path
         if isinstance(path, ProbabilityPathConfig):
             path = path.build()
@@ -273,3 +295,8 @@ class MatchedTrainingMethod:
     def module(self) -> torch.nn.Module:
         """The wrapped method's module; `SupportsTraining` requires it."""
         return self._method.module
+
+    @property
+    def dims(self) -> DataDimensions:
+        """The wrapped method's shape spec; `SupportsTraining` requires it."""
+        return self._method.dims

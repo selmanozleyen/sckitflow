@@ -202,6 +202,22 @@ class DataManager:
             "response_covs": self._target_data_schema.continuous_covs,
         }
 
+    @property
+    def _training_loader_schema(self) -> dict[str, Any]:
+        """Everything a *training* loader reads off this schema -- :attr:`_loader_schema`, plus coupling.
+
+        Coupling is a training-time concern: it aligns source and target populations during the fit, and
+        has nothing to align against at prediction or validation. It is therefore kept out of the shared
+        :attr:`_loader_schema` (which :meth:`get_eval_loader` spreads) and added here for
+        :meth:`get_dataloaders` alone.
+
+        The split is the one place the asymmetry is *observable*: same schema, different dict, different
+        loader. Keeping the two properties adjacent makes that visible at review time -- the temptation to
+        fold coupling back into :attr:`_loader_schema` ("it's just one more key") is exactly what this
+        separation exists to prevent.
+        """
+        return {**self._loader_schema, "coupling_schema": self._coupling_data_schema}
+
     def _get_feature_names(
         self,
         adata: AnnData,
@@ -500,6 +516,13 @@ class DataManager:
         :returns: Mapping from each split value (that has perturbed groups) to its loader.
         :rtype: class: `dict[str, Loader]`
         """
+        for key in self._training_loader_schema:
+            if key in loader_kwargs:
+                raise TypeError(
+                    f"{key} is owned by the schema, not per call: it is built from "
+                    "`DataManagerConfig.rep_lin` / `source_rep_quad` / `target_rep_quad` / `use_linear`. "
+                    "Pass it there, not to `get_dataloaders`."
+                )
         from sckitflow.data._loader import Loader
 
         adata, split_by = self._resolve_split(adata)
@@ -516,7 +539,7 @@ class DataManager:
             return {
                 "train": Loader(
                     sel.adata,
-                    **self._loader_schema,
+                    **self._training_loader_schema,
                     primary_weights=weights,
                     control_adata=sel.control_adata,
                     control_weights=None if sel.control_adata is not None else controls,
@@ -538,7 +561,7 @@ class DataManager:
         return {
             split_value: Loader(
                 sel.adata,
-                **self._loader_schema,
+                **self._training_loader_schema,
                 split_by=split_by,
                 primary_weights=weights,
                 control_adata=sel.control_adata,

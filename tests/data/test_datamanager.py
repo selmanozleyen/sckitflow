@@ -564,3 +564,103 @@ class TestLinearFreeCoupling:
                 source_rep_quad=source_rep_quad,
                 target_rep_quad=target_rep_quad,
             )
+
+
+class TestTrainingOnlyCoupling:
+    """The manager wires coupling into training loaders and withholds it from eval.
+
+    `_loader_schema` is shared and does *not* carry `coupling_schema`; `_training_loader_schema` adds
+    it. This is the only place the training/eval asymmetry is observable end to end.
+    """
+
+    def _with_coupling_reps(self, adata: AnnData) -> AnnData:
+        rng = np.random.default_rng(0)
+        adata.obsm["X_lin"] = rng.standard_normal((adata.n_obs, 5)).astype("float32")
+        adata.obsm["X_src_quad"] = rng.standard_normal((adata.n_obs, 3)).astype("float32")
+        adata.obsm["X_tgt_quad"] = rng.standard_normal((adata.n_obs, 4)).astype("float32")
+        return adata
+
+    def test_training_loaders_stream_coupling_no_split(self, adata_small: AnnData):
+        """No-split branch: coupling reaches the loader when the schema declares it."""
+        self._with_coupling_reps(adata_small)
+        dm = _make_manager(
+            control_values_dict={"drug": "control"},
+            rep_lin="X_lin",
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        loaders = dm.get_dataloaders(adata_small, batch_size=8)
+        sd = next(iter(loaders["train"]))
+        assert sd["target_coupling_lin"].shape[1] == 5
+        assert sd["source_coupling_lin"].shape[1] == 5
+        assert sd["target_coupling_quad"].shape[1] == 4
+        assert sd["source_coupling_quad"].shape[1] == 3
+
+    def test_training_loaders_stream_coupling_with_a_split(self, adata_small: AnnData):
+        """Split branch: same guarantee, on the path that actually reaches most users.
+
+        Catches a `_loader_schema` / `_training_loader_schema` mix-up in the with-split return, which
+        the no-split test above cannot see.
+        """
+        self._with_coupling_reps(adata_small)
+        ad = _with_split(adata_small)
+        dm = _make_manager(
+            control_values_dict={"drug": "control"},
+            split_by="split",
+            rep_lin="X_lin",
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        loaders = dm.get_dataloaders(ad, batch_size=8)
+        assert set(loaders) == {"train", "val"}
+        sd = next(iter(loaders["train"]))
+        assert sd["target_coupling_lin"].shape[1] == 5
+        assert sd["target_coupling_quad"].shape[1] == 4
+        assert sd["source_coupling_quad"].shape[1] == 3
+
+    def test_eval_loader_emits_no_coupling_even_when_configured(self, adata_small: AnnData):
+        """`EvalLoader` ignores the schema: coupling is training-only by design."""
+        self._with_coupling_reps(adata_small)
+        dm = _make_manager(
+            control_values_dict={"drug": "control"},
+            rep_lin="X_lin",
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        for sd, _leaf in dm.get_eval_loader(adata_small):
+            assert sd["target_coupling_lin"] is None
+            assert sd["target_coupling_quad"] is None
+            assert sd["source_coupling_lin"] is None
+            assert sd["source_coupling_quad"] is None
+
+    def test_the_shared_schema_does_not_carry_coupling(self):
+        """`_loader_schema` is coupling-free; only `_training_loader_schema` adds it, without replacement."""
+        dm = _make_manager(rep_lin="X_lin")
+        assert "coupling_schema" not in dm._loader_schema
+        assert dm._training_loader_schema["coupling_schema"] is dm.coupling_data_schema
+        # strict superset, and the shared keys survive identity-wise
+        assert set(dm._loader_schema) < set(dm._training_loader_schema)
+        for key, value in dm._loader_schema.items():
+            assert dm._training_loader_schema[key] is value
+
+    def test_pure_gw_streams_only_quads(self, adata_small: AnnData):
+        """`use_linear=False` flows to the loader: linear coupling keys stay None even in training."""
+        self._with_coupling_reps(adata_small)
+        dm = _make_manager(
+            control_values_dict={"drug": "control"},
+            use_linear=False,
+            source_rep_quad="X_src_quad",
+            target_rep_quad="X_tgt_quad",
+        )
+        loaders = dm.get_dataloaders(adata_small, batch_size=8)
+        sd = next(iter(loaders["train"]))
+        assert sd["target_coupling_lin"] is None
+        assert sd["source_coupling_lin"] is None
+        assert sd["target_coupling_quad"].shape[1] == 4
+        assert sd["source_coupling_quad"].shape[1] == 3
+
+    def test_get_dataloaders_rejects_a_schema_owned_kwarg(self, adata_small: AnnData):
+        """One owner per question: the schema owns `coupling_schema`, not the call."""
+        dm = _make_manager(rep_lin="X_lin")
+        with pytest.raises(TypeError, match="owned by the schema"):
+            dm.get_dataloaders(adata_small, coupling_schema=dm.coupling_data_schema)

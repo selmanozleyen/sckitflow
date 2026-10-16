@@ -167,9 +167,10 @@ class DataManager:
             conditions_covariates=config.conditions_covariates,
         )
         self._coupling_data_schema = CouplingDataSchema(
-            source_rep=config.source_rep,
-            target_rep=config.sample_rep,
-            n_shared_dims=config.n_shared_dims,
+            rep_lin=config.rep_lin,
+            source_rep_quad=config.source_rep_quad,
+            target_rep_quad=config.target_rep_quad,
+            use_linear=config.use_linear,
         )
         self._target_data_schema = ResponseDataSchema(
             categorical_covs_dict=config.target_categorical_covs_dict,
@@ -757,13 +758,29 @@ class DataManagerConfig(Component):
     schema. Encoders are frozen configs that build their fitted transformer on demand. The
     string ids ``"label"`` / ``"one-hot"`` are accepted as shorthand for the parameter-free encoders."""
 
-    n_shared_dims: int | None = None
-    """The number of shared dimensions to be considered when matching distributions over
-    incomparable spaces, used to initialize the coupling data schema."""
+    rep_lin: str | None = None
+    """String identifier for the linear representation of the states, used when matching
+    distributions over partially incomparable states; this key will hold the optionally-shared features
+    and will be used to initialize the coupling data schema"""
 
-    source_rep: str | None = None
-    """String identifier for the state representation of source states, used when matching
-    distributions over incomparable spaces. Used to initialize the coupling data schema."""
+    source_rep_quad: str | None = None
+    """String identifier for the state quadratic representation of source states, used when matching
+    distributions over incomparable spaces. Used to initialize the coupling data schema.
+    This key will hold the features exclusively present in the source distribution.
+    """
+
+    target_rep_quad: str | None = None
+    """String identifier for the state quadratic representation of target states, used when matching
+    distributions over incomparable spaces. Used to initialize the coupling data schema.
+    This key will hold the features exclusively present in the target distribution.
+    """
+
+    use_linear: bool = True
+    """Whether the coupling has a shared linear term. `False` selects pure Gromov-Wasserstein:
+    source and target are matched on their intra-domain geometry alone, with no shared axes.
+    Requires both `source_rep_quad` and `target_rep_quad`, and is mutually exclusive with
+    `rep_lin`. Defaults to `True` (a shared linear term, optionally fused with per-side
+    quadratics)."""
 
     def build(self, *, splitter: Splitter[Any] | None = None) -> DataManager:
         """The data manager, applying ``splitter`` to the data it streams."""

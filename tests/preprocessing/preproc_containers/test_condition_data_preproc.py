@@ -60,8 +60,8 @@ def make_distribution_with_continuous_cov(n_obs=10, cov_key="X_cond", n_features
     # response, groups, coupling are just placeholders
     response_data = MixedTypeData(categorical_covariates=cat_data)
     groups_data = cat_data
-    source_coupling = CouplingData.init_from_state_data(state)
-    target_coupling = CouplingData.init_from_state_data(state)
+    source_coupling = CouplingData(state_lin=state)
+    target_coupling = CouplingData(state_lin=state)
 
     return DistributionData(
         state_data=state,

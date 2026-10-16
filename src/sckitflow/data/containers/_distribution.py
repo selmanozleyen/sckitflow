@@ -155,8 +155,12 @@ class DistributionData(BaseData):
         updated_condition_data = self.condition_data.pop_key(state_key)
 
         # update coupling data and return
-        source_coupling_data = CouplingData.init_from_state_data(cond_state_data)
-        target_coupling_data = CouplingData.init_from_state_data(cond_state_data)
+        # the coupling data is no longer initialized from the state data;
+        # use instead plain dataclass initialization and set the linear terms.
+        # Note that the view on condition space always generate from noise and
+        # is no case configured to the paired setting (case/control).
+        source_coupling_data = CouplingData(state_lin=cond_state_data)
+        target_coupling_data = CouplingData(state_lin=cond_state_data)
         return self.__class__(
             cond_state_data,
             response_data=self.response_data,

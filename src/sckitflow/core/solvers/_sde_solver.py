@@ -7,7 +7,7 @@ import torchsde
 from torch import Tensor
 from torchsde import sdeint
 
-from sckitflow.core._types import Diffusion, NoiseType, SDEDynamics, SDEType, VfFn
+from sckitflow.core._types import Diffusion, MappedTensor, NoiseType, SDEDynamics, SDEType, VfFn
 from sckitflow.core.solvers._solver import BaseSolver
 
 
@@ -34,9 +34,11 @@ class SDESolver(BaseSolver[SDEDynamics]):
     :param device_id: (Optional) Identifier for the device on which the SDE will be solved.
     :type device_id: class:`torch.types.Device`
 
-    :param vf_kwargs: (Optional) Keyword arguments passed to
-            :meth:`BaseVelocityField.get_vf_fn`.
-    :type vf_kwargs: class:`dict[str, Any] | None`
+    :param condition_dict: (Optional) Encoded conditions passed to :meth:`BaseVelocityField.get_vf_fn`.
+    :type condition_dict: class:`MappedTensor | None`
+
+    :param source: (Optional) Source state passed to :meth:`BaseVelocityField.get_vf_fn`.
+    :type source: class:`torch.Tensor | None`
     """
 
     def __init__(
@@ -47,7 +49,8 @@ class SDESolver(BaseSolver[SDEDynamics]):
         noise_type: NoiseType = "diagonal",
         method: str | None = None,
         device_id: torch.types.Device = "cpu",
-        vf_kwargs: dict[str, Any] | None = None,
+        condition_dict: MappedTensor | None = None,
+        source: Tensor | None = None,
         df_kwargs: dict[str, Any] | None = None,
     ):
         super().__init__(dynamics=dynamics, method=method, device_id=device_id)
@@ -55,8 +58,7 @@ class SDESolver(BaseSolver[SDEDynamics]):
         self._sde_type = torchsde.SDEIto if sde_type == "ito" else torchsde.SDEStratonovich
         self._noise_type = noise_type
 
-        vf_kwargs = vf_kwargs or {}
-        self._drift_fn = dynamics[0].get_vf_fn(**vf_kwargs)
+        self._drift_fn = dynamics[0].get_vf_fn(condition_dict=condition_dict, source=source)
         self._diffusion_fn = self._get_diffusion_fn_wrapper(dynamics[1], df_kwargs)
 
     def solve(

@@ -109,7 +109,8 @@ class ODEInference(AbstractFlowMethod):
         solver = ODESolver(
             self.module,
             method=method,
-            vf_kwargs={"condition_dict": condition_dict, "source": source_expanded},
+            condition_dict=condition_dict,
+            source=source_expanded,
             device_id=str(latent.device),
         )
 

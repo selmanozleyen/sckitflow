@@ -18,8 +18,8 @@ class PolyTimeVF:
     def __init__(self) -> None:
         self.last_get_vf_fn_kwargs: dict[str, Any] | None = None
 
-    def get_vf_fn(self, **vf_kwargs: Any):
-        self.last_get_vf_fn_kwargs = dict(vf_kwargs)
+    def get_vf_fn(self, condition_dict=None, source=None):
+        self.last_get_vf_fn_kwargs = {"condition_dict": condition_dict, "source": source}
 
         def f(t: Tensor, y: Tensor) -> Tensor:
             return 3.0 * (t**2) * torch.ones_like(y)
@@ -31,7 +31,7 @@ class PolyTimeVF:
 class ConstantVF:
     a: torch.nn.Parameter
 
-    def get_vf_fn(self, **vf_kwargs: Any):
+    def get_vf_fn(self, condition_dict=None, source=None):
         a = self.a
 
         def f(t: Tensor, y: Tensor) -> Tensor:
@@ -81,9 +81,9 @@ def test_solve_returns_trajectory_shape_dtype(poly_vf: PolyTimeVF, y0: Tensor, t
     assert traj.dtype == y0.dtype
 
 
-def test_vf_kwargs_forwarded(poly_vf: PolyTimeVF, y0: Tensor, t01: Tensor) -> None:
-    vf_kwargs = {"condition_dict": {"foo": torch.ones(1, 2)}, "alpha": 0.42}
-    solver = ODESolver(dynamics=poly_vf, method="euler", device_id="cpu", vf_kwargs=vf_kwargs)
+def test_condition_and_source_forwarded(poly_vf: PolyTimeVF, y0: Tensor, t01: Tensor) -> None:
+    cond = {"foo": torch.ones(1, 2)}
+    solver = ODESolver(dynamics=poly_vf, method="euler", device_id="cpu", condition_dict=cond, source=y0)
 
     _ = solver.solve(
         source=y0,
@@ -94,8 +94,8 @@ def test_vf_kwargs_forwarded(poly_vf: PolyTimeVF, y0: Tensor, t01: Tensor) -> No
     )
 
     assert poly_vf.last_get_vf_fn_kwargs is not None
-    assert "condition_dict" in poly_vf.last_get_vf_fn_kwargs
-    assert poly_vf.last_get_vf_fn_kwargs["alpha"] == pytest.approx(0.42)
+    assert poly_vf.last_get_vf_fn_kwargs["condition_dict"] is cond
+    assert poly_vf.last_get_vf_fn_kwargs["source"] is y0
 
 
 _METHODS = [

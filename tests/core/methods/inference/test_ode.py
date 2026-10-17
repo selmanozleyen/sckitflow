@@ -251,9 +251,9 @@ def test_predict_passes_condition_dict_and_source_to_solver(make_inference, step
 
     expand_cond = mocks["expand"].call_args.args[1]
     assert set(expand_cond) == {"cond", "group"}
-    vf_kwargs = mocks["solver_cls"].call_args.kwargs["vf_kwargs"]
-    assert vf_kwargs["condition_dict"] is cond
-    assert vf_kwargs["source"] is source
+    solver_kwargs = mocks["solver_cls"].call_args.kwargs
+    assert solver_kwargs["condition_dict"] is cond
+    assert solver_kwargs["source"] is source
 
 
 # -------------------- Randomness --------------------

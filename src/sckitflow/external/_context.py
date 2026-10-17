@@ -35,6 +35,7 @@ class ExternalModelContext:
     def __init__(
         self,
         model: Any | None = None,
+        *,
         model_path: str | None = None,
         model_load_args: Collection[Any] = (),
         model_load_kwargs: dict[str, Any] = None,

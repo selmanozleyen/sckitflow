@@ -69,6 +69,24 @@ While the [pre-commit.ci][] is useful, we strongly encourage installing and runn
 Finally, most editors have an _autoformat on save_ feature.
 Consider enabling this option for [ruff][ruff-editors] and [biome][biome-editors].
 
+### Configs that wrap a function
+
+When a config only binds its fields to a function (e.g. the couplings in `sckitflow.core.coupling`),
+the config is the single source of truth:
+
+- Defaults live on the config only. The function takes the settings without defaults, or `None` for a
+  setting only some methods read.
+- Write one config per solver (or `method`), holding only the fields that solver reads, so a setting it
+  would ignore fails validation as an unknown field.
+- Name the parameters explicitly, never forward `**kwargs`, so a misspelled key fails validation.
+
+### Signatures
+
+- **At most 5 positional parameters** (ruff `PLR0917`, a preview rule selected by name). Keep the one or two
+  arguments a call reads naturally with positional and put the options after `*`. Tests and docs are exempt.
+- **Avoid `**kwargs` in a signature**, since they swallow misspelled keys. Name the parameters, or type them
+  as `**kwargs: Unpack[SomeTypedDict]`. Untyped `**kwargs` is for forwarding to code you don't control.
+
 [pre-commit]: https://pre-commit.com/
 [pre-commit.ci]: https://pre-commit.ci/
 [ruff-editors]: https://docs.astral.sh/ruff/integrations/

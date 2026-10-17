@@ -435,9 +435,9 @@ class DataManager:
         pool = self._combos(control_adata) if control_adata is not None else combos
         self._assert_keys_present(sources, pool, "source")
 
-        adata = with_derived_obs(adata, **{_PAIR_KEY: self._pair_column(adata, ids)})
+        adata = with_derived_obs(adata, {_PAIR_KEY: self._pair_column(adata, ids)})
         if control_adata is not None:
-            control_adata = with_derived_obs(control_adata, **{_PAIR_KEY: self._pair_column(control_adata, ids)})
+            control_adata = with_derived_obs(control_adata, {_PAIR_KEY: self._pair_column(control_adata, ids)})
         return _Selection(
             adata,
             control_adata,

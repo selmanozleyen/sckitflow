@@ -31,7 +31,7 @@ class SCurveDataset(BaseDummyDataset):
         """Initialization"""
         super().__init__(random_state, n_samples, noise=noise)
 
-    def _generate(self, random_state, n_samples, noise) -> AnnData:
+    def _generate(self, *, random_state, n_samples, noise) -> AnnData:
         """
         Generate S-Curve dataset.
 

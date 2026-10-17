@@ -39,7 +39,7 @@ class CirclesDataset(BaseDummyDataset):
         """Initialization"""
         super().__init__(random_state, n_samples, noise=noise, factor=factor, shuffle=shuffle)
 
-    def _generate(self, random_state, n_samples, noise, factor, shuffle) -> AnnData:
+    def _generate(self, *, random_state, n_samples, noise, factor, shuffle) -> AnnData:
         """
         Generate concentric circles dataset.
 

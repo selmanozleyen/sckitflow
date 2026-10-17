@@ -289,6 +289,7 @@ def make_custom_conditioning_layer(
 def get_conditioning_layer(
     latent_state_dim: int,
     latent_time_dim: int,
+    *,
     latent_condition_dim: int | None = None,
     conditioning_id: ConditioningLayersId | None = None,
     conditioning_fn: ConditioningFn | None = None,

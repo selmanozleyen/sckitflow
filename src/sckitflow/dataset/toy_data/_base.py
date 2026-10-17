@@ -39,7 +39,7 @@ class BaseDummyDataset(ABC):
     def __init__(self, random_state: int, n_samples: int, **kwargs):
         """Initialize the base dataset generator."""
         self.random_state = random_state
-        self.adata = self._generate(random_state, n_samples, **kwargs)
+        self.adata = self._generate(random_state=random_state, n_samples=n_samples, **kwargs)
 
     def _create_anndata(self, X: np.ndarray, y: np.ndarray | None = None, y_type: str | None = None) -> AnnData:
         """

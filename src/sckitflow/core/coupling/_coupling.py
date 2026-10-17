@@ -141,11 +141,11 @@ def _select_indices(
 
 
 def independent_coupling(
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    *,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
-    *,
     rng: np.random.Generator,
 ) -> tuple[NumpyArray, NumpyArray]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices.
@@ -170,68 +170,76 @@ def independent_coupling(
         The two arrays have identical length, equal to the minimum number of
         available samples in the source and target tensors.
     """
-    # randomy permuting the tensors
-    src_random_perm_idx = rng.choice(source_lin.shape[0], size=source_lin.shape[0], replace=False)
-    tgt_random_perm_idx = rng.choice(target_lin.shape[0], size=source_lin.shape[0], replace=False)
-
-    min_shape = min(src_random_perm_idx.shape[0], tgt_random_perm_idx.shape[0])
-
-    return src_random_perm_idx[:min_shape], tgt_random_perm_idx[:min_shape]
+    # only the row counts matter, so either rep will do
+    source = source_lin if source_lin is not None else source_quad
+    target = target_lin if target_lin is not None else target_quad
+    if source is None or target is None:
+        raise ValueError("Independent coupling requires a source and a target representation, None found.")
+    n = min(source.shape[0], target.shape[0])
+    return rng.permutation(source.shape[0])[:n], rng.permutation(target.shape[0])[:n]
 
 
 @overload
 def ot_linear_coupling(
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    *,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: Literal[False] = False,
     cost_fn: CostFN | None = ...,
-    scale_cost: ScaleMethod = ...,
-    method: LinCouplingMethod = ...,
-    reg: float = ...,
-    reg_m: float = ...,
-    *,
+    method: LinCouplingMethod,
+    scale_cost: ScaleMethod,
+    num_iter_max: int | None,
+    reg: float | None = None,
+    reg_m: float | None = None,
     rng: np.random.Generator,
-    **kwargs,
+    m: float | None = None,
+    stop_thr: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray]: ...
 
 
 @overload
 def ot_linear_coupling(
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    *,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: Literal[True] = True,
     cost_fn: CostFN | None = ...,
-    scale_cost: ScaleMethod = ...,
-    method: LinCouplingMethod = ...,
-    reg: float = ...,
-    reg_m: float = ...,
-    *,
+    method: LinCouplingMethod,
+    scale_cost: ScaleMethod,
+    num_iter_max: int | None,
+    reg: float | None = None,
+    reg_m: float | None = None,
     rng: np.random.Generator,
-    **kwargs,
+    m: float | None = None,
+    stop_thr: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
 
 
 def ot_linear_coupling(
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    *,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: bool = False,
     cost_fn: CostFN | None = None,
-    scale_cost: ScaleMethod = "mean",
-    method: LinCouplingMethod = None,
-    reg: float = 5e-1,
-    reg_m: float = 1.0,
-    *,
+    method: LinCouplingMethod,
+    scale_cost: ScaleMethod,
+    num_iter_max: int | None,
+    reg: float | None = None,
+    reg_m: float | None = None,
     rng: np.random.Generator,
-    **kwargs,
+    m: float | None = None,
+    stop_thr: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices
     using an optimal transport-based linear coupling.
+
+    The solve is delegated to POT, so the solvers' behaviour and defaults follow the installed POT version.
 
     :param source: A tensor of values containing the data coming from the source distribution.
     :type source: class:`TensorLike`
@@ -247,15 +255,14 @@ def ot_linear_coupling(
         ``"mean"``, ``"max"``, or ``"median"``.
     :type scale_cost: class:`ScaleMethod`
 
-    :param method: Optimal transport solver to use. If ``None``, defaults to ``"sinkhorn"``.
-        Supported methods are ``"exact"``, ``"sinkhorn"``, ``"partial"``, and ``"unbalanced"``.
-    :type method: class:`LinCouplingMethod`, optional
+    :param method: Optimal transport solver to use: ``"exact"``, ``"sinkhorn"``, ``"partial"`` or ``"unbalanced"``.
+    :type method: class:`LinCouplingMethod`
 
-    :param reg: Entropic regularization parameter used by Sinkhorn-based solvers.
-    :type reg: float
+    :param reg: Entropic regularization, required by every method but ``"exact"``.
+    :type reg: float, optional
 
-    :param reg_m: Marginal relaxation parameter used by unbalanced optimal transport solvers.
-    :type reg_m: float
+    :param reg_m: Marginal relaxation, required by ``"unbalanced"``.
+    :type reg_m: float, optional
 
     :param return_matrix: If ``True``, also return the optimal transport coupling matrix.
     :type return_matrix: bool
@@ -263,8 +270,14 @@ def ot_linear_coupling(
     :param rng: Generator the matched indices are drawn from.
     :type rng: class:`numpy.random.Generator`
 
-    :param kwargs: Additional keyword arguments forwarded to the selected optimal transport solver.
-    :type kwargs: dict
+    :param m: Transported mass, used only by ``"partial"``. ``None`` is the solver's default.
+    :type m: float, optional
+
+    :param num_iter_max: POT's ``numItermax``. ``None`` is the solver's default.
+    :type num_iter_max: int, optional
+
+    :param stop_thr: POT's ``stopThr``, not taken by ``"exact"``. ``None`` is the solver's default.
+    :type stop_thr: float, optional
 
     Returns
     -------
@@ -275,8 +288,8 @@ def ot_linear_coupling(
         If ``return_matrix`` is ``True``, also returns the optimal transport coupling matrix
         computed between the source and target distributions.
     """  # noqa
-    method = method or "sinkhorn"
-
+    if source_lin is None or target_lin is None:
+        raise ValueError("Linear coupling requires linear source and target representations, None found.")
     cost_fn = cost_fn or (lambda source, target: torch.cdist(source, target) ** 2)
 
     # computing weights
@@ -294,26 +307,21 @@ def ot_linear_coupling(
     # normalization of cost
     distance_matrix = _scale_distance_matrix(distance_matrix, scale_method=scale_cost)
 
+    if method != "exact" and reg is None:
+        msg = f"{method=} requires `reg` to be a `float`, `None` found"
+        raise ValueError(msg)
+    opts = {k: v for k, v in {"numItermax": num_iter_max, "stopThr": stop_thr}.items() if v is not None}
     if method == "exact":
-        ot_fn = pot.emd
+        ot_fn = partial(pot.emd, **opts)
     elif method == "sinkhorn":
-        if reg is None:
-            msg = f"{method=} requires `reg` to be a `float`, `None` found"
-            raise ValueError(msg)
-        ot_fn = partial(pot.sinkhorn, reg=reg, **kwargs)
+        ot_fn = partial(pot.sinkhorn, reg=reg, **opts)
     elif method == "partial":
-        if reg is None:
-            msg = f"{method=} requires `reg` to be a `float`, `None` found"
-            raise ValueError(msg)
-        ot_fn = partial(pot.partial.entropic_partial_wasserstein, reg=reg, **kwargs)
+        ot_fn = partial(pot.partial.entropic_partial_wasserstein, reg=reg, m=m, **opts)
     elif method == "unbalanced":
-        if reg is None:
-            msg = f"{method=} requires `reg` to be a `float`, `None` found"
-            raise ValueError(msg)
         if reg_m is None:
             msg = f"{method=} requires `reg_m` to be a `float`, `None` found"
             raise ValueError(msg)
-        ot_fn = partial(pot.unbalanced.sinkhorn_knopp_unbalanced, reg=reg, reg_m=reg_m, **kwargs)
+        ot_fn = partial(pot.unbalanced.sinkhorn_knopp_unbalanced, reg=reg, reg_m=reg_m, **opts)
     else:
         msg = f"{method=} is not found, please specify a custom `method` in `ot_fn`"
         raise ValueError(msg)
@@ -328,50 +336,61 @@ def ot_linear_coupling(
 
 @overload
 def ot_quadratic_coupling(
+    *,
     source_lin: TensorLike | None = ...,
     target_lin: TensorLike | None = ...,
     source_quad: TensorLike | None = ...,
     target_quad: TensorLike | None = ...,
     return_matrix: Literal[False] = False,
     cost_fn: CostFN | None = ...,
-    scale_cost: ScaleMethod = ...,
-    method: QuadCouplingMethod = ...,
-    *,
+    method: QuadCouplingMethod,
+    scale_cost: ScaleMethod,
     rng: np.random.Generator,
-    **kwargs,
+    epsilon: float,
+    max_iter: int,
+    tol: float,
+    alpha: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray]: ...
 
 
 @overload
 def ot_quadratic_coupling(
+    *,
     source_lin: TensorLike | None = ...,
     target_lin: TensorLike | None = ...,
     source_quad: TensorLike | None = ...,
     target_quad: TensorLike | None = ...,
     return_matrix: Literal[True] = True,
     cost_fn: CostFN | None = ...,
-    scale_cost: ScaleMethod = ...,
-    method: QuadCouplingMethod = ...,
-    *,
+    method: QuadCouplingMethod,
+    scale_cost: ScaleMethod,
     rng: np.random.Generator,
-    **kwargs,
+    epsilon: float,
+    max_iter: int,
+    tol: float,
+    alpha: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
 
 
 def ot_quadratic_coupling(
+    *,
     source_lin: TensorLike | None = None,
     target_lin: TensorLike | None = None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: bool = False,
     cost_fn: CostFN | None = None,
-    scale_cost: ScaleMethod = 1.0,
-    method: QuadCouplingMethod = None,
-    *,
+    method: QuadCouplingMethod,
+    scale_cost: ScaleMethod,
     rng: np.random.Generator,
-    **kwargs,
+    epsilon: float,
+    max_iter: int,
+    tol: float,
+    alpha: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches source and target groups using an optimal transport-based quadratic coupling (Gromov-Wasserstein or fused Gromov-Wasserstein) and returns the respective indices.
+
+    The solve is delegated to POT, so the solvers' behaviour and defaults follow the installed POT version.
 
     :param source_quad: A tensor containing pairwise relationships within the source
         distribution (source-source structure).
@@ -400,17 +419,24 @@ def ot_quadratic_coupling(
         ``"mean"``, ``"max_cost"``, or ``"median"``.
     :type scale_cost: class:`ScaleMethod`
 
-    :param method: Quadratic optimal transport solver to use. If ``None``, defaults to
-        ``"entropic_gromov_wasserstein"``. Supported methods are
-        ``"entropic_gromov_wasserstein"`` and
+    :param method: Quadratic optimal transport solver to use: ``"entropic_gromov_wasserstein"`` or
         ``"entropic_fused_gromov_wasserstein"``.
-    :type method: class:`QuadCouplingMethod`, optional
+    :type method: class:`QuadCouplingMethod`
 
     :param rng: Generator the matched indices are drawn from.
     :type rng: class:`numpy.random.Generator`
 
-    :param kwargs: Additional keyword arguments forwarded to the solver.
-    :type kwargs: dict
+    :param epsilon: Entropic regularization.
+    :type epsilon: float
+
+    :param alpha: Trade-off between the quadratic and linear terms, required by the fused solver.
+    :type alpha: float, optional
+
+    :param max_iter: Maximum number of outer iterations.
+    :type max_iter: int
+
+    :param tol: Stopping tolerance.
+    :type tol: float
 
     Returns
     -------
@@ -430,7 +456,6 @@ def ot_quadratic_coupling(
         raise ValueError(msg)
 
     cost_fn = cost_fn or (lambda source, target: torch.cdist(source, target) ** 2)
-    method = method or "entropic_gromov_wasserstein"
 
     # moving arrays to torch tensors
     source_quad = to_torch_tensor(source_quad)
@@ -455,15 +480,22 @@ def ot_quadratic_coupling(
         distance_matrix=distance_matrix_target_quad, scale_method=scale_cost
     )
 
+    opts = {"epsilon": epsilon, "max_iter": max_iter, "tol": tol}
     if method == "entropic_gromov_wasserstein":
-        ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, epsilon=1.0, alpha=1.0)
+        ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, **opts)
         # computing coupling matrix
         coupling_matrix = ot_fn(
             C1=distance_matrix_source_quad,
             C2=distance_matrix_target_quad,
         )
-    elif method == "entropic_fused_gromov_wasserstein" and distance_matrix_lin is not None:
-        ot_fn = partial(pot.gromov.entropic_fused_gromov_wasserstein, epsilon=1.0, alpha=0.5)
+    elif method == "entropic_fused_gromov_wasserstein":
+        if distance_matrix_lin is None:
+            msg = f"{method=} requires `source_lin` and `target_lin`, `None` found"
+            raise ValueError(msg)
+        if alpha is None:
+            msg = f"{method=} requires `alpha` to be a `float`, `None` found"
+            raise ValueError(msg)
+        ot_fn = partial(pot.gromov.entropic_fused_gromov_wasserstein, alpha=alpha, **opts)
         # computing coupling matrix
         coupling_matrix = ot_fn(
             C1=distance_matrix_source_quad,
@@ -474,8 +506,8 @@ def ot_quadratic_coupling(
         msg = f"{method=} is not found, please specify a custom `method` in `ot_fn`"
         raise ValueError(msg)
     source_idxs, target_idxs = _select_indices(
-        coupling_matrix=coupling_matrix.numpy(), size=source_quad.shape[0], rng=rng
+        coupling_matrix=coupling_matrix.detach().cpu().numpy(), size=source_quad.shape[0], rng=rng
     )
     if return_matrix:
-        return source_idxs, target_idxs, coupling_matrix.numpy()
+        return source_idxs, target_idxs, coupling_matrix.detach().cpu().numpy()
     return source_idxs, target_idxs

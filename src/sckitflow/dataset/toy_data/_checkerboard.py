@@ -39,6 +39,7 @@ class CheckerboardDataset(BaseDummyDataset):
 
     def __init__(
         self,
+        *,
         random_state: int = 42,
         n_samples: int = 1000,
         n_features: int = 2,
@@ -59,7 +60,7 @@ class CheckerboardDataset(BaseDummyDataset):
             shuffle=shuffle,
         )
 
-    def _generate(self, random_state, n_samples, n_features, n_clusters, noise, minval, maxval, shuffle) -> AnnData:
+    def _generate(self, *, random_state, n_samples, n_features, n_clusters, noise, minval, maxval, shuffle) -> AnnData:
         """
         Generate a checkerboard pattern of clusters.
 

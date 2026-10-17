@@ -127,6 +127,7 @@ def _init_uns(
 
 def _get_perturbed_adata(
     rng: np.random.Generator,
+    *,
     n_obs: int = n_obs_pert,
     n_genes: int = n_genes,
     obsm_keys_to_dim: dict[str, int] = obsm_keys_to_dim,
@@ -158,6 +159,7 @@ def _get_perturbed_adata(
 
 def _get_control_adata(
     rng: np.random.Generator,
+    *,
     n_obs: int = n_obs_ctrl,
     n_genes: int = n_genes,
     obsm_keys_to_dim: dict[str, int] = obsm_keys_to_dim,
@@ -189,6 +191,7 @@ def _get_control_adata(
 
 
 def get_dummy_adata(
+    *,
     n_obs_pert: int = n_obs_pert,
     n_obs_ctrl: int = n_obs_ctrl,
     n_genes: int = n_genes,
@@ -197,7 +200,6 @@ def get_dummy_adata(
     uns_keys_to_nunique_prefix_and_dim: dict[str, Any] = uns_keys_to_nunique_prefix_and_dim,
     obs_columns_to_fixed_val: dict[str, str] = obs_columns_to_fixed_val,
     control_key: str = control_key,
-    *,
     rng: np.random.Generator,
 ) -> AnnData:
     """"""  # noqa

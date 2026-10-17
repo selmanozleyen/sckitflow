@@ -1,6 +1,6 @@
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Protocol, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Protocol, TypedDict, TypeVar, Unpack
 
 import numpy as np
 import torch
@@ -31,19 +31,27 @@ MeanFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 DriftFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 SigmaFn = Callable[[torch.Tensor], torch.Tensor]
 ScaleMethod = Literal["mean", "max", "median"] | float
-LinCouplingMethod = Literal["exact", "sinkhorn", "partial", "unbalanced"] | None
-QuadCouplingMethod = Literal["entropic_gromov_wasserstein", "entropic_fused_gromov_wasserstein"] | None
+LinCouplingMethod = Literal["exact", "sinkhorn", "partial", "unbalanced"]
+QuadCouplingMethod = Literal["entropic_gromov_wasserstein", "entropic_fused_gromov_wasserstein"]
 CostFN = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
-MatchFnOut = tuple[TensorLike, TensorLike] | tuple[TensorLike, TensorLike, TensorLike]
+MatchFnOut = tuple[TensorLike | None, TensorLike | None]
 
 
 class MatchFn(Protocol):
+    """Pairs source and target rows, as source and target indices; ``None`` leaves the batch unmatched.
+
+    `Matcher` passes every argument by name, and the lin or the quad reps may be missing.
+    """
+
     def __call__(
         self,
-        source_lin: TensorLike,
-        target_lin: TensorLike,
-        **kwargs: Any,
+        *,
+        source_lin: TensorLike | None,
+        target_lin: TensorLike | None,
+        source_quad: TensorLike | None,
+        target_quad: TensorLike | None,
+        rng: np.random.Generator,
     ) -> MatchFnOut: ...
 
 
@@ -119,7 +127,7 @@ class StepData(TypedDict, total=False):
     source_group_data: BaseData | dict[str, torch.Tensor] | None
 
 
-def new_step_data(**fields: Any) -> StepData:
+def new_step_data(**fields: Unpack[StepData]) -> StepData:
     """Builds a :class:`StepData` with every field present and defaulting to ``None``.
 
     Guarantees all keys exist so consumers can index (``step_data["source_state"]``)

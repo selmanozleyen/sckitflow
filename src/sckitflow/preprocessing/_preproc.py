@@ -15,6 +15,7 @@ class DataPreprocessor:
 
     def __init__(
         self,
+        *,
         conditions_covariates: Collection[str] | None = None,
         state_transform: BaseTransform | None = None,
         state_encoder_context: ExternalModelContext | None = None,

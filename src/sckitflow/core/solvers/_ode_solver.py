@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 from torchdiffeq import odeint
 
-from sckitflow.core._types import ODEDynamics, VfFn
+from sckitflow.core._types import MappedTensor, ODEDynamics, VfFn
 from sckitflow.core.solvers._solver import BaseSolver
 
 
@@ -20,9 +20,11 @@ class ODESolver(BaseSolver[ODEDynamics]):
     :param device_id: (Optional) Identifier for the target compute device.
     :type device_id: class:`torch.types.Device`
 
-    :param vf_kwargs: (Optional) Keyword arguments passed to
-            :meth:`BaseVelocityField.get_vf_fn`.
-        :type vf_kwargs: class:`dict[str, Any] | None`
+    :param condition_dict: (Optional) Encoded conditions passed to :meth:`BaseVelocityField.get_vf_fn`.
+    :type condition_dict: class:`MappedTensor | None`
+
+    :param source: (Optional) Source state passed to :meth:`BaseVelocityField.get_vf_fn`.
+    :type source: class:`torch.Tensor | None`
     """
 
     def __init__(
@@ -31,12 +33,12 @@ class ODESolver(BaseSolver[ODEDynamics]):
         *,
         method: str = "euler",
         device_id: torch.types.Device = "cpu",
-        vf_kwargs: dict[str, Any] | None = None,
+        condition_dict: MappedTensor | None = None,
+        source: Tensor | None = None,
     ) -> None:
         super().__init__(dynamics=dynamics, method=method, device_id=device_id)
 
-        vf_kwargs = vf_kwargs or {}
-        self._vf = dynamics.get_vf_fn(**vf_kwargs)
+        self._vf = dynamics.get_vf_fn(condition_dict=condition_dict, source=source)
 
     def solve(
         self,

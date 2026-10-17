@@ -194,7 +194,7 @@ class TestNNModules:
         resnet = Resnet1d(
             self._input_dim,
             self._embedding_dim,
-            num_resnet_layers,
+            num_resnet_layers=num_resnet_layers,
             output_dim=output_dim,
             **layer_config,
         )
@@ -279,7 +279,7 @@ class TestNNModules:
         resnet = Resnet1d(
             self._input_dim,
             self._embedding_dim,
-            5,
+            num_resnet_layers=5,
             activation_cls=activation_cls,
             activation_cls_kwargs=activation_cls_kwargs,
         )

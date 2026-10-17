@@ -94,6 +94,7 @@ class SetEncoder(torch.nn.Module):
         self,
         input_layers: NestedLayersDict,
         output_dim: int,
+        *,
         pooling_mode: Literal["mean", "sum", "attention-token", "attention-seed"] = "mean",
         pooling_kwargs: dict[str, Any] | None = None,
         pooling_proj_dim: int | None = None,

@@ -12,8 +12,8 @@ class DriftWrapperVF:
         self.drift_fn = drift_fn
         self.last_get_vf_fn_kwargs: dict[str, object] | None = None
 
-    def get_vf_fn(self, **vf_kwargs):
-        self.last_get_vf_fn_kwargs = dict(vf_kwargs)
+    def get_vf_fn(self, condition_dict=None, source=None):
+        self.last_get_vf_fn_kwargs = {"condition_dict": condition_dict, "source": source}
 
         def f(t: Tensor, x: Tensor) -> Tensor:
             return self.drift_fn(t, x)

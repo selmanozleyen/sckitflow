@@ -36,6 +36,7 @@ class BlobsDataset(BaseDummyDataset):
 
     def __init__(
         self,
+        *,
         random_state: int = 42,
         n_samples: int = 1000,
         n_features: int = 2,
@@ -55,7 +56,7 @@ class BlobsDataset(BaseDummyDataset):
             shuffle=shuffle,
         )
 
-    def _generate(self, random_state, n_samples, n_features, centers, cluster_std, center_box, shuffle) -> AnnData:
+    def _generate(self, *, random_state, n_samples, n_features, centers, cluster_std, center_box, shuffle) -> AnnData:
         """
         Generate blob-shaped clusters.
 

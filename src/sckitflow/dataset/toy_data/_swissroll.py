@@ -35,7 +35,7 @@ class SwissRollDataset(BaseDummyDataset):
         """Initialization"""
         super().__init__(random_state, n_samples, noise=noise, hole=hole)
 
-    def _generate(self, random_state, n_samples, noise, hole) -> AnnData:
+    def _generate(self, *, random_state, n_samples, noise, hole) -> AnnData:
         """
         Generate Swiss Roll dataset.
 

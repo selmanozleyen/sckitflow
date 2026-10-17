@@ -12,6 +12,7 @@ MARKER = "# allow-kwargs"
 
 
 def main(paths: list[str]) -> int:
+    """Print each offending signature in ``paths``; return 1 if there was one."""
     failed = 0
     for path in paths:
         with open(path, encoding="utf-8") as f:
@@ -23,7 +24,9 @@ def main(paths: list[str]) -> int:
                 ann = kwarg.annotation
                 typed = isinstance(ann, ast.Subscript) and ast.unparse(ann.value).endswith("Unpack")
                 if not typed and MARKER not in lines[kwarg.lineno - 1]:
-                    print(f"{path}:{kwarg.lineno}: `**{kwarg.arg}` in a signature, name the parameters or add `{MARKER}`")
+                    print(
+                        f"{path}:{kwarg.lineno}: `**{kwarg.arg}` in a signature, name the parameters or add `{MARKER}`"
+                    )
                     failed = 1
     return failed
 

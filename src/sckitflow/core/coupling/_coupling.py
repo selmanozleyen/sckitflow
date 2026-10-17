@@ -141,11 +141,11 @@ def _select_indices(
 
 
 def independent_coupling(
+    *,
     source_lin: TensorLike,
     target_lin: TensorLike,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
-    *,
     rng: np.random.Generator,
 ) -> tuple[NumpyArray, NumpyArray]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices.
@@ -181,6 +181,7 @@ def independent_coupling(
 
 @overload
 def ot_linear_coupling(
+    *,
     source_lin: TensorLike,
     target_lin: TensorLike,
     source_quad: TensorLike | None = None,
@@ -191,7 +192,6 @@ def ot_linear_coupling(
     method: LinCouplingMethod = ...,
     reg: float = ...,
     reg_m: float = ...,
-    *,
     rng: np.random.Generator,
     m: float | None = None,
     num_iter_max: int | None = None,
@@ -201,6 +201,7 @@ def ot_linear_coupling(
 
 @overload
 def ot_linear_coupling(
+    *,
     source_lin: TensorLike,
     target_lin: TensorLike,
     source_quad: TensorLike | None = None,
@@ -211,7 +212,6 @@ def ot_linear_coupling(
     method: LinCouplingMethod = ...,
     reg: float = ...,
     reg_m: float = ...,
-    *,
     rng: np.random.Generator,
     m: float | None = None,
     num_iter_max: int | None = None,
@@ -220,6 +220,7 @@ def ot_linear_coupling(
 
 
 def ot_linear_coupling(
+    *,
     source_lin: TensorLike,
     target_lin: TensorLike,
     source_quad: TensorLike | None = None,
@@ -230,7 +231,6 @@ def ot_linear_coupling(
     method: LinCouplingMethod = "sinkhorn",
     reg: float = 5e-1,
     reg_m: float = 1.0,
-    *,
     rng: np.random.Generator,
     m: float | None = None,
     num_iter_max: int | None = None,
@@ -337,6 +337,7 @@ def ot_linear_coupling(
 
 @overload
 def ot_quadratic_coupling(
+    *,
     source_lin: TensorLike | None = ...,
     target_lin: TensorLike | None = ...,
     source_quad: TensorLike | None = ...,
@@ -345,7 +346,6 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = ...,
     scale_cost: ScaleMethod = ...,
     method: QuadCouplingMethod = ...,
-    *,
     rng: np.random.Generator,
     epsilon: float = 1.0,
     alpha: float = 0.5,
@@ -356,6 +356,7 @@ def ot_quadratic_coupling(
 
 @overload
 def ot_quadratic_coupling(
+    *,
     source_lin: TensorLike | None = ...,
     target_lin: TensorLike | None = ...,
     source_quad: TensorLike | None = ...,
@@ -364,7 +365,6 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = ...,
     scale_cost: ScaleMethod = ...,
     method: QuadCouplingMethod = ...,
-    *,
     rng: np.random.Generator,
     epsilon: float = 1.0,
     alpha: float = 0.5,
@@ -374,6 +374,7 @@ def ot_quadratic_coupling(
 
 
 def ot_quadratic_coupling(
+    *,
     source_lin: TensorLike | None = None,
     target_lin: TensorLike | None = None,
     source_quad: TensorLike | None = None,
@@ -382,7 +383,6 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = None,
     scale_cost: ScaleMethod = 1.0,
     method: QuadCouplingMethod = "entropic_gromov_wasserstein",
-    *,
     rng: np.random.Generator,
     epsilon: float = 1.0,
     alpha: float = 0.5,

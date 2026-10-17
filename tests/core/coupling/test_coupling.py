@@ -28,7 +28,7 @@ def small_tensors():
 # ===============================================================
 def test_independent_coupling_returns_indices(small_tensors):
     source, target = small_tensors
-    src_idx, tgt_idx = independent_coupling(source, target, rng=np.random.default_rng(0))
+    src_idx, tgt_idx = independent_coupling(source_lin=source, target_lin=target, rng=np.random.default_rng(0))
 
     # Basic type and shape checks
     assert isinstance(src_idx, np.ndarray)
@@ -43,8 +43,8 @@ def test_independent_coupling_returns_indices(small_tensors):
 def test_independent_coupling_reproducibility(small_tensors):
     """Ensure deterministic behavior if the generator is seeded."""
     source, target = small_tensors
-    idx1 = independent_coupling(source, target, rng=np.random.default_rng(42))
-    idx2 = independent_coupling(source, target, rng=np.random.default_rng(42))
+    idx1 = independent_coupling(source_lin=source, target_lin=target, rng=np.random.default_rng(42))
+    idx2 = independent_coupling(source_lin=source, target_lin=target, rng=np.random.default_rng(42))
     assert all(np.allclose(a, b) for a, b in zip(idx1, idx2, strict=False))
 
 
@@ -54,7 +54,9 @@ def test_independent_coupling_reproducibility(small_tensors):
 @pytest.mark.parametrize("method", ["exact", "sinkhorn"])
 def test_ot_linear_coupling_basic(method, small_tensors):
     source, target = small_tensors
-    src_idx, tgt_idx = ot_linear_coupling(source, target, method=method, rng=np.random.default_rng(0))
+    src_idx, tgt_idx = ot_linear_coupling(
+        source_lin=source, target_lin=target, method=method, rng=np.random.default_rng(0)
+    )
 
     assert isinstance(src_idx, np.ndarray)
     assert isinstance(tgt_idx, np.ndarray)
@@ -67,14 +69,16 @@ def test_ot_linear_coupling_basic(method, small_tensors):
 def test_ot_linear_coupling_invalid_method_raises(small_tensors):
     source, target = small_tensors
     with pytest.raises(ValueError):
-        ot_linear_coupling(source, target, method="invalid", reg=5e-1, rng=np.random.default_rng(0))
+        ot_linear_coupling(
+            source_lin=source, target_lin=target, method="invalid", reg=5e-1, rng=np.random.default_rng(0)
+        )
 
 
 @pytest.mark.parametrize("scale_cost", ["mean", "max", "median", 1.0])
 def test_ot_linear_coupling_scale_modes(scale_cost, small_tensors):
     source, target = small_tensors
     src_idx, tgt_idx = ot_linear_coupling(
-        source, target, scale_cost=scale_cost, method="sinkhorn", rng=np.random.default_rng(0)
+        source_lin=source, target_lin=target, scale_cost=scale_cost, method="sinkhorn", rng=np.random.default_rng(0)
     )
 
     dim_out = min(len(src_idx), len(tgt_idx))

@@ -26,7 +26,7 @@ class BaseProbabilityPath(abc.ABC):
     _require_prng: bool
     is_deterministic: bool
 
-    def __init_subclass__(cls, **kwargs) -> None:  # allow-kwargs
+    def __init_subclass__(cls, **kwargs) -> None:
         """Keep `is_deterministic` in sync with `_require_prng` on every concrete subclass.
 
         As non-deterministic probability paths require a Pseudo-Random Numbers Generator,

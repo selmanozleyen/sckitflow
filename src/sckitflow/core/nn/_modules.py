@@ -23,7 +23,7 @@ class FunctionalModule(torch.nn.Module):
 
         self._identity = torch.nn.Identity()
 
-    def forward(self, x, *args, **kwargs):  # allow-kwargs
+    def forward(self, x, *args, **kwargs):
         """TODO."""
         out = self.fn(x, *args, **kwargs)
         return self._identity(out)

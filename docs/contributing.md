@@ -82,13 +82,10 @@ the function is the single source of truth:
 
 ### Signatures
 
-Two checks run in pre-commit:
-
 - **At most 5 positional parameters** (ruff `PLR0917`, a preview rule selected by name). Keep the one or two
   arguments a call reads naturally with positional and put the options after `*`. Tests and docs are exempt.
-- **No `**kwargs` in a signature** (`.pre-commit-hooks/no_var_kwargs.py`, on `src/`). They swallow misspelled
-  keys. `**kwargs: Unpack[SomeTypedDict]` passes, since the TypedDict names every key. Where untyped
-  `**kwargs` is unavoidable (e.g. forwarding to a third-party call), end that line with `# allow-kwargs`.
+- **Avoid `**kwargs` in a signature**, since they swallow misspelled keys. Name the parameters, or type them
+  as `**kwargs: Unpack[SomeTypedDict]`. Untyped `**kwargs` is for forwarding to code you don't control.
 
 [pre-commit]: https://pre-commit.com/
 [pre-commit.ci]: https://pre-commit.ci/

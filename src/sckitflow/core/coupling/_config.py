@@ -3,45 +3,48 @@
 Each config only binds its fields to a coupling function, which delegates the solve to POT. Which
 solvers exist, what they accept and the couplings they return therefore depend on the installed
 POT version as well.
+
+There is one config per solver, holding only the fields that solver reads, so a setting it would
+ignore fails validation as an unknown field.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import ClassVar, Self
+from typing import ClassVar
 
-from pydantic import model_validator
 from scfit.registry import Component, component
 
-from sckitflow.core._types import LinCouplingMethod, MatchFn, MatchFnOut, QuadCouplingMethod, ScaleMethod
+from sckitflow.core._types import MatchFn, MatchFnOut, ScaleMethod
 from sckitflow.core.coupling._coupling import independent_coupling, ot_linear_coupling, ot_quadratic_coupling
 
-__all__ = ["CouplingConfig", "IndependentCouplingConfig", "OTLinearCouplingConfig", "OTQuadraticCouplingConfig"]
+__all__ = [
+    "CouplingConfig",
+    "IndependentCouplingConfig",
+    "ExactCouplingConfig",
+    "SinkhornCouplingConfig",
+    "PartialCouplingConfig",
+    "UnbalancedCouplingConfig",
+    "GromovWassersteinCouplingConfig",
+    "FusedGromovWassersteinCouplingConfig",
+]
 
 
 class CouplingConfig(Component):
-    """Family base for the couplings. ``build`` binds every field to ``fn`` as a keyword argument.
+    """Family base for the couplings. ``build`` binds ``method`` and every field to ``fn`` as keyword arguments.
 
     Field defaults must equal ``fn``'s, which the tests check.
     """
 
     fn: ClassVar[Callable[..., MatchFnOut]]
-    only_for: ClassVar[dict[str, frozenset[str]]] = {}
-    """Field -> the ``method`` values ``fn`` reads it for. Changing it from its default for any other method is
-    rejected. Saved specs write every field, so the default itself has to pass."""
-
-    @model_validator(mode="after")
-    def _only_for_its_methods(self) -> Self:
-        method = getattr(self, "method", None)
-        for name, methods in sorted(self.only_for.items()):
-            if method not in methods and getattr(self, name) != type(self).model_fields[name].default:
-                msg = f"`{name}` is only read by method {sorted(methods)}, not {method!r}."
-                raise ValueError(msg)
-        return self
+    method: ClassVar[str | None] = None
 
     def build(self) -> MatchFn:
-        return partial(type(self).fn, **dict(self))
+        kwargs = dict(self)
+        if self.method is not None:
+            kwargs["method"] = self.method
+        return partial(type(self).fn, **kwargs)
 
 
 @component("coupling.independent")
@@ -51,40 +54,74 @@ class IndependentCouplingConfig(CouplingConfig):
     fn = independent_coupling
 
 
-_ENTROPIC = frozenset({"sinkhorn", "partial", "unbalanced"})
-
-
-@component("coupling.ot_linear")
-class OTLinearCouplingConfig(CouplingConfig):
+class _LinearCouplingConfig(CouplingConfig):
     """Linear optimal transport, see `ot_linear_coupling` for the fields."""
 
     fn = ot_linear_coupling
-    only_for = {
-        "reg": _ENTROPIC,
-        "stop_thr": _ENTROPIC,
-        "reg_m": frozenset({"unbalanced"}),
-        "m": frozenset({"partial"}),
-    }
 
-    method: LinCouplingMethod = "sinkhorn"
-    reg: float = 0.5
-    reg_m: float = 1.0
     scale_cost: ScaleMethod = "mean"
-    m: float | None = None
     num_iter_max: int | None = None
+
+
+@component("coupling.exact")
+class ExactCouplingConfig(_LinearCouplingConfig):
+    """Exact linear optimal transport, POT's ``emd``."""
+
+    method = "exact"
+
+
+class _EntropicCouplingConfig(_LinearCouplingConfig):
+    reg: float = 0.5
     stop_thr: float | None = None
 
 
-@component("coupling.ot_quadratic")
-class OTQuadraticCouplingConfig(CouplingConfig):
-    """(Fused) Gromov-Wasserstein, see `ot_quadratic_coupling` for the fields."""
+@component("coupling.sinkhorn")
+class SinkhornCouplingConfig(_EntropicCouplingConfig):
+    """Entropic linear optimal transport, POT's ``sinkhorn``."""
+
+    method = "sinkhorn"
+
+
+@component("coupling.partial")
+class PartialCouplingConfig(_EntropicCouplingConfig):
+    """Entropic partial linear optimal transport, POT's ``entropic_partial_wasserstein``."""
+
+    method = "partial"
+
+    m: float | None = None
+
+
+@component("coupling.unbalanced")
+class UnbalancedCouplingConfig(_EntropicCouplingConfig):
+    """Entropic unbalanced linear optimal transport, POT's ``sinkhorn_knopp_unbalanced``."""
+
+    method = "unbalanced"
+
+    reg_m: float = 1.0
+
+
+class _QuadraticCouplingConfig(CouplingConfig):
+    """Quadratic optimal transport, see `ot_quadratic_coupling` for the fields."""
 
     fn = ot_quadratic_coupling
-    only_for = {"alpha": frozenset({"entropic_fused_gromov_wasserstein"})}
 
-    method: QuadCouplingMethod = "entropic_gromov_wasserstein"
     scale_cost: ScaleMethod = 1.0
     epsilon: float = 1.0
-    alpha: float = 0.5
     max_iter: int = 1000
     tol: float = 1e-9
+
+
+@component("coupling.gromov_wasserstein")
+class GromovWassersteinCouplingConfig(_QuadraticCouplingConfig):
+    """Entropic Gromov-Wasserstein, POT's ``entropic_gromov_wasserstein``."""
+
+    method = "entropic_gromov_wasserstein"
+
+
+@component("coupling.fused_gromov_wasserstein")
+class FusedGromovWassersteinCouplingConfig(_QuadraticCouplingConfig):
+    """Entropic fused Gromov-Wasserstein, POT's ``entropic_fused_gromov_wasserstein``."""
+
+    method = "entropic_fused_gromov_wasserstein"
+
+    alpha: float = 0.5

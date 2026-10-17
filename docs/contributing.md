@@ -76,8 +76,8 @@ the function is the single source of truth:
 
 - Give every field the same default as the function's parameter. `test_coupling_config_defaults_match_its_fn`
   enforces this for the couplings.
-- List each field that only some `method` values read in the config's `only_for`, so setting it for
-  another method (to anything but its default) is rejected instead of silently ignored.
+- Write one config per solver (or `method`), holding only the fields that solver reads, so a setting it
+  would ignore fails validation as an unknown field.
 - Name the parameters explicitly, never forward `**kwargs`, so a misspelled key fails validation.
 
 [pre-commit]: https://pre-commit.com/

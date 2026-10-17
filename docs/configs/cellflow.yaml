@@ -52,9 +52,8 @@ training:
   type: training_method.matched
   version: 1
   coupling:
-    type: coupling.ot_linear
+    type: coupling.sinkhorn
     version: 1
-    method: sinkhorn
     reg: 0.5
   method:
     type: training_method.cfm

@@ -150,13 +150,20 @@ def test_ot_quadratic_coupling_invalid_method_raises(quadratic_inputs):
 # ===============================================================
 # Tests for the coupling configs
 # ===============================================================
+def _all_subclasses(cls):
+    return [c for sub in cls.__subclasses__() for c in (sub, *_all_subclasses(sub))]
+
+
 @pytest.mark.parametrize(
     "spec",
     [
         {"type": "coupling.independent"},
-        {"type": "coupling.ot_linear", "method": "partial", "m": 0.5, "num_iter_max": 50},
-        {"type": "coupling.ot_linear", "method": "exact", "num_iter_max": 50},
-        {"type": "coupling.ot_quadratic", "method": "entropic_fused_gromov_wasserstein", "alpha": 0.3, "max_iter": 5},
+        {"type": "coupling.exact", "num_iter_max": 50},
+        {"type": "coupling.sinkhorn", "reg": 0.1},
+        {"type": "coupling.partial", "m": 0.5, "num_iter_max": 50},
+        {"type": "coupling.unbalanced", "reg_m": 2.0},
+        {"type": "coupling.gromov_wasserstein", "max_iter": 5},
+        {"type": "coupling.fused_gromov_wasserstein", "alpha": 0.3, "max_iter": 5},
     ],
 )
 def test_coupling_config_builds_a_match_fn(spec, small_tensors):
@@ -168,29 +175,23 @@ def test_coupling_config_builds_a_match_fn(spec, small_tensors):
     assert len(src_idx) == len(tgt_idx) == len(source)
 
 
-def test_coupling_config_rejects_unknown_kwargs():
-    with pytest.raises(ValidationError, match="regg"):
-        parse({"type": "coupling.ot_linear", "version": 1, "regg": 0.1})
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"type": "coupling.sinkhorn", "regg": 0.1},
+        {"type": "coupling.exact", "reg": 0.1},
+        {"type": "coupling.sinkhorn", "m": 0.5},
+        {"type": "coupling.gromov_wasserstein", "alpha": 0.3},
+    ],
+)
+def test_coupling_config_rejects_settings_its_solver_ignores(spec):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        parse({**spec, "version": 1})
 
 
-@pytest.mark.parametrize("config", CouplingConfig.__subclasses__(), ids=lambda c: c.__name__)
+@pytest.mark.parametrize("config", _all_subclasses(CouplingConfig), ids=lambda c: c.__name__)
 def test_coupling_config_defaults_match_its_fn(config):
     params = inspect.signature(config.fn).parameters
     assert {name: field.default for name, field in config.model_fields.items()} == {
         name: params[name].default for name in config.model_fields
     }
-
-
-@pytest.mark.parametrize(
-    "spec",
-    [
-        {"type": "coupling.ot_linear", "method": "exact", "reg": 0.1},
-        {"type": "coupling.ot_linear", "method": "exact", "stop_thr": 1e-6},
-        {"type": "coupling.ot_linear", "reg_m": 2.0},
-        {"type": "coupling.ot_linear", "method": "unbalanced", "m": 0.5},
-        {"type": "coupling.ot_quadratic", "alpha": 0.3},
-    ],
-)
-def test_coupling_config_rejects_settings_its_method_ignores(spec):
-    with pytest.raises(ValidationError, match="is only read by method"):
-        parse({**spec, "version": 1})

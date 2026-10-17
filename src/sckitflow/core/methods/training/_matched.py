@@ -17,7 +17,7 @@ class MatchedTrainingConfig(TrainingMethodConfig):
     method: TrainingMethodConfig
     """The training method run on the matched batch, e.g. ``CFMTrainingConfig()``."""
     coupling: CouplingConfig
-    """How source and target are paired, e.g. ``OTLinearCouplingConfig()``."""
+    """How source and target are paired, e.g. ``SinkhornCouplingConfig()``."""
 
     def build(self, module: torch.nn.Module, *, dims: DataDimensions) -> MatchedTrainingMethod:
         return MatchedTrainingMethod(self.method.build(module, dims=dims), Matcher(self.coupling.build()))

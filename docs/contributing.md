@@ -72,10 +72,10 @@ Consider enabling this option for [ruff][ruff-editors] and [biome][biome-editors
 ### Configs that wrap a function
 
 When a config only binds its fields to a function (e.g. the couplings in `sckitflow.core.coupling`),
-the function is the single source of truth:
+the config is the single source of truth:
 
-- Give every field the same default as the function's parameter. `test_coupling_config_defaults_match_its_fn`
-  enforces this for the couplings.
+- Defaults live on the config only. The function takes the settings without defaults, or `None` for a
+  setting only some methods read.
 - Write one config per solver (or `method`), holding only the fields that solver reads, so a setting it
   would ignore fails validation as an unknown field.
 - Name the parameters explicitly, never forward `**kwargs`, so a misspelled key fails validation.

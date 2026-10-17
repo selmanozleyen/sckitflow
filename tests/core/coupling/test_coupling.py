@@ -1,5 +1,3 @@
-import inspect
-
 import numpy as np
 import pytest
 import torch
@@ -9,11 +7,14 @@ from scfit.registry import parse
 pytest.importorskip("ot")
 
 from sckitflow.core.coupling import (
-    CouplingConfig,
     independent_coupling,
     ot_linear_coupling,
     ot_quadratic_coupling,
 )
+
+# The coupling functions take their settings without defaults; the configs hold those.
+LIN = {"num_iter_max": None, "reg": 0.5, "reg_m": 1.0}
+QUAD = {"scale_cost": 1.0, "epsilon": 1.0, "max_iter": 1000, "tol": 1e-9, "alpha": 0.5}
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ def test_independent_coupling_reproducibility(small_tensors):
 def test_ot_linear_coupling_basic(method, small_tensors):
     source, target = small_tensors
     src_idx, tgt_idx = ot_linear_coupling(
-        source_lin=source, target_lin=target, method=method, rng=np.random.default_rng(0)
+        source_lin=source, target_lin=target, method=method, scale_cost="mean", rng=np.random.default_rng(0), **LIN
     )
 
     assert isinstance(src_idx, np.ndarray)
@@ -70,7 +71,12 @@ def test_ot_linear_coupling_invalid_method_raises(small_tensors):
     source, target = small_tensors
     with pytest.raises(ValueError):
         ot_linear_coupling(
-            source_lin=source, target_lin=target, method="invalid", reg=5e-1, rng=np.random.default_rng(0)
+            source_lin=source,
+            target_lin=target,
+            method="invalid",
+            scale_cost="mean",
+            rng=np.random.default_rng(0),
+            **LIN,
         )
 
 
@@ -78,7 +84,12 @@ def test_ot_linear_coupling_invalid_method_raises(small_tensors):
 def test_ot_linear_coupling_scale_modes(scale_cost, small_tensors):
     source, target = small_tensors
     src_idx, tgt_idx = ot_linear_coupling(
-        source_lin=source, target_lin=target, scale_cost=scale_cost, method="sinkhorn", rng=np.random.default_rng(0)
+        source_lin=source,
+        target_lin=target,
+        scale_cost=scale_cost,
+        method="sinkhorn",
+        rng=np.random.default_rng(0),
+        **LIN,
     )
 
     dim_out = min(len(src_idx), len(tgt_idx))
@@ -111,6 +122,7 @@ def test_ot_quadratic_coupling_basic(quadratic_inputs, method):
         target_lin=tgt_xy,
         method=method,
         rng=np.random.default_rng(0),
+        **QUAD,
     )
 
     dim_out = min(len(src_xx), len(tgt_yy))
@@ -134,6 +146,7 @@ def test_ot_quadratic_coupling_without_xy_couplings(quadratic_inputs):
         target_quad=tgt_yy,
         method="entropic_gromov_wasserstein",
         rng=np.random.default_rng(0),
+        **QUAD,
     )
 
     dim_out = min(len(src_xx), len(tgt_yy))
@@ -147,17 +160,13 @@ def test_ot_quadratic_coupling_invalid_method_raises(quadratic_inputs):
     src_xx, tgt_yy, *_ = quadratic_inputs
     with pytest.raises(ValueError):
         ot_quadratic_coupling(
-            source_quad=src_xx, target_quad=tgt_yy, method="invalid_method", rng=np.random.default_rng(0)
+            source_quad=src_xx, target_quad=tgt_yy, method="invalid_method", rng=np.random.default_rng(0), **QUAD
         )
 
 
 # ===============================================================
 # Tests for the coupling configs
 # ===============================================================
-def _all_subclasses(cls):
-    return [c for sub in cls.__subclasses__() for c in (sub, *_all_subclasses(sub))]
-
-
 @pytest.mark.parametrize(
     "spec",
     [
@@ -191,11 +200,3 @@ def test_coupling_config_builds_a_match_fn(spec, small_tensors):
 def test_coupling_config_rejects_settings_its_solver_ignores(spec):
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         parse({**spec, "version": 1})
-
-
-@pytest.mark.parametrize("config", _all_subclasses(CouplingConfig), ids=lambda c: c.__name__)
-def test_coupling_config_defaults_match_its_fn(config):
-    params = inspect.signature(config.fn).parameters
-    assert {name: field.default for name, field in config.model_fields.items()} == {
-        name: params[name].default for name in config.model_fields
-    }

@@ -31,8 +31,8 @@ MeanFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 DriftFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 SigmaFn = Callable[[torch.Tensor], torch.Tensor]
 ScaleMethod = Literal["mean", "max", "median"] | float
-LinCouplingMethod = Literal["exact", "sinkhorn", "partial", "unbalanced"] | None
-QuadCouplingMethod = Literal["entropic_gromov_wasserstein", "entropic_fused_gromov_wasserstein"] | None
+LinCouplingMethod = Literal["exact", "sinkhorn", "partial", "unbalanced"]
+QuadCouplingMethod = Literal["entropic_gromov_wasserstein", "entropic_fused_gromov_wasserstein"]
 CostFN = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 MatchFnOut = tuple[TensorLike | None, TensorLike | None]

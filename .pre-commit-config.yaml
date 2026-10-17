@@ -45,8 +45,8 @@ repos:
           Fix the merge conflicts manually and remove the .rej files.
         language: fail
         files: '.*\.rej$'
-      - id: no-var-keyword-in-couplings
-        name: No **kwargs in coupling signatures (name every solver setting)
-        language: pygrep
-        entry: '^\s*(def .*)?\*\*\w+(: [^,)=]+)?,?\s*(\)( ->.*)?:?)?$'
-        files: ^src/sckitflow/core/coupling/.*\.py$
+      - id: no-var-kwargs
+        name: No **kwargs in signatures (name the parameters, or mark the line `# allow-kwargs`)
+        language: python
+        entry: python .pre-commit-hooks/no_var_kwargs.py
+        files: ^src/.*\.py$

@@ -420,7 +420,7 @@ class _StepDataBridge:
         self,
         control_adata: AnnData | None,
         control_weights: dict[tuple, float] | None,
-        **stream_kwargs: Any,
+        **stream_kwargs: Any,  # allow-kwargs
     ) -> tuple[AnnData | None, Stream | None]:
         # Under fixed matching the pair column *is* the match: one id shared by a target group and the source
         # group it flows from, which is the only thing scfit's value-equality matching can key on. Otherwise a

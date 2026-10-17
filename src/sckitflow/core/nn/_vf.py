@@ -36,7 +36,7 @@ class BaseVelocityField(torch.nn.Module):
         t: torch.Tensor,
         xt: torch.Tensor,
         *args,
-        **kwargs,
+        **kwargs,  # allow-kwargs
     ) -> torch.Tensor:
         """Performs a forward computation pass on the neural velocity field.
 
@@ -54,7 +54,7 @@ class BaseVelocityField(torch.nn.Module):
     def get_vf_fn(
         self,
         *args,
-        **kwargs,
+        **kwargs,  # allow-kwargs
     ) -> VfFn:
         """Compiles the velocity field function to be fed to external solvers."""
 
@@ -73,6 +73,7 @@ class MLPVelocity(BaseVelocityField):
     def __init__(
         self,
         state_dim: int,
+        *,
         encode_state: bool = True,
         encode_time: bool = True,
         time_features_id: TimeFeaturesId | None = None,

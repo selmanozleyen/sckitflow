@@ -35,6 +35,7 @@ class ExternalModelContext:
     def __init__(
         self,
         model: Any | None = None,
+        *,
         model_path: str | None = None,
         model_load_args: Collection[Any] = (),
         model_load_kwargs: dict[str, Any] = None,
@@ -141,7 +142,7 @@ class ExternalModelContext:
                 raise AttributeError(f"Loaded object has no attribute '{self._forward_method}'")
             return getattr(obj, self._forward_method)
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # allow-kwargs
         """Call the model with the forward_args/kwargs merged with call‑time arguments."""
         forward_fn = self._get_forward_callable()
         if self._runtime_args_first:

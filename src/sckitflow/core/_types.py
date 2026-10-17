@@ -127,7 +127,7 @@ class StepData(TypedDict, total=False):
     source_group_data: BaseData | dict[str, torch.Tensor] | None
 
 
-def new_step_data(**fields: Any) -> StepData:
+def new_step_data(**fields: Any) -> StepData:  # allow-kwargs
     """Builds a :class:`StepData` with every field present and defaulting to ``None``.
 
     Guarantees all keys exist so consumers can index (``step_data["source_state"]``)

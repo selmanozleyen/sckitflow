@@ -80,6 +80,16 @@ the function is the single source of truth:
   would ignore fails validation as an unknown field.
 - Name the parameters explicitly, never forward `**kwargs`, so a misspelled key fails validation.
 
+### Signatures
+
+Two checks run in pre-commit:
+
+- **At most 5 positional parameters** (ruff `PLR0917`, a preview rule selected by name). Keep the one or two
+  arguments a call reads naturally with positional and put the options after `*`. Tests and docs are exempt.
+- **No `**kwargs` in a signature** (`.pre-commit-hooks/no_var_kwargs.py`, on `src/`). They swallow misspelled
+  keys. `**kwargs: Unpack[SomeTypedDict]` passes, since the TypedDict names every key. Where untyped
+  `**kwargs` is unavoidable (e.g. forwarding to a third-party call), end that line with `# allow-kwargs`.
+
 [pre-commit]: https://pre-commit.com/
 [pre-commit.ci]: https://pre-commit.ci/
 [ruff-editors]: https://docs.astral.sh/ruff/integrations/

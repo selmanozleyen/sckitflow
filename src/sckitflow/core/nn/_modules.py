@@ -23,7 +23,7 @@ class FunctionalModule(torch.nn.Module):
 
         self._identity = torch.nn.Identity()
 
-    def forward(self, x, *args, **kwargs):
+    def forward(self, x, *args, **kwargs):  # allow-kwargs
         """TODO."""
         out = self.fn(x, *args, **kwargs)
         return self._identity(out)
@@ -36,6 +36,7 @@ class MLP(torch.nn.Module):
         self,
         input_dim: int,
         output_dim: int,
+        *,
         hidden_dims: Sequence[int] | None = None,
         activation_cls: type[torch.nn.Module] | None = None,
         final_activation_cls: type[torch.nn.Module] = None,
@@ -307,6 +308,7 @@ class Resnet1d(torch.nn.Module):
         self,
         input_dim: int,
         embedding_dim: int,
+        *,
         num_resnet_layers: int | None = None,
         output_dim: int | None = None,
         activation_cls: type[torch.nn.Module] | None = None,

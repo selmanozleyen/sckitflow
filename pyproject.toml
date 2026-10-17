@@ -166,6 +166,8 @@ lint.select = [
   "UP",     # pyupgrade
   "W",      # Warning detected by Pycodestyle
 ]
+# too many positional arguments: name the rest after `*`, as squidpy does
+lint.extend-select = [ "PLR0917" ]
 lint.ignore = [
   "B008", # Errors from function calls in argument defaults. These are fine when the result is immutable.
   "D100", # Missing docstring in public module
@@ -181,10 +183,12 @@ lint.ignore = [
   "E731", # Do not assign a lambda expression, use a def -> lambda expression assignments are convenient
   "E741", # allow I, O, l as variable names -> I is the identity matrix
 ]
-lint.per-file-ignores."*/__init__.py" = [ "F401" ]
-lint.per-file-ignores."docs/*" = [ "I" ]
-lint.per-file-ignores."tests/*" = [ "D" ]
+lint.explicit-preview-rules = true # only the preview rules selected by name, i.e. PLR0917
+lint.per-file-ignores."*/__init__.py" = [ "F401", "F822" ] # F822: lazy `__getattr__` exports, flagged under preview
+lint.per-file-ignores."docs/*" = [ "I", "PLR0917" ]
+lint.per-file-ignores."tests/*" = [ "D", "PLR0917" ]
 lint.pydocstyle.convention = "numpy"
+lint.preview = true
 
 [tool.pytest.ini_options]
 testpaths = [ "tests" ]

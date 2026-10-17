@@ -16,7 +16,7 @@ _DUMMY_DATASETS_CLS_REGISTRY = {
 }
 
 
-def get_toy_dataset(dataset_name: str, **kwargs):
+def get_toy_dataset(dataset_name: str, **kwargs):  # allow-kwargs
     """
     Unified function to generate any dummy dataset.
 

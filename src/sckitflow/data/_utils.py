@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 
-def with_derived_obs(adata: AnnData, **cols: Any) -> AnnData:
+def with_derived_obs(adata: AnnData, **cols: Any) -> AnnData:  # allow-kwargs
     """A shallow AnnData sharing ``adata``'s arrays but carrying extra ``.obs`` columns.
 
     For a column sckitflow derives -- a split label, the implicit all-cells group, the pair id behind fixed

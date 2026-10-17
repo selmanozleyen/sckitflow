@@ -36,10 +36,10 @@ class BaseDummyDataset(ABC):
 
     _dataset_name: str
 
-    def __init__(self, random_state: int, n_samples: int, **kwargs):
+    def __init__(self, random_state: int, n_samples: int, **kwargs):  # allow-kwargs
         """Initialize the base dataset generator."""
         self.random_state = random_state
-        self.adata = self._generate(random_state, n_samples, **kwargs)
+        self.adata = self._generate(random_state=random_state, n_samples=n_samples, **kwargs)
 
     def _create_anndata(self, X: np.ndarray, y: np.ndarray | None = None, y_type: str | None = None) -> AnnData:
         """
@@ -87,7 +87,7 @@ class BaseDummyDataset(ABC):
         return self._dataset_name
 
     @abstractmethod
-    def _generate(self, **kwargs) -> AnnData:
+    def _generate(self, **kwargs) -> AnnData:  # allow-kwargs
         """
         Generate the dataset with specific parameters.
 

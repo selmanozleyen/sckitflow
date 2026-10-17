@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import pytest
 import torch
@@ -7,6 +9,7 @@ from scfit.registry import parse
 pytest.importorskip("ot")
 
 from sckitflow.core.coupling import (
+    CouplingConfig,
     independent_coupling,
     ot_linear_coupling,
     ot_quadratic_coupling,
@@ -168,3 +171,26 @@ def test_coupling_config_builds_a_match_fn(spec, small_tensors):
 def test_coupling_config_rejects_unknown_kwargs():
     with pytest.raises(ValidationError, match="regg"):
         parse({"type": "coupling.ot_linear", "version": 1, "regg": 0.1})
+
+
+@pytest.mark.parametrize("config", CouplingConfig.__subclasses__(), ids=lambda c: c.__name__)
+def test_coupling_config_defaults_match_its_fn(config):
+    params = inspect.signature(config.fn).parameters
+    assert {name: field.default for name, field in config.model_fields.items()} == {
+        name: params[name].default for name in config.model_fields
+    }
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"type": "coupling.ot_linear", "method": "exact", "reg": 0.1},
+        {"type": "coupling.ot_linear", "method": "exact", "stop_thr": 1e-6},
+        {"type": "coupling.ot_linear", "reg_m": 2.0},
+        {"type": "coupling.ot_linear", "method": "unbalanced", "m": 0.5},
+        {"type": "coupling.ot_quadratic", "alpha": 0.3},
+    ],
+)
+def test_coupling_config_rejects_settings_its_method_ignores(spec):
+    with pytest.raises(ValidationError, match="is only read by method"):
+        parse({**spec, "version": 1})

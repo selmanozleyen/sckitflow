@@ -35,15 +35,23 @@ LinCouplingMethod = Literal["exact", "sinkhorn", "partial", "unbalanced"] | None
 QuadCouplingMethod = Literal["entropic_gromov_wasserstein", "entropic_fused_gromov_wasserstein"] | None
 CostFN = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
-MatchFnOut = tuple[TensorLike, TensorLike] | tuple[TensorLike, TensorLike, TensorLike]
+MatchFnOut = tuple[TensorLike | None, TensorLike | None]
 
 
 class MatchFn(Protocol):
+    """Pairs source and target rows, as source and target indices; ``None`` leaves the batch unmatched.
+
+    `Matcher` passes every argument by name, and the lin or the quad reps may be missing.
+    """
+
     def __call__(
         self,
-        source_lin: TensorLike,
-        target_lin: TensorLike,
-        **kwargs: Any,
+        *,
+        source_lin: TensorLike | None,
+        target_lin: TensorLike | None,
+        source_quad: TensorLike | None,
+        target_quad: TensorLike | None,
+        rng: np.random.Generator,
     ) -> MatchFnOut: ...
 
 

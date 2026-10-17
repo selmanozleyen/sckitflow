@@ -69,6 +69,17 @@ While the [pre-commit.ci][] is useful, we strongly encourage installing and runn
 Finally, most editors have an _autoformat on save_ feature.
 Consider enabling this option for [ruff][ruff-editors] and [biome][biome-editors].
 
+### Configs that wrap a function
+
+When a config only binds its fields to a function (e.g. the couplings in `sckitflow.core.coupling`),
+the function is the single source of truth:
+
+- Give every field the same default as the function's parameter. `test_coupling_config_defaults_match_its_fn`
+  enforces this for the couplings.
+- List each field that only some `method` values read in the config's `only_for`, so setting it for
+  another method (to anything but its default) is rejected instead of silently ignored.
+- Name the parameters explicitly, never forward `**kwargs`, so a misspelled key fails validation.
+
 [pre-commit]: https://pre-commit.com/
 [pre-commit.ci]: https://pre-commit.ci/
 [ruff-editors]: https://docs.astral.sh/ruff/integrations/

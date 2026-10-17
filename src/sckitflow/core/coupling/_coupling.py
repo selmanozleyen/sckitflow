@@ -227,7 +227,7 @@ def ot_linear_coupling(
     return_matrix: bool = False,
     cost_fn: CostFN | None = None,
     scale_cost: ScaleMethod = "mean",
-    method: LinCouplingMethod = None,
+    method: LinCouplingMethod = "sinkhorn",
     reg: float = 5e-1,
     reg_m: float = 1.0,
     *,
@@ -381,7 +381,7 @@ def ot_quadratic_coupling(
     return_matrix: bool = False,
     cost_fn: CostFN | None = None,
     scale_cost: ScaleMethod = 1.0,
-    method: QuadCouplingMethod = None,
+    method: QuadCouplingMethod = "entropic_gromov_wasserstein",
     *,
     rng: np.random.Generator,
     epsilon: float = 1.0,
@@ -492,7 +492,10 @@ def ot_quadratic_coupling(
             C1=distance_matrix_source_quad,
             C2=distance_matrix_target_quad,
         )
-    elif method == "entropic_fused_gromov_wasserstein" and distance_matrix_lin is not None:
+    elif method == "entropic_fused_gromov_wasserstein":
+        if distance_matrix_lin is None:
+            msg = f"{method=} requires `source_lin` and `target_lin`, `None` found"
+            raise ValueError(msg)
         ot_fn = partial(pot.gromov.entropic_fused_gromov_wasserstein, alpha=alpha, **opts)
         # computing coupling matrix
         coupling_matrix = ot_fn(

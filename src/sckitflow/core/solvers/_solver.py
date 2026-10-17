@@ -58,6 +58,15 @@ class BaseSolver(Generic[SolverDynamics], ABC, nn.Module):
         return self._method
 
     @abstractmethod
-    def solve(self, *, source: Tensor | None = None, **kwargs: Any) -> Tensor:
+    def solve(
+        self,
+        source: Tensor,
+        time: Tensor,
+        *,
+        rtol: float,
+        atol: float,
+        return_trajectory: bool = False,
+        solver_kwargs: dict[str, Any] | None = None,
+    ) -> Tensor:
         """Solve method to be implemented by subclasses."""
         ...

@@ -216,7 +216,7 @@ class _StepDataBridge:
         if not self._group_cols:
             # Unconditional schema (no groups, no conditions): scfit must still group on something, so stream
             # one implicit group holding every observation, on a shallow copy of the caller's AnnData.
-            adata = with_derived_obs(adata, **{_ALL_CELLS: pd.Categorical(np.full(adata.n_obs, "all"))})
+            adata = with_derived_obs(adata, {_ALL_CELLS: pd.Categorical(np.full(adata.n_obs, "all"))})
             self._group_cols = (_ALL_CELLS,)
         # Continuous covariates ride as aligned reps: {rep loc -> StepData dict key}.
         self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.conditions_covariates}
@@ -420,7 +420,8 @@ class _StepDataBridge:
         self,
         control_adata: AnnData | None,
         control_weights: dict[tuple, float] | None,
-        **stream_kwargs: Any,
+        *,
+        in_memory: bool = False,
     ) -> tuple[AnnData | None, Stream | None]:
         # Under fixed matching the pair column *is* the match: one id shared by a target group and the source
         # group it flows from, which is the only thing scfit's value-equality matching can key on. Otherwise a
@@ -436,7 +437,7 @@ class _StepDataBridge:
                 group_by=group_by if self._pair_cols else list(match_cols or self._group_cols),
                 reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
                 match_on=list(match_cols),
-                **stream_kwargs,
+                in_memory=in_memory,
             )
         if control_weights:
             return None, Stream(
@@ -445,7 +446,7 @@ class _StepDataBridge:
                 reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
                 weights=control_weights,
                 match_on=list(match_cols),
-                **stream_kwargs,
+                in_memory=in_memory,
             )
         return None, None
 

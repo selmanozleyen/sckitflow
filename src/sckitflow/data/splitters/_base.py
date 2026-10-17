@@ -83,7 +83,7 @@ class Splitter[C: SplitterConfig]:
             )
         labels = pd.Categorical(self.assign(adata).reindex(adata.obs_names).to_numpy())
         if copy:
-            return with_derived_obs(adata, **{self._split_key: labels})
+            return with_derived_obs(adata, {self._split_key: labels})
         adata.obs[self._split_key] = labels
         return adata
 

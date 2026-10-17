@@ -35,8 +35,8 @@ class BaseVelocityField(torch.nn.Module):
         self,
         t: torch.Tensor,
         xt: torch.Tensor,
-        *args,
-        **kwargs,
+        condition_dict: MappedTensor | None = None,
+        source: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Performs a forward computation pass on the neural velocity field.
 
@@ -46,15 +46,18 @@ class BaseVelocityField(torch.nn.Module):
         :param x: The current state at which the velocity field is computed.
         :type x: class: `torch.Tensor`
 
-        :param args: Additional positional arguments used to compute the velocity field.
-        :type args: class: `tuple[torch.Tensor]`
+        :param condition_dict: The encoded conditions, if the field is conditional.
+        :type condition_dict: class: `MappedTensor`, optional
+
+        :param source: The source state, if the field reads it.
+        :type source: class: `torch.Tensor`, optional
         """
 
     @abc.abstractmethod
     def get_vf_fn(
         self,
-        *args,
-        **kwargs,
+        condition_dict: MappedTensor | None = None,
+        source: torch.Tensor | None = None,
     ) -> VfFn:
         """Compiles the velocity field function to be fed to external solvers."""
 

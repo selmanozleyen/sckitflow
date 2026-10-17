@@ -193,7 +193,9 @@ def ot_linear_coupling(
     reg_m: float = ...,
     *,
     rng: np.random.Generator,
-    **kwargs,
+    m: float | None = None,
+    num_iter_max: int | None = None,
+    stop_thr: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray]: ...
 
 
@@ -211,7 +213,9 @@ def ot_linear_coupling(
     reg_m: float = ...,
     *,
     rng: np.random.Generator,
-    **kwargs,
+    m: float | None = None,
+    num_iter_max: int | None = None,
+    stop_thr: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
 
 
@@ -228,7 +232,9 @@ def ot_linear_coupling(
     reg_m: float = 1.0,
     *,
     rng: np.random.Generator,
-    **kwargs,
+    m: float | None = None,
+    num_iter_max: int | None = None,
+    stop_thr: float | None = None,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices
     using an optimal transport-based linear coupling.
@@ -263,8 +269,14 @@ def ot_linear_coupling(
     :param rng: Generator the matched indices are drawn from.
     :type rng: class:`numpy.random.Generator`
 
-    :param kwargs: Additional keyword arguments forwarded to the selected optimal transport solver.
-    :type kwargs: dict
+    :param m: Transported mass, used only by ``"partial"``. ``None`` is the solver's default.
+    :type m: float, optional
+
+    :param num_iter_max: POT's ``numItermax``. ``None`` is the solver's default.
+    :type num_iter_max: int, optional
+
+    :param stop_thr: POT's ``stopThr``, not taken by ``"exact"``. ``None`` is the solver's default.
+    :type stop_thr: float, optional
 
     Returns
     -------
@@ -294,18 +306,19 @@ def ot_linear_coupling(
     # normalization of cost
     distance_matrix = _scale_distance_matrix(distance_matrix, scale_method=scale_cost)
 
+    opts = {k: v for k, v in {"numItermax": num_iter_max, "stopThr": stop_thr}.items() if v is not None}
     if method == "exact":
-        ot_fn = pot.emd
+        ot_fn = partial(pot.emd, **opts)
     elif method == "sinkhorn":
         if reg is None:
             msg = f"{method=} requires `reg` to be a `float`, `None` found"
             raise ValueError(msg)
-        ot_fn = partial(pot.sinkhorn, reg=reg, **kwargs)
+        ot_fn = partial(pot.sinkhorn, reg=reg, **opts)
     elif method == "partial":
         if reg is None:
             msg = f"{method=} requires `reg` to be a `float`, `None` found"
             raise ValueError(msg)
-        ot_fn = partial(pot.partial.entropic_partial_wasserstein, reg=reg, **kwargs)
+        ot_fn = partial(pot.partial.entropic_partial_wasserstein, reg=reg, m=m, **opts)
     elif method == "unbalanced":
         if reg is None:
             msg = f"{method=} requires `reg` to be a `float`, `None` found"
@@ -313,7 +326,7 @@ def ot_linear_coupling(
         if reg_m is None:
             msg = f"{method=} requires `reg_m` to be a `float`, `None` found"
             raise ValueError(msg)
-        ot_fn = partial(pot.unbalanced.sinkhorn_knopp_unbalanced, reg=reg, reg_m=reg_m, **kwargs)
+        ot_fn = partial(pot.unbalanced.sinkhorn_knopp_unbalanced, reg=reg, reg_m=reg_m, **opts)
     else:
         msg = f"{method=} is not found, please specify a custom `method` in `ot_fn`"
         raise ValueError(msg)
@@ -338,7 +351,10 @@ def ot_quadratic_coupling(
     method: QuadCouplingMethod = ...,
     *,
     rng: np.random.Generator,
-    **kwargs,
+    epsilon: float = 1.0,
+    alpha: float = 0.5,
+    max_iter: int = 1000,
+    tol: float = 1e-9,
 ) -> tuple[NumpyArray, NumpyArray]: ...
 
 
@@ -354,7 +370,10 @@ def ot_quadratic_coupling(
     method: QuadCouplingMethod = ...,
     *,
     rng: np.random.Generator,
-    **kwargs,
+    epsilon: float = 1.0,
+    alpha: float = 0.5,
+    max_iter: int = 1000,
+    tol: float = 1e-9,
 ) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
 
 
@@ -369,7 +388,10 @@ def ot_quadratic_coupling(
     method: QuadCouplingMethod = None,
     *,
     rng: np.random.Generator,
-    **kwargs,
+    epsilon: float = 1.0,
+    alpha: float = 0.5,
+    max_iter: int = 1000,
+    tol: float = 1e-9,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches source and target groups using an optimal transport-based quadratic coupling (Gromov-Wasserstein or fused Gromov-Wasserstein) and returns the respective indices.
 
@@ -409,8 +431,17 @@ def ot_quadratic_coupling(
     :param rng: Generator the matched indices are drawn from.
     :type rng: class:`numpy.random.Generator`
 
-    :param kwargs: Additional keyword arguments forwarded to the solver.
-    :type kwargs: dict
+    :param epsilon: Entropic regularization.
+    :type epsilon: float
+
+    :param alpha: Trade-off between the quadratic and linear terms, used only by the fused solver.
+    :type alpha: float
+
+    :param max_iter: Maximum number of outer iterations.
+    :type max_iter: int
+
+    :param tol: Stopping tolerance.
+    :type tol: float
 
     Returns
     -------
@@ -456,14 +487,16 @@ def ot_quadratic_coupling(
     )
 
     if method == "entropic_gromov_wasserstein":
-        ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, epsilon=1.0, alpha=1.0)
+        ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, epsilon=epsilon, max_iter=max_iter, tol=tol)
         # computing coupling matrix
         coupling_matrix = ot_fn(
             C1=distance_matrix_source_quad,
             C2=distance_matrix_target_quad,
         )
     elif method == "entropic_fused_gromov_wasserstein" and distance_matrix_lin is not None:
-        ot_fn = partial(pot.gromov.entropic_fused_gromov_wasserstein, epsilon=1.0, alpha=0.5)
+        ot_fn = partial(
+            pot.gromov.entropic_fused_gromov_wasserstein, epsilon=epsilon, alpha=alpha, max_iter=max_iter, tol=tol
+        )
         # computing coupling matrix
         coupling_matrix = ot_fn(
             C1=distance_matrix_source_quad,

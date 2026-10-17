@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
 import torch
+from pydantic import ValidationError
+from scfit.registry import parse
 
 pytest.importorskip("ot")
 
@@ -140,3 +142,29 @@ def test_ot_quadratic_coupling_invalid_method_raises(quadratic_inputs):
         ot_quadratic_coupling(
             source_quad=src_xx, target_quad=tgt_yy, method="invalid_method", rng=np.random.default_rng(0)
         )
+
+
+# ===============================================================
+# Tests for the coupling configs
+# ===============================================================
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"type": "coupling.independent"},
+        {"type": "coupling.ot_linear", "method": "partial", "m": 0.5, "num_iter_max": 50},
+        {"type": "coupling.ot_linear", "method": "exact", "num_iter_max": 50},
+        {"type": "coupling.ot_quadratic", "method": "entropic_fused_gromov_wasserstein", "alpha": 0.3, "max_iter": 5},
+    ],
+)
+def test_coupling_config_builds_a_match_fn(spec, small_tensors):
+    source, target = small_tensors
+    match_fn = parse({**spec, "version": 1}).build()
+    src_idx, tgt_idx = match_fn(
+        source_lin=source, target_lin=target, source_quad=source, target_quad=target, rng=np.random.default_rng(0)
+    )
+    assert len(src_idx) == len(tgt_idx) == len(source)
+
+
+def test_coupling_config_rejects_unknown_kwargs():
+    with pytest.raises(ValidationError, match="regg"):
+        parse({"type": "coupling.ot_linear", "version": 1, "regg": 0.1})

@@ -59,7 +59,9 @@ def test_cellflow_yaml_trains_saves_and_predicts(tmp_path, adata: AnnData):
     for k, v in plan.module.state_dict().items():
         assert loaded.module.state_dict()[k].equal(v)
 
+    assert loaded.inference_method is not None
     pred = predict_adata(datamodule, loaded.inference_method, adata[~adata.obs["is_control"]].copy(), max_per_group=8)
+    assert isinstance(pred, AnnData)
     assert pred.n_obs > 0
     assert torch.isfinite(torch.as_tensor(np.asarray(pred.X))).all()
 

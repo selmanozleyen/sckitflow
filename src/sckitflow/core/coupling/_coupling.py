@@ -142,8 +142,8 @@ def _select_indices(
 
 def independent_coupling(
     *,
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     rng: np.random.Generator,
@@ -170,20 +170,20 @@ def independent_coupling(
         The two arrays have identical length, equal to the minimum number of
         available samples in the source and target tensors.
     """
-    # randomy permuting the tensors
-    src_random_perm_idx = rng.choice(source_lin.shape[0], size=source_lin.shape[0], replace=False)
-    tgt_random_perm_idx = rng.choice(target_lin.shape[0], size=source_lin.shape[0], replace=False)
-
-    min_shape = min(src_random_perm_idx.shape[0], tgt_random_perm_idx.shape[0])
-
-    return src_random_perm_idx[:min_shape], tgt_random_perm_idx[:min_shape]
+    # only the row counts matter, so either rep will do
+    source = source_lin if source_lin is not None else source_quad
+    target = target_lin if target_lin is not None else target_quad
+    if source is None or target is None:
+        raise ValueError("Independent coupling requires a source and a target representation, None found.")
+    n = min(source.shape[0], target.shape[0])
+    return rng.permutation(source.shape[0])[:n], rng.permutation(target.shape[0])[:n]
 
 
 @overload
 def ot_linear_coupling(
     *,
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: Literal[False] = False,
@@ -202,8 +202,8 @@ def ot_linear_coupling(
 @overload
 def ot_linear_coupling(
     *,
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: Literal[True] = True,
@@ -221,8 +221,8 @@ def ot_linear_coupling(
 
 def ot_linear_coupling(
     *,
-    source_lin: TensorLike,
-    target_lin: TensorLike,
+    source_lin: TensorLike | None,
+    target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     return_matrix: bool = False,
@@ -288,6 +288,8 @@ def ot_linear_coupling(
         If ``return_matrix`` is ``True``, also returns the optimal transport coupling matrix
         computed between the source and target distributions.
     """  # noqa
+    if source_lin is None or target_lin is None:
+        raise ValueError("Linear coupling requires linear source and target representations, None found.")
     cost_fn = cost_fn or (lambda source, target: torch.cdist(source, target) ** 2)
 
     # computing weights
@@ -504,8 +506,8 @@ def ot_quadratic_coupling(
         msg = f"{method=} is not found, please specify a custom `method` in `ot_fn`"
         raise ValueError(msg)
     source_idxs, target_idxs = _select_indices(
-        coupling_matrix=coupling_matrix.numpy(), size=source_quad.shape[0], rng=rng
+        coupling_matrix=coupling_matrix.detach().cpu().numpy(), size=source_quad.shape[0], rng=rng
     )
     if return_matrix:
-        return source_idxs, target_idxs, coupling_matrix.numpy()
+        return source_idxs, target_idxs, coupling_matrix.detach().cpu().numpy()
     return source_idxs, target_idxs

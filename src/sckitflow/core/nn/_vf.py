@@ -34,7 +34,7 @@ class BaseVelocityField(torch.nn.Module):
     def forward(
         self,
         t: torch.Tensor,
-        xt: torch.Tensor,
+        x: torch.Tensor,
         condition_dict: MappedTensor | None = None,
         source: torch.Tensor | None = None,
     ) -> torch.Tensor:

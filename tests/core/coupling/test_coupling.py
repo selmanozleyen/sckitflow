@@ -200,3 +200,29 @@ def test_coupling_config_builds_a_match_fn(spec, small_tensors):
 def test_coupling_config_rejects_settings_its_solver_ignores(spec):
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         parse({**spec, "version": 1})
+
+
+def test_independent_coupling_uses_quad_reps_and_the_smaller_side():
+    src_idx, tgt_idx = independent_coupling(
+        source_lin=None,
+        target_lin=None,
+        source_quad=torch.rand(6, 2),
+        target_quad=torch.rand(4, 2),
+        rng=np.random.default_rng(0),
+    )
+    assert len(src_idx) == len(tgt_idx) == 4
+    assert len(set(src_idx)) == 4 and src_idx.max() < 6 and tgt_idx.max() < 4
+
+
+def test_ot_linear_coupling_requires_linear_reps():
+    with pytest.raises(ValueError, match="requires linear source and target"):
+        ot_linear_coupling(
+            source_lin=None,
+            target_lin=None,
+            source_quad=torch.rand(4, 2),
+            target_quad=torch.rand(4, 2),
+            method="sinkhorn",
+            scale_cost="mean",
+            rng=np.random.default_rng(0),
+            **LIN,
+        )

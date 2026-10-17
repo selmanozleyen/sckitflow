@@ -10,6 +10,8 @@ from scfit.registry import Component, component
 __all__ = ["OptimizerConfig"]
 
 
+# TODO: remove this config. Name + untyped kwargs is a stopgap; decide how a run spec should carry the optimizer
+# (e.g. Lightning's `configure_optimizers`, or a typed per-optimizer component) before more code depends on it.
 @component("optimizer.torch", builds=torch.optim.Optimizer)
 class OptimizerConfig(Component):
     """A ``torch.optim`` optimizer by class name, e.g. ``OptimizerConfig(name="Adam", kwargs={"lr": 1e-4})``."""

@@ -239,6 +239,8 @@ def ot_linear_coupling(
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices
     using an optimal transport-based linear coupling.
 
+    The solve is delegated to POT, so the solvers' behaviour and defaults follow the installed POT version.
+
     :param source: A tensor of values containing the data coming from the source distribution.
     :type source: class:`TensorLike`
 
@@ -306,23 +308,17 @@ def ot_linear_coupling(
     # normalization of cost
     distance_matrix = _scale_distance_matrix(distance_matrix, scale_method=scale_cost)
 
+    if method != "exact" and reg is None:
+        msg = f"{method=} requires `reg` to be a `float`, `None` found"
+        raise ValueError(msg)
     opts = {k: v for k, v in {"numItermax": num_iter_max, "stopThr": stop_thr}.items() if v is not None}
     if method == "exact":
         ot_fn = partial(pot.emd, **opts)
     elif method == "sinkhorn":
-        if reg is None:
-            msg = f"{method=} requires `reg` to be a `float`, `None` found"
-            raise ValueError(msg)
         ot_fn = partial(pot.sinkhorn, reg=reg, **opts)
     elif method == "partial":
-        if reg is None:
-            msg = f"{method=} requires `reg` to be a `float`, `None` found"
-            raise ValueError(msg)
         ot_fn = partial(pot.partial.entropic_partial_wasserstein, reg=reg, m=m, **opts)
     elif method == "unbalanced":
-        if reg is None:
-            msg = f"{method=} requires `reg` to be a `float`, `None` found"
-            raise ValueError(msg)
         if reg_m is None:
             msg = f"{method=} requires `reg_m` to be a `float`, `None` found"
             raise ValueError(msg)
@@ -394,6 +390,8 @@ def ot_quadratic_coupling(
     tol: float = 1e-9,
 ) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
     """Matches source and target groups using an optimal transport-based quadratic coupling (Gromov-Wasserstein or fused Gromov-Wasserstein) and returns the respective indices.
+
+    The solve is delegated to POT, so the solvers' behaviour and defaults follow the installed POT version.
 
     :param source_quad: A tensor containing pairwise relationships within the source
         distribution (source-source structure).
@@ -486,17 +484,16 @@ def ot_quadratic_coupling(
         distance_matrix=distance_matrix_target_quad, scale_method=scale_cost
     )
 
+    opts = {"epsilon": epsilon, "max_iter": max_iter, "tol": tol}
     if method == "entropic_gromov_wasserstein":
-        ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, epsilon=epsilon, max_iter=max_iter, tol=tol)
+        ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, **opts)
         # computing coupling matrix
         coupling_matrix = ot_fn(
             C1=distance_matrix_source_quad,
             C2=distance_matrix_target_quad,
         )
     elif method == "entropic_fused_gromov_wasserstein" and distance_matrix_lin is not None:
-        ot_fn = partial(
-            pot.gromov.entropic_fused_gromov_wasserstein, epsilon=epsilon, alpha=alpha, max_iter=max_iter, tol=tol
-        )
+        ot_fn = partial(pot.gromov.entropic_fused_gromov_wasserstein, alpha=alpha, **opts)
         # computing coupling matrix
         coupling_matrix = ot_fn(
             C1=distance_matrix_source_quad,

@@ -52,7 +52,7 @@ training:
   type: training_method.matched
   version: 1
   coupling:
-    type: coupling.sinkhorn
+    type: coupling.pot.sinkhorn
     version: 1
     reg: 0.5
   method:

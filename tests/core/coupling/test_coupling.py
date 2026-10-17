@@ -158,12 +158,12 @@ def _all_subclasses(cls):
     "spec",
     [
         {"type": "coupling.independent"},
-        {"type": "coupling.exact", "num_iter_max": 50},
-        {"type": "coupling.sinkhorn", "reg": 0.1},
-        {"type": "coupling.partial", "m": 0.5, "num_iter_max": 50},
-        {"type": "coupling.unbalanced", "reg_m": 2.0},
-        {"type": "coupling.gromov_wasserstein", "max_iter": 5},
-        {"type": "coupling.fused_gromov_wasserstein", "alpha": 0.3, "max_iter": 5},
+        {"type": "coupling.pot.exact", "num_iter_max": 50},
+        {"type": "coupling.pot.sinkhorn", "reg": 0.1},
+        {"type": "coupling.pot.partial", "m": 0.5, "num_iter_max": 50},
+        {"type": "coupling.pot.unbalanced", "reg_m": 2.0},
+        {"type": "coupling.pot.gromov_wasserstein", "max_iter": 5},
+        {"type": "coupling.pot.fused_gromov_wasserstein", "alpha": 0.3, "max_iter": 5},
     ],
 )
 def test_coupling_config_builds_a_match_fn(spec, small_tensors):
@@ -178,10 +178,10 @@ def test_coupling_config_builds_a_match_fn(spec, small_tensors):
 @pytest.mark.parametrize(
     "spec",
     [
-        {"type": "coupling.sinkhorn", "regg": 0.1},
-        {"type": "coupling.exact", "reg": 0.1},
-        {"type": "coupling.sinkhorn", "m": 0.5},
-        {"type": "coupling.gromov_wasserstein", "alpha": 0.3},
+        {"type": "coupling.pot.sinkhorn", "regg": 0.1},
+        {"type": "coupling.pot.exact", "reg": 0.1},
+        {"type": "coupling.pot.sinkhorn", "m": 0.5},
+        {"type": "coupling.pot.gromov_wasserstein", "alpha": 0.3},
     ],
 )
 def test_coupling_config_rejects_settings_its_solver_ignores(spec):

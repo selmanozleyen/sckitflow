@@ -63,7 +63,7 @@ class _LinearCouplingConfig(CouplingConfig):
     num_iter_max: int | None = None
 
 
-@component("coupling.exact")
+@component("coupling.pot.exact")
 class ExactCouplingConfig(_LinearCouplingConfig):
     """Exact linear optimal transport, POT's ``emd``."""
 
@@ -75,14 +75,14 @@ class _EntropicCouplingConfig(_LinearCouplingConfig):
     stop_thr: float | None = None
 
 
-@component("coupling.sinkhorn")
+@component("coupling.pot.sinkhorn")
 class SinkhornCouplingConfig(_EntropicCouplingConfig):
     """Entropic linear optimal transport, POT's ``sinkhorn``."""
 
     method = "sinkhorn"
 
 
-@component("coupling.partial")
+@component("coupling.pot.partial")
 class PartialCouplingConfig(_EntropicCouplingConfig):
     """Entropic partial linear optimal transport, POT's ``entropic_partial_wasserstein``."""
 
@@ -91,7 +91,7 @@ class PartialCouplingConfig(_EntropicCouplingConfig):
     m: float | None = None
 
 
-@component("coupling.unbalanced")
+@component("coupling.pot.unbalanced")
 class UnbalancedCouplingConfig(_EntropicCouplingConfig):
     """Entropic unbalanced linear optimal transport, POT's ``sinkhorn_knopp_unbalanced``."""
 
@@ -111,14 +111,14 @@ class _QuadraticCouplingConfig(CouplingConfig):
     tol: float = 1e-9
 
 
-@component("coupling.gromov_wasserstein")
+@component("coupling.pot.gromov_wasserstein")
 class GromovWassersteinCouplingConfig(_QuadraticCouplingConfig):
     """Entropic Gromov-Wasserstein, POT's ``entropic_gromov_wasserstein``."""
 
     method = "entropic_gromov_wasserstein"
 
 
-@component("coupling.fused_gromov_wasserstein")
+@component("coupling.pot.fused_gromov_wasserstein")
 class FusedGromovWassersteinCouplingConfig(_QuadraticCouplingConfig):
     """Entropic fused Gromov-Wasserstein, POT's ``entropic_fused_gromov_wasserstein``."""
 

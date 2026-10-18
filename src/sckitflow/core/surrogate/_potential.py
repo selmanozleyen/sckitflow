@@ -1,13 +1,12 @@
 import abc
-from functools import cached_property
-from math import prod
-from typing import Any, Literal
+from typing import Any
 
 import torch
 
 from sckitflow._random import generators
+from sckitflow.core._data_utils import get_tensor_dict_from_data
 from sckitflow.core._types import PredictionData, StepData
-from sckitflow.core.methods._base import SupportsInference
+from sckitflow.core.methods._base import SupportsInference, _placement_of
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._loader import EvalLoader
@@ -15,303 +14,76 @@ from sckitflow.data._loader import EvalLoader
 __all__ = ["SurrogatePotential"]
 
 
-def _is_mapping(container: Any) -> bool:
-    """Checks whether the input object is a mapping.
-
-    A mapping is anything that exposes the `.items()` method.
-    """
-    # First, we return True if the container is a dictionary.
-    if isinstance(container, dict):
-        return True
-    # Then, we retrieve the items attribute. If None, it means that
-    # the container is NOT a mapping. We use `getattr` with `None` as
-    # default.
-    items_attr = getattr(container, "items", None)
-    # We return False when no such attribute is found.
-    if not items_attr:
-        return False
-    # Finally, we check that the method is a callable.
-    return callable(items_attr)
+def _rows(container: Any) -> int | None:
+    """Leading dimension of a tensor or of the first tensor in a mapping, `None` when empty."""
+    if container is None:
+        return None
+    if isinstance(container, torch.Tensor):
+        return container.shape[0]
+    tensors = [v for v in get_tensor_dict_from_data(container).values() if v is not None]
+    return tensors[0].shape[0] if tensors else None
 
 
-def _get_leaf_target_size(step_data: StepData) -> None | int:
-    """Infers the target size of step data leaf.
-
-    Infers the size of the target data. First, the condition data is
-    used to infer the size, when it is available. Otherwise, falls back
-    to the groups metadata (which is by design shared with the source).
-    This is required to align the target data with the condition tensor
-    -- their presence would cause a shape mismatch if not properly broadcasted.
-    Target states are ignored, as they can be absent at inference time.
-
-    :param step_data: The `StepData` which to infer the target leaf size from.
-    """
-    # We should only pull the ones for the continuous condition
-    # covariates that are not optimized over. This is enforced directly in
-    # `_align_cond_dict_with_step_data`, to delegate only the shape retrieval
-    # to this function.
-    target_condition_data = step_data.get("target_condition_data", None)
-    # When target condition data is available, we still need to check that it is
-    # not an empty dictionary. If this is the case, we retrieve the first element
-    # as a reference, and return its leading dimension as target size.
-    if target_condition_data is not None and len(target_condition_data):
-        ref = next(iter(target_condition_data.values()))
-        return ref.shape[0]
-    # If the target condition data is not available, proceed by inferring the
-    # size from the groups data.
-    target_groups_data = step_data.get("target_group_data", None)
-    if target_groups_data is not None and len(target_groups_data):
-        ref = next(iter(target_groups_data.values()))
-        return ref.shape[0]
-    # Otherwise, return None because no target data is available.
-    return None
-
-
-def _get_leaf_source_size(step_data: StepData) -> None | int:
-    """Infers the source size of step data leaf.
-
-    Infer the size of the source data. We use the source state to infer the
-    size, when available. Otherwise, simply return None -- because when
-    the source state is not present, the generation surely happens from noise
-    and we are not missing anything from the source side.
-
-    :param step_data: The `StepData` which to infer the source leaf size from.
-    """
-    # Get the source state to retrieve the shape.
-    source_state = step_data.get("source_state", None)
-    if source_state is not None:
-        return source_state.shape[0]
-    # When no source state is present, simply return `None`.
-    return None
-
-
-def _get_additional_condition_keys(
+def _pair_leaf(
     step_data: StepData,
     cond_dict: dict[str, torch.Tensor],
-) -> list[str]:
-    """Gets a list of condition keys in the step data that are not in the condition dict.
+    device: torch.device,
+) -> tuple[StepData, dict[str, torch.Tensor]]:
+    r"""Lays a leaf out against the condition dictionary for one prediction.
 
-    :param step_data: The `StepData` to retrieve the target condition keys from.
-    :param cond_dict: The condition dictionary to retrieve the query condition keys from.
+    A leaf has ``S`` source rows (when a source state is present) and ``T`` target rows. The target rows
+    only vary when the leaf carries condition covariates that are not optimized; otherwise they hold the
+    leaf's group data, which is constant within a leaf, so a single row stands for all of them. The
+    ``P`` pairs are the Cartesian product of the varying source and target rows, and every field is laid
+    out as $(P, N, \dots)$ against the $N$ condition samples.
+
+    Only the fields prediction reads are kept: the source side, and the target conditions and groups.
+    Other target fields (states, couplings, responses) are dropped, since the conditions replace the
+    target side. Everything is moved to ``device``.
     """
-    # First, we collect all the keys from the condition dictionary.
-    optimized_keys = sorted(cond_dict)
-    # Then, we retrieve the condition data from the `StepData`.
-    target_condition_data = step_data.get("target_condition_data", None)
-    # We return an empty list, when no condition covariate is present in the data.
-    if target_condition_data is None:
-        return []
-    # Otherwise, we iterate over all the condition keys in the `StepData`, and
-    # filter out the ones that are present in the condition dictionary.
-    return [key for key in sorted(target_condition_data) if key not in optimized_keys]
+    optimized = set(cond_dict)
+    extra = {
+        k: v for k, v in get_tensor_dict_from_data(step_data.get("target_condition_data")).items() if k not in optimized
+    }
+    groups = step_data.get("target_group_data")
+    S = _rows(step_data.get("source_state"))
+    T = _rows(extra) if extra else None
+    if S is None and T is None and _rows(groups) is None:
+        # nothing to pair: the conditions alone are the batch
+        conds = {k: v.to(device) for k, v in cond_dict.items()}
+        return {**step_data, "target_condition_data": conds}, conds
 
+    s, t = S or 1, T or 1
+    src_idx = torch.arange(s, device=device).repeat_interleave(t)
+    tgt_idx = torch.arange(t, device=device).repeat(s)
+    n_pairs, n = s * t, next(iter(cond_dict.values())).shape[0]
 
-def _align_cond_dict_with_step_data(
-    step_data: StepData,
-    cond_dict: dict[str, torch.Tensor],
-) -> dict[str, torch.Tensor]:
-    r"""Aligns the condition dictionary with the step data.
+    def lay_out(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        x = x.to(device)[idx]
+        return x.unsqueeze(1).expand(n_pairs, n, *x.shape[1:])
 
-    This operation is intended to align the condition tensors of shape $(N, D)$ with the
-    shapes of the data leaves. When neither size if found, the condition data is returned
-    unchanged. On the contrary, denoting by $B_0$ and $B_1$ the source and target size of a leaf,
-    the condition data will be expanded and viewed with shape $(B_0\cdot B_1, N, D)$.
-
-    :param step_data: The `StepData` to align the condition dictionary against.
-    :param cond_dict: The condition dictionary to align.
-    """
-    # Get source and target leaf sizes.
-    leaf_source_size: int | None = _get_leaf_source_size(step_data)
-    leaf_target_size: int | None = _get_leaf_target_size(step_data)
-    # Initialize store for all the dimensions to multiply.
-    all_dims = [leaf_source_size]
-    # We only consider the condition keys from the target condition data
-    # that are not present in the condition dictionary.
-    additional_keys = _get_additional_condition_keys(step_data, cond_dict)
-    # When additional keys are present, we append it to the dims to expand
-    if len(additional_keys):
-        all_dims.append(leaf_target_size)
-    # Compute total number of observations, when the size returns something.
-    to_multiply = [i for i in all_dims if i is not None]
-    # Fall back to no-operation when there is no leaf data found.
-    if not len(to_multiply):
-        return cond_dict
-    # Get the total number of elements
-    tot_size = prod(to_multiply)
-    return {k: v.unsqueeze(0).expand(tot_size, *v.shape) for k, v in cond_dict.items()}
-
-
-def _align_step_data_to_cond_dict(
-    step_data: StepData,
-    cond_dict: dict[str, torch.Tensor],
-) -> StepData:
-    """Aligns the step data to the condition dictionary.
-
-    :param step_data: The `StepData` to be aligned.
-    :param cond_dict: The condition dictionary to align against. It needs to be
-        already aligned with the step data, before calling this function.
-    """
-    # Get source and target leaf sizes.
-    leaf_source_size: int | None = _get_leaf_source_size(step_data)
-    leaf_target_size: int | None = _get_leaf_target_size(step_data)
-    # We set those to 1 when they are `None`, so that we can handle them cleanly
-    S = leaf_source_size if leaf_source_size is not None else 1
-    T = leaf_target_size if leaf_target_size is not None else 1
-    # We gate the multiplication with the target to occur ONLY when there are additional
-    # keys present. If this is not the case, we do not need to expand
-    # the target dimension.
-    additional_keys = _get_additional_condition_keys(step_data, cond_dict)
-    # When additional keys are present, we append it to the dims to expand
-    # We multiply the source and target sizes to get the total number of samples.
-    if len(additional_keys):
-        tot_size = S * T
-    else:
-        tot_size = S
-    # We check that the condition dictionary contains at least on item.
-    # The `StopIteration` error is guarded against from the above check,
-    # so that we can safely iterate over its values to retrieve our reference
-    # tensor.
-    if not len(cond_dict):
-        raise ValueError("Cannot compute the potential with an empty condition dictionary.")
-    ref = next(iter(cond_dict.values()))
-    # We also check that the condition array was already effectively expanded.
-    # When there is nothing to expand, the conditoin dictionary will still have 2 dimensions --
-    # in this case this function collapses to a no-operation and leaves the `StepData` unchanged.
-    if ref.ndim == 2:
-        return step_data
-    # We expect the aligned condition dictionary to have three dimensions. Hence, we raise an
-    # error if this is not the case. Something must have gone wrong, hence we write this guard.
-    elif ref.ndim != 3:
-        raise ValueError(
-            f"Condition data has the wrong number of dimensions -- found {ref.ndim} but expected 3."
-            "Please, align the condition dictionary with the step data first."
-        )
-    # Retrieving the number of optimization samples from the reference tensor.
-    # After the expansion of the condition dictionary, a new axis is added as leading dimension
-    # Hence, we need to retrieve the dimension at index 1 to get the number of samples.
-    N = ref.shape[1]
-
-    def _expand_data(x: torch.Tensor, mode: Literal["source", "target"]) -> torch.Tensor:
-        """Expands data to be aligned with the condition and the input number of observations.
-
-        The data is of shape (B, rest); to align it, we need to expand it to shape (B*M, N, *rest).
-
-
-        :param x: The tensor to expand.
-        :param mode: The mode to expand the data with. Can be either "source" or "target".
-        """
-        # We collect the original shape first, before doing any manipulation.
-        orig_shape = x.shape
-        # We collect the dimension based on the mode.
-        # When the mode is "source", we collect the number of target samples.
-        if mode == "source":
-            M = T
-        # When the mode is "target", we collect the number of source samples.
-        elif mode == "target":
-            M = S
-        else:
-            raise ValueError(f'Unsupported mode {mode} for alignment. Possible choices are  `"source"` and `"target"`.')
-        # We expand the first dimension and add the target size.
-        # Then we collapse the first two dimensions so that the dimensionality
-        # contract is respected.
-        x = x.unsqueeze(0).expand(M, *orig_shape).reshape(tot_size, *orig_shape[1:])
-        # Then we need to unsqueeze at dimension 1 and expand dims
-        return x.unsqueeze(1).expand(tot_size, N, *orig_shape[1:])
-
-    def _align_container(
-        data_container: torch.Tensor | dict[str, torch.Tensor] | None, mode: Literal["source", "target"]
-    ) -> torch.Tensor | dict[str, torch.Tensor] | None:
-        """Aligns a data container."""
-        # If data dictionary is not provided, return an empty dictionary.
-        if data_container is None:
+    def lay_out_container(container: Any, idx: torch.Tensor) -> Any:
+        if container is None:
             return None
-        # When the container is a tensor, directly expand it.
-        elif isinstance(data_container, torch.Tensor):
-            return _expand_data(data_container, mode)
-        # When the container is a mapping, iterate over
-        # the items and expand each of them.
-        elif _is_mapping(data_container):
-            return {k: _expand_data(v, mode) for k, v in data_container.items()}
-        # Otherwise, return the data container unchanged (no-op).
-        return data_container
+        if isinstance(container, torch.Tensor):
+            return lay_out(container, idx)
+        return {k: lay_out(v, idx) for k, v in get_tensor_dict_from_data(container).items()}
 
-    # Now, we can finally update the step data. First, we define a new
-    # empty dictionary, that we will repopulate with th aligned data.
-    new_step_data: StepData = {}
-    for key, value in step_data.items():
-        # First, we reassign the value when it is None.abc
-        if value is None:
-            new_step_data[key] = None
-        # The target condition data needs a specific handling, as we
-        # do not want to update or expand the condition covariates that are
-        # already present in the condition dictionary.
-        elif key == "target_condition_data":
-            new_cond_data = {}
-            for cond_key, cond_data in value.items():
-                # If the condition key is present in the condition dictionary,
-                # we do not perform any expansion -- it will be anyway overridden
-                # by the `_attach_continuous_conditions_to_step_data` call.
-                if cond_key in cond_dict:
-                    new_cond_data[cond_key] = cond_data
-                # All the other target condition covariates need alignment.
-                else:
-                    new_cond_data[cond_key] = _expand_data(cond_data, "target")
-            new_step_data[key] = new_cond_data
-        # Align all the source keys in the input StepData.
-        elif key.startswith("source_"):
-            new_step_data[key] = _align_container(value, "source")
-        # Align all the target keys in the input StepData.
-        elif key.startswith("target_"):
-            new_step_data[key] = _align_container(value, "target")
-        # Otherwise, simply store the original value in the updated data.
-        else:
-            new_step_data[key] = value
-    return new_step_data
+    if groups is not None and T is None:
+        # groups are constant within a leaf; check it, since one row stands for all of them
+        for key, value in get_tensor_dict_from_data(groups).items():
+            if not torch.equal(value, value[:1].expand_as(value)):
+                raise ValueError(f"Target group data {key!r} varies within a leaf; it cannot stand for one row.")
+        groups = {k: v[:1] for k, v in get_tensor_dict_from_data(groups).items()}
 
-
-def _attach_continuous_conditions_to_step_data(
-    step_data: StepData,
-    cond_dict: dict[str, torch.Tensor],
-) -> StepData:
-    """Attaches the condition dictionary to the step data as target conditions covariates.
-
-    Leaves the rest of the fields unchanged, and returns the updated step data. The rest of the
-    continuous conditions covariates will be preserved as from the input `StepData`.
-
-    :param step_data: The input `StepData` to update.
-    :param cond_dict: The condition dictionary to update the step data with.
-    """
-    # First we collect the continuous condition covariates from the step data.
-    # If the input step data does not contain any continuous covariate,
-    # we raise a ValueError.
-    condition_covariates = step_data.get("target_condition_data", None)
-    # Immediately raise ValueError when there is no condition data.
-    if condition_covariates is None:
-        raise ValueError("The input `StepData` does not contain any condition covariates.")
-    condition_covariates = dict(condition_covariates)
-
-    # We then collect the keys to update, and write the input tensor in place.
-    # To do that, we can iterate over the input condition dictionary and update each key.
-    for cond_key, new_cond_data in cond_dict.items():
-        # We immediately raise an error if the condition key does not appear
-        # as condition covariate in the input step data.
-        # This check is repetitive here, because the condition dictionary will have
-        # already passed the `_verify_continuous_conditions_dims` test -- hence,
-        # it is surely present as a modeled condition. We do it again for
-        # semantic reasons, as we want this function to be agnostic of the other
-        # check and on how the `StepData` is constructed from the data dimensionalities.
-        if cond_key not in condition_covariates:
-            raise ValueError(
-                f"The condition key {cond_key} does not appear as condition covariate "
-                f"in the input step data -- the available keys are {sorted(condition_covariates)}."
-            )
-
-        # Update condition data with new tensors.
-        condition_covariates[cond_key] = new_cond_data
-
-    # Update the step data with the new condition covariates and return it.
-    new_step_data = {**step_data, "target_condition_data": condition_covariates}
-    return new_step_data
+    conds = {k: v.to(device).unsqueeze(0).expand(n_pairs, *v.shape) for k, v in cond_dict.items()}
+    paired: StepData = {
+        key: (lay_out_container(value, src_idx) if key.startswith("source_") else None)
+        for key, value in step_data.items()
+    }
+    paired["target_group_data"] = lay_out_container(groups, tgt_idx)
+    paired["target_condition_data"] = {**{k: lay_out(v, tgt_idx) for k, v in extra.items()}, **conds}
+    return paired, conds
 
 
 def _verify_continuous_conditions_dims(
@@ -421,10 +193,14 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
     def get_response(self, pred_data: PredictionData) -> torch.Tensor:
         """Extracts the response tensor from the prediction data.
 
-        :param pred_data: The raw output of ``inferer.predict``.
-        :returns: A tensor of shape ``(N, D)``, where ``N`` matches the
-            leading dimension of every condition tensor in ``cond_dict`` and
-            ``D`` equals ``len(ystar)`` (the unmasked target's last axis).
+        :param pred_data: The raw output of ``inferer.predict``. When the leaf has source or target rows,
+            its samples carry leading cell axes (the ``P`` leaf pairs, and any samples the inferer draws)
+            before the ``N`` condition axis.
+        :returns: A tensor of shape ``(N, D)``: the readout averaged over those cell axes, i.e. the
+            Monte Carlo mean response of each condition. ``N`` matches the leading dimension of every
+            condition tensor in ``cond_dict`` and ``D`` equals ``len(ystar)``. Average the readout before
+            the potential, not the potential over cells, since a nonlinear potential does not commute
+            with the mean.
             Masking with ``self.mask`` along the last axis yields ``(N, D')``,
             which is what ``compute_raw_potential`` receives.
         """
@@ -441,96 +217,61 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
         :returns: Per-sample potential, shape ``(N,)``.
         """
 
-    def forward(
-        self,
-        cond_dict: dict[str, torch.Tensor],
-    ) -> torch.Tensor:
-        """Computes the potential value given the input tensor.
+    def forward(self, cond_dict: dict[str, torch.Tensor]) -> torch.Tensor:
+        """The potential of each condition, averaged over the leaves of the context data module.
 
-        The potential function will be evaluated over all the leaves of the
-        context data module. The potential over all leaves is then
-        aggregates using the mean.
-
-        :param cond_dict: A dictionary of input tensors, each of shape `(B, D)`.
+        :param cond_dict: A dictionary of input tensors, each of shape ``(N, D)``.
+        :returns: Shape ``(N,)``.
         """
-        # Verify that the condition dictionary satisfies the dimensionality contract.
+        return self.population_potentials(cond_dict, n_populations=1)[0]
+
+    def population_potentials(self, cond_dict: dict[str, torch.Tensor], n_populations: int) -> torch.Tensor:
+        """The potential of each condition for ``n_populations`` independently drawn populations.
+
+        Each population draws its own generator per leaf, so the spread across populations is the
+        forward model's predictive uncertainty: ``population_potentials(c, n).std(0)``.
+
+        :param cond_dict: A dictionary of input tensors, each of shape ``(N, D)``.
+        :returns: Shape ``(n_populations, N)``.
+        """
         _verify_continuous_conditions_dims(self._datamodule.data_dims, cond_dict)
-        # Guard that we are not computing the potential over an empty dictionary.
-        # Then, infer the number of optimization samples from the shape of the
-        # input dictionary.
         if not len(cond_dict):
             raise ValueError("Cannot compute the potential with an empty condition dictionary.")
-        # The `StopIteration` error is guarded against from the above check,
-        # so that we can safely iterate over its values to retrieve our reference
-        # tensor. Furthermore, it is already ensured that the tensors satisfy the
-        # data dimensionality contract and have only two dimensions.
-        ref = next(iter(cond_dict.values()))
-        # Retrieving the number of optimization samples from the reference tensor.
-        # It will always be given by its leading dimension. The reason we need the
-        # number of optimization samples is to verify the shape of the potential
-        # over each leave -- we should have a potential value for each optimization sample.
-        N = ref.shape[0]
-        # Verify that all the other keys have the same number of samples
-        # and that they are on the same device.
+        n = next(iter(cond_dict.values())).shape[0]
         for cond_key, cond_data in cond_dict.items():
-            if cond_data.shape[0] != N:
+            if cond_data.shape[0] != n:
                 raise ValueError(
-                    f"Condition data at key {cond_key} has the wrong "
-                    f"number of optimization samples -- found {cond_data.shape[0]} "
-                    f"but expected {N}."
+                    f"Condition data at key {cond_key} has the wrong number of optimization samples -- "
+                    f"found {cond_data.shape[0]} but expected {n}."
                 )
-            if cond_data.device != ref.device:
-                raise ValueError(
-                    f"Condition data at key {cond_key} is on the wrong device -- "
-                    f"found {cond_data.device} but expected {ref.device}."
-                )
+        device, _ = _placement_of(self.inferer.module)
+        leaves = list(self.predict_dl)
+        if not leaves:
+            raise ValueError("The context data module has no prediction leaves.")
+        populations = []
+        for population in range(n_populations):
+            potentials = []
+            for i, (step_data, leaf) in enumerate(leaves):
+                generator, _ = generators(self._seed, i, population, device=device)
+                paired_step_data, _ = _pair_leaf(step_data, cond_dict, device)
+                y = self.get_response(self.inferer.predict(paired_step_data, generator=generator))
+                if y.shape[-1] != self.ystar.shape[-1]:
+                    raise ValueError(
+                        f"get_response returned a tensor whose last dim is {y.shape[-1]}, "
+                        f"but the target response has dim {self.ystar.shape[-1]}."
+                    )
+                pot = self.compute_raw_potential(y[..., self._mask], self.ystar[self._mask])
+                if pot.shape != (n,):
+                    raise ValueError(
+                        f"Potential value for leaf {leaf} has the wrong shape -- got {pot.shape}, but expected {(n,)}."
+                    )
+                potentials.append(pot)
+            populations.append(torch.stack(potentials).mean(0))
+        return torch.stack(populations)
 
-        # List to store all the computed potentials.
-        potentials = []
-        # Iterate over the prediction data loader.
-        for i, (step_data, leaf) in enumerate(self.predict_dl):
-            # Iterate over the generators for reproducibility.
-            generator, _ = generators(self._seed, i, device=ref.device)
-            # Align condition dictionary with step data.
-            new_cond_dict = _align_cond_dict_with_step_data(step_data, cond_dict)
-            # Align step data with condition dictionary.
-            aligned_step_data = _align_step_data_to_cond_dict(step_data, new_cond_dict)
-            # Update step data with the input condition dictionary,
-            # predict with the inference module.
-            new_step_data = _attach_continuous_conditions_to_step_data(aligned_step_data, new_cond_dict)
-            pred_data: PredictionData = self.inferer.predict(new_step_data, generator=generator)
-            y: torch.Tensor = self.get_response(pred_data)
-            # Check that the response has the same dimension as the target
-            target_dim = self.ystar.shape[-1]
-            if y.shape[-1] != target_dim:
-                raise ValueError(
-                    f"get_response returned a tensor whose last dim is "
-                    f"{y.shape[-1]}, but the target response has dim {target_dim}."
-                )
-
-            # Evaluate raw potential. When calling the
-            # `compute_raw_potential` method, mask the dimensions that we
-            # do not want to consider for the gradient computations.
-            pot = self.compute_raw_potential(y[..., self._mask], self.ystar[self._mask])
-
-            # Update the potential values list. Before doing that, verify that
-            # the potential value has the correct shape, before proceeding.
-            # Otherwise, raise a `ValueError`.
-            if pot.shape != (N,):
-                raise ValueError(
-                    f"Potential value for leaf {leaf} has the wrong shape -- got {pot.shape}, but expected {(N,)}."
-                )
-            potentials.append(pot)
-
-        # Stack the tensors from the input list and aggregate with the mean.
-        # This is similar to a MC average over the considered prediction leaves.
-        # We stack and aggregate over the leading dimensions, so that
-        # the shape of the sample-wise potential is preserved.
-        return torch.mean(torch.stack(potentials, dim=0), dim=0)
-
-    @cached_property
+    @property
     def predict_dl(self) -> EvalLoader:
-        """Caches the `predict_dataloader` call on the context datamodule."""
+        """The context datamodule's prediction loader, rebuilt per call so `set_predict_data` is honored."""
         return self._datamodule.predict_dataloader()
 
     @property

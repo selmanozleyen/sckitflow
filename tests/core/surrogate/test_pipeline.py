@@ -499,16 +499,9 @@ class TestDeterminism:
         )
         assert not torch.allclose(p1(cond_dict_single), p2(cond_dict_single))
 
-    def test_loader_cached_across_calls(self, adata, cond_dict_single, ystar):
-        potential, _ = build_potential(
-            adata,
-            cond_dict_single,
-            ystar,
-            continuous_conditions=(CONT_COV_1,),
-        )
-        potential(cond_dict_single)
-        potential(cond_dict_single)
-        assert potential.predict_dl is potential.predict_dl
+    def test_loader_rebuilt_per_call(self, adata, cond_dict_single, ystar):
+        potential, _ = build_potential(adata, cond_dict_single, ystar, continuous_conditions=(CONT_COV_1,))
+        assert potential.predict_dl is not potential.predict_dl  # so `set_predict_data` is honored
 
 
 # ---------------------------------------------------------------------------

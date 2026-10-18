@@ -74,6 +74,17 @@ class TestPortableSpec:
             "shift": 0.0,
         }
 
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            {"type": "group_encoder.affine", "scal": 2.0},  # typo'd field
+            {"type": "group_encoder.nope"},  # unknown type
+        ],
+    )
+    def test_rejects_bad_spec(self, spec: dict) -> None:
+        with pytest.raises((ValueError, TypeError)):
+            GroupEncoderConfig.from_spec(spec)
+
 
 class TestPinnedVocabulary:
     """A pinned vocabulary makes the mapping deterministic, and unknown categories raise."""

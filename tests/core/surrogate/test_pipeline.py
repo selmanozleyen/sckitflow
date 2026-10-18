@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from sckitflow.core._types import PredictionData
-from sckitflow.core.surrogate import SurrogatePotential
+from sckitflow.core.surrogate import SurrogatePotential, guided_sample
 from sckitflow.data import DataManagerConfig, FlowDataModule
 
 # ---------------------------------------------------------------------------
@@ -645,7 +645,8 @@ class TestRealInference:
             pytest.param(
                 ("target",),
                 marks=pytest.mark.xfail(
-                    strict=True, reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too"
+                    strict=True,
+                    reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too",
                 ),
             ),
         ],
@@ -677,3 +678,26 @@ class TestRealInference:
         out.sum().backward()
         assert out.shape == (3,)
         assert torch.isfinite(cond[CONT_COV_1].grad).all()
+
+
+# Guided sampling with a surrogate potential
+# ---------------------------------------------------------------------------
+
+
+class TestGuidedSampling:
+    def test_guidance_prefers_the_design_closest_to_the_target(self, adata, ystar):
+        designs = torch.tensor([[-2.0], [1.0]])  # the prior's training designs; the target response is at 0
+
+        def velocity(t, x):
+            t = float(t)
+            log_w = -((x[:, None] - t * designs[None]) ** 2).sum(-1) / (2 * (1 - t) ** 2)
+            return (torch.softmax(log_w, -1) @ designs - x) / (1 - t)
+
+        potential, _ = build_potential(
+            adata, {CONT_COV_1: torch.zeros(64, 1)}, ystar, conditions_covariates=(CONT_COV_1,)
+        )
+        x0 = torch.randn(64, 1, generator=torch.Generator().manual_seed(0))
+        sample = lambda scale: guided_sample(
+            velocity, lambda d: potential({CONT_COV_1: d}), x0, n_steps=50, guidance_scale=scale
+        )
+        assert (sample(0.5) > 0).float().mean() > (sample(0.0) > 0).float().mean()

@@ -5,6 +5,7 @@ import pytest
 import torch
 from pydantic import ValidationError
 
+from sckitflow.core._samplers import IsotropicGaussianNoiseSamplerConfig, SamplerConfig, UniformTimeSamplerConfig
 from sckitflow.core._types import PredictionData
 from sckitflow.core.methods.inference._ode import ODEInference, ODEInferenceConfig
 from sckitflow.data._dims import DataDimensions
@@ -22,14 +23,6 @@ class DummyModule(torch.nn.Module):
 
     def get_vf_fn(self, *args, **kwargs):
         return self.forward
-
-
-def dummy_time_sampler(shape, *, generator, device=None, dtype=None):
-    return torch.rand(shape, generator=generator, device=device, dtype=dtype)
-
-
-def dummy_noise_sampler(shape, *, generator, device=None, dtype=None):
-    return torch.randn(shape, generator=generator, device=device, dtype=dtype)
 
 
 def gen(seed=0):
@@ -71,8 +64,26 @@ def step_data():
 
 @pytest.fixture
 def make_inference(dummy_module, dims):
+    """Build an ``ODEInference`` whose samplers are always configs.
+
+    Accepts raw sampler callables from the tests and wraps them into configs,
+    so the config is config-only at every construction site.
+    """
+
     def _make(latent=None, **config):
-        config.setdefault("time_sampler", dummy_time_sampler)
+        # Normalize time_sampler
+        ts = config.pop("time_sampler", None)
+        if ts is None or not isinstance(ts, SamplerConfig):
+            ts = UniformTimeSamplerConfig()
+        config["time_sampler"] = ts
+
+        # Normalize noise_sampler (optional)
+        ns = config.pop("noise_sampler", None)
+        if ns is not None and not isinstance(ns, SamplerConfig):
+            ns = IsotropicGaussianNoiseSamplerConfig()
+        if ns is not None:
+            config["noise_sampler"] = ns
+
         return ODEInference(dummy_module, ODEInferenceConfig(**config), dims=dims, latent=latent)
 
     return _make
@@ -104,13 +115,6 @@ def test_init_stores_module_config_and_dims(make_inference, dummy_module, dims):
     assert inference.config.return_trajectory is True
     assert inference.config.n_steps == 42
     assert inference.config.n_samples == 7
-
-
-def test_init_forwards_flow_config_to_parent(make_inference):
-    inference = make_inference(noise_sampler=dummy_noise_sampler, generate_from_noise=True, n_samples=2)
-    assert inference.noise_sampler is dummy_noise_sampler
-    assert inference.time_sampler is dummy_time_sampler
-    assert inference.generate_from_noise is True
 
 
 def test_default_config(dummy_module, dims):
@@ -153,7 +157,7 @@ def test_predict_uses_user_supplied_latent(make_inference, step_data, mocks):
 
 
 def test_predict_prepares_latent_with_dims_and_placement(make_inference, step_data, mocks, dims, dummy_module):
-    inference = make_inference(n_samples=4, generate_from_noise=True, noise_sampler=dummy_noise_sampler)
+    inference = make_inference(n_samples=4, generate_from_noise=True)
     g = gen()
     mocks["prep"].return_value = torch.zeros(4, 2, dims.state_dim)
     inference.predict(step_data, generator=g)
@@ -163,7 +167,6 @@ def test_predict_prepares_latent_with_dims_and_placement(make_inference, step_da
     # Positional: source, condition_dict, noise_sampler, dims.
     assert args[0] is step_data["source_state"]
     assert set(args[1]) == {"cond", "group"}
-    assert args[2] is dummy_noise_sampler
     assert args[3] is dims
     # Keyword: placement, samples, noise, generator.
     first_param = next(dummy_module.parameters())

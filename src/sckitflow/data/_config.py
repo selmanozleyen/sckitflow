@@ -49,7 +49,14 @@ class FlowDataModuleConfig(Component):
             raise ValueError("loader_kwargs must not set `seed`; the schedule is drawn from `rng`.")
         return kwargs
 
-    def build(self, adata: AnnData, *, rng: np.random.Generator, splitter: Splitter | None = None) -> FlowDataModule:
+    def build(
+        self,
+        adata: AnnData,
+        *,
+        rng: np.random.Generator,
+        control_adata: AnnData | None = None,
+        splitter: Splitter | None = None,
+    ) -> FlowDataModule:
         """Builds the data manager and returns the data module over ``adata``.
 
         :param adata: The `AnnData` to derive dimensionalities from and stream.
@@ -59,6 +66,7 @@ class FlowDataModuleConfig(Component):
         return FlowDataModule.from_adata(
             adata,
             self.manager.build(splitter=splitter),
+            control_adata=control_adata,
             train_split=self.train_split,
             n_train_steps=self.n_train_steps,
             batch_size=self.batch_size,

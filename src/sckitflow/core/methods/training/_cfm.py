@@ -11,7 +11,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_train,
 )
 from sckitflow.core._types import StepData
-from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodConfig, TrainingMethodConfig
+from sckitflow.core.methods._base import AbstractFlowMethod, FlowMethodConfig, TrainingMethodConfig
 from sckitflow.data._dims import DataDimensions
 
 __all__ = ["CFMTraining", "CFMTrainingConfig"]
@@ -93,7 +93,7 @@ class CFMTraining(AbstractFlowMethod):
 
 
 @component("training_method.cfm", builds=CFMTraining)
-class CFMTrainingConfig(AbstractFlowMethodConfig, TrainingMethodConfig):
+class CFMTrainingConfig(FlowMethodConfig, TrainingMethodConfig):
     """Conditional Flow Matching training."""
 
     def build(self, module: torch.nn.Module, *, dims: DataDimensions) -> CFMTraining:

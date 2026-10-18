@@ -14,7 +14,7 @@ import torch
 
 from sckitflow.core.surrogate._potential import (
     SurrogatePotential,
-    _attach_continuous_conditions_to_step_data,
+    _pair_leaf,
     _verify_continuous_conditions_dims,
 )
 
@@ -173,48 +173,6 @@ def cond_dict_default():
 
 
 # ---------------------------------------------------------------------------
-# _attach_continuous_conditions_to_step_data
-# ---------------------------------------------------------------------------
-
-
-class TestAttachConditions:
-    def test_returns_new_dict_and_preserves_other_keys(self):
-        step = make_step_data()
-        step["other"] = "untouched"
-        new_cond = {"cond_a": torch.ones(4, 3)}
-        out = _attach_continuous_conditions_to_step_data(step, new_cond)
-
-        assert out is not step
-        assert out["other"] == "untouched"
-        assert out["target_condition_data"]["cond_a"] is new_cond["cond_a"]
-
-    def test_does_not_mutate_input_condition_dict(self):
-        step = make_step_data()
-        original = step["target_condition_data"]["cond_a"]
-        new_cond = {"cond_a": torch.ones(4, 3)}
-        _attach_continuous_conditions_to_step_data(step, new_cond)
-
-        assert step["target_condition_data"]["cond_a"] is original
-
-    def test_raises_when_no_condition_data(self):
-        with pytest.raises(ValueError, match="does not contain any condition covariates"):
-            _attach_continuous_conditions_to_step_data({}, {"cond_a": torch.zeros(1, 1)})
-
-    def test_raises_on_unknown_key(self):
-        step = make_step_data(("cond_a",))
-        with pytest.raises(ValueError, match="does not appear as condition covariate"):
-            _attach_continuous_conditions_to_step_data(step, {"cond_b": torch.zeros(4, 3)})
-
-    def test_preserves_non_overlapping_keys(self):
-        step = make_step_data(("cond_a", "cond_b"))
-        new_cond = {"cond_a": torch.ones(4, 3)}
-        out = _attach_continuous_conditions_to_step_data(step, new_cond)
-
-        assert set(out["target_condition_data"]) == {"cond_a", "cond_b"}
-        assert out["target_condition_data"]["cond_b"] is step["target_condition_data"]["cond_b"]
-
-
-# ---------------------------------------------------------------------------
 # _verify_continuous_conditions_dims
 # ---------------------------------------------------------------------------
 
@@ -337,11 +295,11 @@ class TestForward:
         p2, _, _ = make_potential(n=3, seed=2)
         assert not torch.allclose(p1(cond), p2(cond))
 
-    def test_loader_is_cached_across_calls(self):
+    def test_loader_is_rebuilt_per_call(self):
         potential, _, dmod = make_potential()
         potential(make_cond_dict())
         potential(make_cond_dict())
-        assert dmod.predict_calls == 1
+        assert dmod.predict_calls == 2
 
     def test_inferer_called_once_per_leaf(self):
         potential, inferer, _ = make_potential(n_leaves=3)
@@ -538,16 +496,12 @@ class TestForwardErrors:
         with pytest.raises(ValueError, match="two-dimensional"):
             potential({"cond_a": torch.zeros(4)})
 
-    def test_device_mismatch_across_conditions(self):
+    def test_conditions_move_to_the_module_device(self):
         if not torch.cuda.is_available():
             pytest.skip("CUDA not available")
         potential, _, _ = make_potential(cond_keys=("cond_a", "cond_b"))
-        cond = {
-            "cond_a": torch.zeros(4, 3),
-            "cond_b": torch.zeros(4, 3, device="cuda"),
-        }
-        with pytest.raises(ValueError, match="wrong device"):
-            potential(cond)
+        cond = {"cond_a": torch.zeros(4, 3), "cond_b": torch.zeros(4, 3, device="cuda")}
+        assert potential(cond).device.type == "cpu"
 
     def test_compute_raw_potential_wrong_shape(self):
         class BadShape(MSESurrogate):
@@ -582,3 +536,68 @@ class TestForwardErrors:
 
         with pytest.raises(ValueError, match="last dim"):
             p(make_cond_dict(n=4))
+
+
+# ---------------------------------------------------------------------------
+# Pairing a leaf against the conditions
+# ---------------------------------------------------------------------------
+
+
+class TestPairLeaf:
+    def test_source_and_target_rows_form_a_cartesian_product(self):
+        step = {
+            "source_state": torch.tensor([[0.0], [1.0]]),
+            "target_condition_data": {"other": torch.tensor([[10.0], [11.0]]), "opt": torch.zeros(2, 1)},
+        }
+        paired, _ = _pair_leaf(step, {"opt": torch.zeros(1, 1)}, torch.device("cpu"))
+        pairs = list(
+            zip(
+                paired["source_state"][:, 0, 0].tolist(),
+                paired["target_condition_data"]["other"][:, 0, 0].tolist(),
+                strict=False,
+            )
+        )
+        assert sorted(pairs) == [(0, 10), (0, 11), (1, 10), (1, 11)]
+
+    def test_all_covariates_optimized_with_more_target_than_source_rows(self):
+        step = {"source_state": torch.randn(2, 4), "target_group_data": {"g": torch.ones(5, 2)}}
+        paired, conds = _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+        assert paired["source_state"].shape == (2, 3, 4)
+        assert paired["target_group_data"]["g"].shape == (2, 3, 2)
+        assert conds["opt"].shape == (2, 3, 1)
+
+    def test_groups_only_generation_from_noise_is_aligned(self):
+        step = {"target_group_data": {"g": torch.ones(5, 2)}}
+        paired, conds = _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+        assert paired["target_group_data"]["g"].shape == (1, 3, 2)
+        assert conds["opt"].shape == (1, 3, 1)
+
+    def test_varying_group_rows_without_target_conditions_raise(self):
+        step = {"target_group_data": {"g": torch.arange(5.0).reshape(5, 1)}}
+        with pytest.raises(ValueError, match="varies within a leaf"):
+            _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+
+    def test_target_states_are_not_passed_to_prediction(self):
+        step = {"source_state": torch.randn(2, 4), "target_state": torch.randn(7, 4), "target_condition_data": {}}
+        paired, _ = _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+        assert paired["target_state"] is None
+
+
+class TestPopulations:
+    def test_shape_and_first_population_matches_forward(self):
+        potential, _, _ = make_potential(n=3)
+        cond = make_cond_dict(n=3)
+        pops = potential.population_potentials(cond, n_populations=4)
+        assert pops.shape == (4, 3)
+        torch.testing.assert_close(pops[0], potential(cond))
+
+    def test_populations_differ(self):
+        potential, _, _ = make_potential(n=3)
+        pops = potential.population_potentials(make_cond_dict(n=3), n_populations=2)
+        assert not torch.allclose(pops[0], pops[1])
+
+
+def test_empty_prediction_loader_raises():
+    potential, _, _ = make_potential(n_leaves=0)
+    with pytest.raises(ValueError, match="no prediction leaves"):
+        potential(make_cond_dict())

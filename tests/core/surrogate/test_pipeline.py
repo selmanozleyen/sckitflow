@@ -645,7 +645,8 @@ class TestRealInference:
             pytest.param(
                 ("target",),
                 marks=pytest.mark.xfail(
-                    strict=True, reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too"
+                    strict=True,
+                    reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too",
                 ),
             ),
         ],

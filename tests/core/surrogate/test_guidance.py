@@ -72,3 +72,18 @@ def test_runs_under_no_grad(x0):
     with torch.no_grad():
         x = guided_sample(velocity, potential, x0, n_steps=20, guidance_scale=0.3)
     assert x.shape == x0.shape and not x.requires_grad
+
+
+def test_zero_scale_never_evaluates_the_potential(x0):
+    def potential(_):
+        raise AssertionError("evaluated")
+
+    x = guided_sample(velocity, potential, x0, n_steps=20, guidance_scale=0.0)
+    assert x.shape == x0.shape
+
+
+def test_inference_tensor_as_noise(x0):
+    with torch.inference_mode():
+        noise = x0.clone()
+    x = guided_sample(velocity, potential, noise, n_steps=20, guidance_scale=0.3)
+    assert x.shape == x0.shape

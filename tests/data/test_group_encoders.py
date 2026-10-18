@@ -70,7 +70,6 @@ class TestPortableSpec:
     def test_spec_is_json_shaped(self) -> None:
         assert AffineTransformerConfig(scale=2.0).to_spec() == {
             "type": "group_encoder.affine",
-            "version": 1,
             "scale": 2.0,
             "shift": 0.0,
         }
@@ -78,9 +77,8 @@ class TestPortableSpec:
     @pytest.mark.parametrize(
         "spec",
         [
-            {"type": "group_encoder.affine", "version": 1, "scal": 2.0},  # typo'd field
-            {"type": "group_encoder.nope", "version": 1},  # unknown type
-            {"type": "group_encoder.affine", "version": 99},  # unsupported version
+            {"type": "group_encoder.affine", "scal": 2.0},  # typo'd field
+            {"type": "group_encoder.nope"},  # unknown type
         ],
     )
     def test_rejects_bad_spec(self, spec: dict) -> None:

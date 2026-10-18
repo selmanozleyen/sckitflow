@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning][].
 
 ## [Unreleased]
 
+### Changed
+
+- `save_run` / `load_run` use the Hugging Face Hub layout of `scfit.pretrained` (`config.json` plus `module/model.safetensors`), and `load_run` also takes a Hub repo id. Specs carry no `version`. Runs and checkpoints saved before this no longer load: a run reads back under the package versions that saved it
+
 ### Added
 
 - Basic tool, preprocessing and plotting functions

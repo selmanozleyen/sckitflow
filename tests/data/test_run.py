@@ -1,7 +1,9 @@
 import json
 
+import pytest
 import torch
 from anndata import AnnData
+from scfit.pretrained import save_pretrained
 
 from sckitflow import RunConfig, load_run, save_run
 from sckitflow.core.methods.inference._ode import ODEInferenceConfig
@@ -36,7 +38,7 @@ def test_load_run_round_trips(tmp_path, adata_small: AnnData):
         splitter_seed=3,
     )
     save_run(tmp_path, spec, module)
-    document = json.loads((tmp_path / "specs.json").read_text())
+    document = json.loads((tmp_path / "config.json").read_text())
     assert (document["loader_seed"], document["splitter_seed"]) == (0, 3)
     assert document["data"]["manager"]["groups_encoding"]["cell_line"]["type"] == "group_encoder.one_hot"
 
@@ -57,3 +59,12 @@ def test_checkpoint_state_is_plain_data(tmp_path, adata_small: AnnData):
     assert restored.data_dims.feature_names.equals(datamodule.data_dims.feature_names)
     assert restored.data_dims.state_dim == datamodule.data_dims.state_dim
     assert restored.dm.splitter.assign(adata_small).equals(datamodule.dm.splitter.assign(adata_small))
+
+
+def test_load_run_needs_a_run_with_module_weights(tmp_path, adata_small: AnnData):
+    save_pretrained(tmp_path / "not_a_run", DATA)
+    with pytest.raises(TypeError, match="not a run"):
+        load_run(tmp_path / "not_a_run", adata_small)
+    save_pretrained(tmp_path / "no_weights", RunConfig(data=DATA, training=CFMTrainingConfig()))
+    with pytest.raises(ValueError, match="no module weights"):
+        load_run(tmp_path / "no_weights", adata_small, torch.nn.Linear(2, 2))

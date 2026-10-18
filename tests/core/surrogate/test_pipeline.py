@@ -628,3 +628,52 @@ class TestYstarAndMask:
         )
         assert potential.ystar.device == potential.mask.device
         assert potential.mask.dtype == torch.bool
+
+
+# ---------------------------------------------------------------------------
+# Real inference method
+# ---------------------------------------------------------------------------
+
+
+class TestRealInference:
+    """A real `ODEInference` (untrained), since fake inferers accept any layout."""
+
+    @pytest.mark.parametrize(
+        "groups",
+        [
+            None,
+            pytest.param(
+                ("target",),
+                marks=pytest.mark.xfail(
+                    strict=True, reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too"
+                ),
+            ),
+        ],
+        ids=["noise", "noise-groups"],
+    )
+    def test_generate_from_noise(self, adata, ystar, groups):
+        from sckitflow.core.methods import ODEInference, ODEInferenceConfig
+        from sckitflow.core.nn import MLPVelocity
+
+        dmod = build_datamodule(
+            adata,
+            conditions_covariates=(CONT_COV_1,),
+            groups=groups,
+            groups_encoding=None if groups is None else {"target": "label"},
+        )
+        dmod.set_predict_data(adata, require_target_state=False)
+        dims = dmod.data_dims
+        layers = {**dims.condition_continuous_dims, **(dims.groups_reps_dims or {})}
+        module = MLPVelocity(
+            dims.state_dim,
+            time_features_id="torch-cfm",
+            conditioning_id="resnet1d",
+            condition_encoder_input_layers={k: {"input_dim": d, "output_dim": 2} for k, d in layers.items()},
+        )
+        inferer = ODEInference(module, ODEInferenceConfig(generate_from_noise=True, n_samples=2, n_steps=2), dims=dims)
+        potential = MeanMSESurrogate(inferer, ystar, dmod)
+        cond = {CONT_COV_1: torch.zeros(3, 1, requires_grad=True)}
+        out = potential(cond)
+        out.sum().backward()
+        assert out.shape == (3,)
+        assert torch.isfinite(cond[CONT_COV_1].grad).all()

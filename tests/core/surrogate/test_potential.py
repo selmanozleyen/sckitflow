@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from sckitflow._random import generators
 from sckitflow.core.surrogate._potential import (
     SurrogatePotential,
     _pair_leaf,
@@ -566,11 +567,20 @@ class TestPairLeaf:
         assert paired["target_group_data"]["g"].shape == (2, 3, 2)
         assert conds["opt"].shape == (2, 3, 1)
 
-    def test_groups_only_generation_from_noise_is_aligned(self):
+    def test_groups_only_generation_from_noise_joins_each_condition(self):
         step = {"target_group_data": {"g": torch.ones(5, 2)}}
         paired, conds = _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
-        assert paired["target_group_data"]["g"].shape == (1, 3, 2)
-        assert conds["opt"].shape == (1, 3, 1)
+        assert paired["target_group_data"]["g"].shape == (3, 2)
+        assert conds["opt"].shape == (3, 1)
+
+    def test_empty_group_rows_raise(self):
+        with pytest.raises(ValueError, match="has no rows"):
+            _pair_leaf({"target_group_data": {"g": torch.ones(0, 2)}}, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+
+    def test_other_keys_pass_through(self):
+        step = {"source_state": torch.randn(2, 4), "target_condition_data": {}, "extra": "kept"}
+        paired, _ = _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+        assert paired["extra"] == "kept"
 
     def test_varying_group_rows_without_target_conditions_raise(self):
         step = {"target_group_data": {"g": torch.arange(5.0).reshape(5, 1)}}
@@ -590,6 +600,12 @@ class TestPopulations:
         pops = potential.population_potentials(cond, n_populations=4)
         assert pops.shape == (4, 3)
         torch.testing.assert_close(pops[0], potential(cond))
+
+    def test_forward_keeps_the_single_population_stream(self):
+        potential, inferer, _ = make_potential(n_leaves=2)
+        potential(make_cond_dict())
+        seeds = [generator.initial_seed() for _, generator in inferer.calls]
+        assert seeds == [generators(potential.seed, i)[0].initial_seed() for i in range(2)]
 
     def test_populations_differ(self):
         potential, _, _ = make_potential(n=3)

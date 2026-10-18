@@ -24,6 +24,17 @@ def _rows(container: Any) -> int | None:
     return tensors[0].shape[0] if tensors else None
 
 
+def _one_group_row(groups: Any) -> dict[str, torch.Tensor]:
+    """The single row standing for a leaf's group data, which is constant within a leaf."""
+    rows = get_tensor_dict_from_data(groups)
+    for key, value in rows.items():
+        if value.shape[0] == 0:
+            raise ValueError(f"Target group data {key!r} has no rows.")
+        if not torch.equal(value, value[:1].expand_as(value)):
+            raise ValueError(f"Target group data {key!r} varies within a leaf; it cannot stand for one row.")
+    return {k: v[:1] for k, v in rows.items()}
+
+
 def _pair_leaf(
     step_data: StepData,
     cond_dict: dict[str, torch.Tensor],
@@ -33,30 +44,38 @@ def _pair_leaf(
 
     A leaf has ``S`` source rows (when a source state is present) and ``T`` target rows. The target rows
     only vary when the leaf carries condition covariates that are not optimized; otherwise they hold the
-    leaf's group data, which is constant within a leaf, so a single row stands for all of them. The
-    ``P`` pairs are the Cartesian product of the varying source and target rows, and every field is laid
-    out as $(P, N, \dots)$ against the $N$ condition samples.
+    leaf's group data, which is constant within a leaf, so a single row stands for all of them.
 
-    Only the fields prediction reads are kept: the source side, and the target conditions and groups.
-    Other target fields (states, couplings, responses) are dropped, since the conditions replace the
-    target side. Everything is moved to ``device``.
+    When neither varies, the $N$ conditions are the batch and the group row joins each of them, the
+    layout prediction reads for generation from noise. Otherwise the ``P`` pairs are the Cartesian
+    product of the varying source and target rows, laid out as $(P, N, \dots)$. ``ODEInference`` reads
+    that layout only with a source and ``generate_from_noise=False``, where ``P`` acts as its sample axis.
+
+    Target fields prediction does not read (states, couplings, responses) are dropped, since the
+    conditions replace the target side. Everything prediction reads is moved to ``device``.
     """
     optimized = set(cond_dict)
     extra = {
         k: v for k, v in get_tensor_dict_from_data(step_data.get("target_condition_data")).items() if k not in optimized
     }
-    groups = step_data.get("target_group_data")
     S = _rows(step_data.get("source_state"))
     T = _rows(extra) if extra else None
-    if S is None and T is None and _rows(groups) is None:
-        # nothing to pair: the conditions alone are the batch
+    n = next(iter(cond_dict.values())).shape[0]
+    groups = step_data.get("target_group_data")
+    if groups is not None and T is None:
+        groups = _one_group_row(groups)
+    kept: StepData = {key: (None if key.startswith("target_") else value) for key, value in step_data.items()}
+
+    if S is None and T is None:
         conds = {k: v.to(device) for k, v in cond_dict.items()}
-        return {**step_data, "target_condition_data": conds}, conds
+        if groups is not None:
+            groups = {k: v.to(device).expand(n, *v.shape[1:]) for k, v in groups.items()}
+        return {**kept, "target_condition_data": conds, "target_group_data": groups}, conds
 
     s, t = S or 1, T or 1
     src_idx = torch.arange(s, device=device).repeat_interleave(t)
     tgt_idx = torch.arange(t, device=device).repeat(s)
-    n_pairs, n = s * t, next(iter(cond_dict.values())).shape[0]
+    n_pairs = s * t
 
     def lay_out(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         x = x.to(device)[idx]
@@ -69,20 +88,13 @@ def _pair_leaf(
             return lay_out(container, idx)
         return {k: lay_out(v, idx) for k, v in get_tensor_dict_from_data(container).items()}
 
-    if groups is not None and T is None:
-        # groups are constant within a leaf; check it, since one row stands for all of them
-        for key, value in get_tensor_dict_from_data(groups).items():
-            if not torch.equal(value, value[:1].expand_as(value)):
-                raise ValueError(f"Target group data {key!r} varies within a leaf; it cannot stand for one row.")
-        groups = {k: v[:1] for k, v in get_tensor_dict_from_data(groups).items()}
-
     conds = {k: v.to(device).unsqueeze(0).expand(n_pairs, *v.shape) for k, v in cond_dict.items()}
     paired: StepData = {
-        key: (lay_out_container(value, src_idx) if key.startswith("source_") else None)
-        for key, value in step_data.items()
+        **kept,
+        **{key: lay_out_container(value, src_idx) for key, value in step_data.items() if key.startswith("source_")},
+        "target_group_data": lay_out_container(groups, tgt_idx),
+        "target_condition_data": {**{k: lay_out(v, tgt_idx) for k, v in extra.items()}, **conds},
     }
-    paired["target_group_data"] = lay_out_container(groups, tgt_idx)
-    paired["target_condition_data"] = {**{k: lay_out(v, tgt_idx) for k, v in extra.items()}, **conds}
     return paired, conds
 
 
@@ -252,7 +264,8 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
         for population in range(n_populations):
             potentials = []
             for i, (step_data, leaf) in enumerate(leaves):
-                generator, _ = generators(self._seed, i, population, device=device)
+                # population 0 keeps the single-population stream, so `forward` draws what it always drew
+                generator, _ = generators(self._seed, i, *((population,) if population else ()), device=device)
                 paired_step_data, _ = _pair_leaf(step_data, cond_dict, device)
                 y = self.get_response(self.inferer.predict(paired_step_data, generator=generator))
                 if y.shape[-1] != self.ystar.shape[-1]:

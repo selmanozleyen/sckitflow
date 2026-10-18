@@ -2,7 +2,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from sckitflow.data._group_encoders import (
+    GroupEncoderConfig,
+    GroupEncoderContext,
+    LabelEncoderConfig,
+    OneHotEncoderConfig,
+)
 from sckitflow.data.containers import CategoricalData
+
+LABEL = LabelEncoderConfig(classes=("control", "koA"))
+ONE_HOT = OneHotEncoderConfig(categories=("control", "koA"))
 
 
 # Dummy encoder that returns a fixed 2D array of ones (shape: (n_samples, 1))
@@ -178,11 +187,9 @@ class TestEncoderOutputShape:
     """Every encoder must stack to `(n_obs, n_cols, d)`; `LabelEncoder` is the 1-D odd one out."""
 
     @staticmethod
-    def _reps(encoder_id: str, values: list[str]) -> np.ndarray:
-        from sckitflow.data._group_encoders import GroupEncoderContext, as_group_encoder
-
+    def _reps(config: GroupEncoderConfig, values: list[str]) -> np.ndarray:
         col = np.asarray(values)
-        encoder = as_group_encoder(encoder_id).build(GroupEncoderContext(col))
+        encoder = config.build(GroupEncoderContext(col))
         cat = CategoricalData.from_pandas(
             pd.DataFrame({"ko": col}),
             categorical_encoders={"ko": encoder},
@@ -197,10 +204,10 @@ class TestEncoderOutputShape:
         `DimsRegistry` reports dim 1 for a label encoder, so a rank-2 stack builds the model for a
         width the loader never delivers -- and `_leaf_encoding` rejects the rank outright.
         """
-        assert self._reps("label", ["koA", "control", "koA"]).shape == (3, 1, 1)
+        assert self._reps(LABEL, ["koA", "control", "koA"]).shape == (3, 1, 1)
 
     def test_one_hot_encoder_width_is_the_vocabulary(self):
-        assert self._reps("one-hot", ["koA", "control", "koA"]).shape == (3, 1, 2)
+        assert self._reps(ONE_HOT, ["koA", "control", "koA"]).shape == (3, 1, 2)
 
     def test_label_encoding_does_not_warn(self):
         """A column-vector into `LabelEncoder` "works" but raises sklearn's `DataConversionWarning`."""
@@ -208,7 +215,7 @@ class TestEncoderOutputShape:
 
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            self._reps("label", ["koA", "control"])
+            self._reps(LABEL, ["koA", "control"])
         assert [w for w in record if "column-vector" in str(w.message)] == []
 
     def test_a_rank_3_encoder_output_is_refused(self):

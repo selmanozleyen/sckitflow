@@ -11,6 +11,7 @@ from anndata import AnnData
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder, OneHotEncoder
 
 from sckitflow._types import TargetCovariatesEncodingId
+from sckitflow.data._group_encoders import GroupEncoderConfig, LabelEncoderConfig, OneHotEncoderConfig
 from sckitflow.data._mixins import BatchMixin
 from sckitflow.data.containers import CategoricalData
 
@@ -66,22 +67,23 @@ def verify_repr(
     data: CategoricalData,
     uns_keys_to_nunique_prefix_and_dim: dict[str, tuple[int, str, int]],
     categorical_reps: dict[str, str] | None = None,
-    groups_encoding: dict[str, TargetCovariatesEncodingId] | None = None,
+    groups_encoding: dict[str, GroupEncoderConfig | TargetCovariatesEncodingId] | None = None,
 ) -> None:
     if categorical_reps is not None:
         for condition, value in categorical_reps.items():
             assert value in data.repr_dict
             verify_repr_shape(data, condition, uns_keys_to_nunique_prefix_and_dim)
     if groups_encoding is not None:
-        for cov, encoder_id in groups_encoding.items():
+        for cov, encoding in groups_encoding.items():
             assert cov in data.categorical_encoders
-            encoder = data.categorical_encoders[cov]
-            if encoder_id == "one-hot":
-                assert isinstance(encoder, OneHotEncoder)
-            if encoder_id == "label":
-                assert isinstance(encoder, LabelEncoder)
-            if encoder_id == "identity":
-                assert isinstance(encoder, FunctionTransformer)
+            # group encoders are configs; response covariates still name theirs by id
+            expected = {
+                OneHotEncoderConfig: OneHotEncoder,
+                LabelEncoderConfig: LabelEncoder,
+                "one-hot": OneHotEncoder,
+                "label": LabelEncoder,
+            }.get(encoding if isinstance(encoding, str) else type(encoding), FunctionTransformer)
+            assert isinstance(data.categorical_encoders[cov], expected)
 
 
 def verify_categorical_data(
@@ -89,7 +91,7 @@ def verify_categorical_data(
     expected_df_cols: Collection[str],
     uns_keys_to_nunique_prefix_and_dim: dict[str, tuple[int, str, int]],
     categorical_reps: dict[str, str] | None = None,
-    groups_encoding: dict[str, TargetCovariatesEncodingId] | None = None,
+    groups_encoding: dict[str, GroupEncoderConfig | TargetCovariatesEncodingId] | None = None,
 ) -> None:
     assert set(data.ann_df.columns) == set(expected_df_cols)
     verify_repr(

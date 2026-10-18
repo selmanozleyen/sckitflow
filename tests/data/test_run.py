@@ -13,6 +13,8 @@ from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.data._manager import DataManagerConfig
 from sckitflow.data.splitters._combination import CombinationSplitterConfig
 
+from .conftest import CELL_LINES
+
 SPLITTER = CombinationSplitterConfig(
     group_keys=("cell_line", "drug"), always_train_keys=("cell_line",), control_key="drug", test_fraction=0.5
 )
@@ -21,7 +23,7 @@ DATA = FlowDataModuleConfig(
         categorical_conditions={"drug": ("drug",)},
         categorical_reps={"drug": "drug"},
         groups=("cell_line",),
-        groups_encoding={"cell_line": OneHotEncoderConfig()},
+        groups_encoding={"cell_line": OneHotEncoderConfig(categories=tuple(CELL_LINES))},
         split_by="split",
     ),
     batch_size=4,
@@ -61,3 +63,20 @@ def test_checkpoint_state_is_plain_data(tmp_path, adata_small: AnnData):
     assert restored.dm.config == datamodule.dm.config
     assert restored.data_dims.feature_names.equals(datamodule.data_dims.feature_names)
     assert restored.data_dims.state_dim == datamodule.data_dims.state_dim
+
+
+def test_reload_keeps_the_training_vocabulary(tmp_path, adata_small: AnnData):
+    """A reloaded run encodes each group as in training, even when the new data lacks one of them."""
+    spec = RunConfig(data=DATA, training=CFMTrainingConfig())
+    save_run(tmp_path, spec, torch.nn.Linear(2, 2))
+    first, *rest = CELL_LINES
+    without_first = adata_small[adata_small.obs["cell_line"] != first].copy()
+
+    def encodings(datamodule) -> dict:
+        encoder = datamodule.dm.get_distribution_data(without_first).groups_data.categorical_encoders["cell_line"]
+        return {line: encoder.transform([[line]]).toarray().tolist() for line in rest}
+
+    trained = spec.build(_split(adata_small), torch.nn.Linear(2, 2)).datamodule
+    reloaded = load_run(tmp_path, _split(without_first), torch.nn.Linear(2, 2)).datamodule
+    assert encodings(reloaded) == encodings(trained)
+    assert reloaded.data_dims.groups_reps_dims == trained.data_dims.groups_reps_dims

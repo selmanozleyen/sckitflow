@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 from sckitflow._types import TargetCovariatesEncodingId
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data._group_encoders import GroupEncoderConfig, GroupEncoderId
+from sckitflow.data._group_encoders import GroupEncoderConfig
 from sckitflow.data._utils import AnnDataLike, as_adatas, with_derived_obs_stacked
 from sckitflow.data.containers._categorical import CategoricalData
 from sckitflow.data.containers._coupling import CouplingData
@@ -775,11 +775,11 @@ class DataManagerConfig(Component):
     """Mapping for pre-computed representations of grouping covariates, used to initialize the target
     data schema."""
 
-    groups_encoding: dict[str, GroupEncoderConfig | GroupEncoderId] | None = None
+    groups_encoding: dict[str, GroupEncoderConfig] | None = None
     """Mapping from each group column to a :class:`~sckitflow.data._group_encoders.GroupEncoderConfig`
-    (e.g. ``OneHotEncoderConfig()``, ``LabelEncoderConfig()``, ``AffineTransformerConfig(scale=2.0)``), used to initialize the grouping data
-    schema. Encoders are frozen configs that build their fitted transformer on demand. The
-    string ids ``"label"`` / ``"one-hot"`` are accepted as shorthand for the parameter-free encoders."""
+    (e.g. ``OneHotEncoderConfig(categories=("A549", "K562"))``, ``AffineTransformerConfig(scale=2.0)``), used to
+    initialize the grouping data schema. Encoders are frozen configs that build their fitted transformer on
+    demand, and the categorical ones list their categories explicitly."""
 
     rep_lin: str | None = None
     """String identifier for the linear representation of the states, used when matching

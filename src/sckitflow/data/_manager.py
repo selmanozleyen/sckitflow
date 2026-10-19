@@ -54,7 +54,6 @@ class _Selection(NamedTuple):
     """
 
     adata: AnnData
-    control_adata: AnnData | None
     pair_key: str | None
     extras: list[tuple]
     keys: list[tuple]
@@ -68,7 +67,7 @@ class LoaderKwargs(TypedDict, total=False):
     Declared here rather than beside :class:`~sckitflow.data._loader.Loader` so that typing a call site
     does not import the scfit/annbatch stack (~2s) that the loader module pulls in.
 
-    Everything describing *which* observations a loader streams (``primary_weights``, ``control_adata``,
+    Everything describing *which* observations a loader streams (``primary_weights``,
     ``control_weights``) is derived by :meth:`DataManager.get_dataloaders` and so is deliberately absent:
     these are the knobs that survive being passed through.
     """
@@ -347,10 +346,6 @@ class DataManager:
         n_features = self._get_state_data(adata).X.shape[1]
         return self._get_feature_names(adata, n_features)
 
-    def _combos(self, adata: AnnData) -> list[tuple]:
-        """The unique ``group_cols`` combinations present in ``adata.obs``."""
-        return [tuple(row) for row in adata.obs.loc[:, list(self.group_cols)].drop_duplicates().to_numpy()]
-
     def _is_control(self, uniq: pd.DataFrame, control_values_dict: dict[str, str] | None) -> np.ndarray:
         """Which rows of ``uniq`` are controls, per the control value of every condition level."""
         cvd = control_values_dict if control_values_dict is not None else self._control_values_dict
@@ -403,7 +398,6 @@ class DataManager:
         self,
         adata: AnnData,
         *,
-        control_adata: AnnData | None = None,
         extra_cols: Collection[str] = (),
         control_values_dict: dict[str, str] | None = None,
         matched_keys: Mapping[tuple, tuple] | None = None,
@@ -424,23 +418,18 @@ class DataManager:
         if not matched_keys:
             is_source = self._is_control(uniq, control_values_dict)
             # Without named pairs, every non-control combination is a target.
-            return _Selection(adata, control_adata, None, extras, combos, is_source, ~is_source)
+            return _Selection(adata, None, extras, combos, is_source, ~is_source)
 
         ids = self._pair_ids(matched_keys)
         sources = {tuple(key) for key in matched_keys}
         targets = {tuple(key) for key in matched_keys.values()}
-        # Sources live in the control pool when there is one, in `adata` otherwise. An unknown key is a hard
-        # error: streaming nothing for it is how a typo becomes a training run.
+        # An unknown key is a hard error: streaming nothing for it is how a typo becomes a training run.
         self._assert_keys_present(targets, combos, "target")
-        pool = self._combos(control_adata) if control_adata is not None else combos
-        self._assert_keys_present(sources, pool, "source")
+        self._assert_keys_present(sources, combos, "source")
 
         adata = with_derived_obs(adata, {_PAIR_KEY: self._pair_column(adata, ids)})
-        if control_adata is not None:
-            control_adata = with_derived_obs(control_adata, {_PAIR_KEY: self._pair_column(control_adata, ids)})
         return _Selection(
             adata,
-            control_adata,
             _PAIR_KEY,
             extras,
             [(*combo, ids.get(combo, "")) for combo in combos],
@@ -480,8 +469,6 @@ class DataManager:
     def get_dataloaders(
         self,
         adata: AnnData,
-        *,
-        control_adata: AnnData | None = None,
         **loader_kwargs: Unpack[LoaderKwargs],
     ) -> dict[str, Loader]:
         """Build one streaming data loader per split value, as declared by the schema.
@@ -492,9 +479,8 @@ class DataManager:
 
         Selection is by scfit weights over scfit's own leaf factorization -- no subset copying. The whole
         ``adata`` is streamed; each split's primary weights pick out that split's perturbed groups
-        (controls get weight 0). Controls are shared across splits: pass ``control_adata`` (a separate
-        pool -- faster to load, and the cross-dataset case), or, when omitted, they are drawn from
-        ``adata`` itself by weight.
+        (controls get weight 0). Controls are shared across splits and drawn from ``adata`` itself by weight;
+        the loader holds just them in memory.
 
         The split column is part of the primary's ``group_by``, so a leaf is ``(split, *group_cols)`` and a
         split's weights exclude observations rather than whole groups. That matters when a group spans splits (a
@@ -506,9 +492,6 @@ class DataManager:
 
         :param adata: The annotated data object to stream.
         :type adata: class: `AnnData`
-
-        :param control_adata: Optional separate control (source) pool, shared by every split.
-        :type control_adata: class: `AnnData | None`
 
         :param loader_kwargs: Forwarded to each :class:`Loader`. See :class:`LoaderKwargs` for the
             accepted options.
@@ -530,7 +513,7 @@ class DataManager:
         if split_by is None:
             # No split at all: one loader over every perturbed group, keyed "train". With no schema to
             # group on there is nothing to weight either -- `None` streams the whole adata uniformly.
-            sel = self._selection(adata, control_adata=control_adata)
+            sel = self._selection(adata)
             if self.group_cols:
                 weights = {key: 1.0 for key, tgt in zip(sel.keys, sel.is_target, strict=True) if tgt}
                 controls = {key: 1.0 for key, src in zip(sel.keys, sel.is_source, strict=True) if src}
@@ -541,14 +524,13 @@ class DataManager:
                     sel.adata,
                     **self._training_loader_schema,
                     primary_weights=weights,
-                    control_adata=sel.control_adata,
-                    control_weights=None if sel.control_adata is not None else controls,
+                    control_weights=controls,
                     pair_key=sel.pair_key,
                     **loader_kwargs,
                 )
             }
 
-        sel = self._selection(adata, control_adata=control_adata, extra_cols=(split_by,))
+        sel = self._selection(adata, extra_cols=(split_by,))
 
         # Controls are shared across splits, so their weights carry no split (the control link does not group
         # on it). The primary's do, one leaf per (split, group).
@@ -564,10 +546,7 @@ class DataManager:
                 **self._training_loader_schema,
                 split_by=split_by,
                 primary_weights=weights,
-                control_adata=sel.control_adata,
-                control_weights=(
-                    None if sel.control_adata is not None else (dict.fromkeys(control_weights, 1.0) or None)
-                ),
+                control_weights=dict.fromkeys(control_weights, 1.0) or None,
                 pair_key=sel.pair_key,
                 **loader_kwargs,
             )
@@ -580,7 +559,6 @@ class DataManager:
         *,
         max_per_group: int | None = None,
         require_target_state: bool = True,
-        control_adata: AnnData | None = None,
         control_values_dict: dict[str, str] | None = None,
         matched_keys: Mapping[tuple, tuple] | None = None,
         subsample: str = "head",
@@ -609,9 +587,6 @@ class DataManager:
             ``False`` for metadata-only prediction (``StepData["target_state"]`` is ``None``). Defaults to ``True``.
         :type require_target_state: class: `bool`
 
-        :param control_adata: Optional separate control (source) pool, matched on the group columns.
-        :type control_adata: class: `AnnData | None`
-
         :param control_values_dict: Overrides the instance's control values for this call. Defaults to
             ``None`` (use the instance's); ``{}`` predicts unpaired.
         :type control_values_dict: class: `dict[str, str] | None`
@@ -635,7 +610,6 @@ class DataManager:
 
         sel = self._selection(
             adata,
-            control_adata=control_adata,
             control_values_dict=control_values_dict,
             matched_keys=matched_keys,
         )
@@ -650,7 +624,6 @@ class DataManager:
             sel.adata,
             **self._loader_schema,
             primary_weights=primary_weights,
-            control_adata=sel.control_adata,
             control_weights=control_weights,
             pair_key=sel.pair_key,
             require_target_state=require_target_state,

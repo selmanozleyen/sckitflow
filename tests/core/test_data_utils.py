@@ -78,8 +78,17 @@ def _col(field) -> list[float]:
 
 
 class TestSubscriptStepData:
-    def test_a_group_row_is_not_reordered(self):
-        """A leading axis of 1 is the same for every row (a group's encoding), so a permutation leaves it."""
+    def test_a_one_row_target_is_expanded_by_its_index(self):
+        """Every per-observation field is indexed, whatever its row count: one target matched four times is four rows."""
+        out = subscript_step_data(
+            new_step_data(target_state=torch.zeros(1, 3), source_state=torch.arange(4.0).reshape(4, 1)),
+            src_idxs=torch.tensor([0, 1, 2, 3]),
+            tgt_idxs=torch.tensor([0, 0, 0, 0]),
+        )
+        assert out["target_state"].shape == (4, 3) and out["n_obs"] == 4
+
+    def test_the_group_row_is_not_reordered(self):
+        """`target_group_data` describes the whole batch, one row, so a permutation leaves it."""
         group_row = torch.tensor([[7.0]])
         batch = {**_batch(), "target_group_data": {"line": group_row}}
         out = subscript_step_data(batch, tgt_idxs=torch.tensor([3, 1, 2, 0]))
@@ -98,7 +107,8 @@ class TestSubscriptStepData:
         out = subscript_step_data(_batch(), src_idxs=torch.tensor([1]), tgt_idxs=torch.tensor([2]))
 
         assert _col(out["target_condition_data"]["drug"]) == [202.0]
-        assert _col(out["target_group_data"]["line"]) == [302.0]
+        assert _col(out["target_group_data"]["line"]) == [300.0, 301.0, 302.0, 303.0]  # describes the batch: not sliced
+        assert out["n_obs"] == 1
         assert _col(out["source_condition_data"]["drug"]) == [1201.0]
         assert out["target_condition_data"]["absent"] is None
 
@@ -242,6 +252,7 @@ class TestPrepareLatentInference:
             n_samples=3,
             generate_from_noise=True,
             generator=_gen(),
+            n_obs=5,
         )
         assert out.shape == (3, 5, dims.state_dim)
 
@@ -256,8 +267,22 @@ class TestPrepareLatentInference:
             n_samples=None,
             generate_from_noise=True,
             generator=_gen(),
+            n_obs=5,
         )
         assert out.shape == (5, dims.state_dim)
+
+    def test_unpaired_with_conditioning_needs_n_obs(self, dims):
+        """A group's encoding is one row, so the row count must be given, not read off it."""
+        with pytest.raises(ValueError, match="needs its row count"):
+            prepare_latent_inference(
+                None,
+                _cond(1),
+                _sampler,
+                dims,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                generator=_gen(),
+            )
 
     def test_standalone_with_n_samples(self, dims):
         """No source, no conditioning: draw `n_samples` standalone latents of width `dims.state_dim`."""
@@ -324,5 +349,6 @@ class TestPrepareLatentInference:
             n_samples=None,
             generate_from_noise=True,
             generator=_gen(),
+            n_obs=3,
         )
         assert out.dtype is torch.float64

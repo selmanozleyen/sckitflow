@@ -147,6 +147,15 @@ class SetEncoder(torch.nn.Module):
         self._output_layers_kwargs = {} if output_layers_kwargs is None else output_layers_kwargs
         self._pooling_proj_dim = pooling_proj_dim if pooling_proj_dim else self._min_pooled_dims
 
+        # A categorical covariate is one row per batch (the batch's group), so batch statistics over it are
+        # meaningless; so are the output layer's when nothing per observation reaches it.
+        per_group = [k for k in input_layers if k not in self._continuous_covariates]
+        normed = [k for k in per_group if input_layers[k].get("use_batchnorm", False)]
+        if len(self._continuous_covariates) == 0 and self._output_layers_kwargs.get("use_batchnorm", False):
+            normed.append("output layer")
+        if len(normed) > 0:
+            raise ValueError(f"Batch normalization over one group's encoding, a single row per batch: {normed}.")
+
         input_layers_dict = self._make_input_layers()
         input_layers = torch.nn.ModuleDict(input_layers_dict)
 

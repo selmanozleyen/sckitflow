@@ -49,15 +49,11 @@ def _index_obj(value: Any, idx: Any | None) -> Any:
     a plain ``dict[str, tensor]`` (each value is indexed; ``None`` values pass
     through), and any row-indexable object -- a ``torch.Tensor`` / array or a
     container that implements ``__getitem__``. A ``None`` index is a no-op.
-    A tensor with a leading axis of 1 (a group's encoding, the same for every row)
-    is left as it is: there is nothing to reorder.
     """
     if value is None or idx is None:
         return value
     if isinstance(value, dict):
-        return {k: _index_obj(v, idx) for k, v in value.items()}
-    if isinstance(value, torch.Tensor) and value.shape[0] == 1:
-        return value
+        return {k: (None if v is None else v[idx]) for k, v in value.items()}
     return value[idx]
 
 
@@ -72,7 +68,8 @@ def subscript_step_data(
     is sliced independently; a ``None`` index leaves that side untouched and a
     ``None`` field stays ``None``. The target side includes ``target_response_data``,
     so target covariates carried for output reconstruction remain aligned with
-    ``target_state``. Replaces ``BaseMethod._safe_subscript_obj``.
+    ``target_state``. ``target_group_data`` describes the whole batch, one row, so it is
+    not sliced; ``n_obs`` becomes the target's new row count.
     """
     source_fields = (
         "source_state",
@@ -86,15 +83,15 @@ def subscript_step_data(
         "target_coupling_lin",
         "target_coupling_quad",
         "target_condition_data",
-        "target_group_data",
         "target_response_data",
     )
+    batch_fields = ("target_group_data", "n_obs")
 
     # A field on neither side would keep its row order while the rest of the batch
     # is permuted -- wrong rows, no error. Checked only when something is actually
     # permuted: with both `None`, nothing moves, so nothing can fall out of alignment.
     if src_idxs is not None or tgt_idxs is not None:
-        unassigned = set(step_data) - {*source_fields, *target_fields}
+        unassigned = set(step_data) - {*source_fields, *target_fields, *batch_fields}
         if unassigned:
             raise ValueError(
                 f"cannot row-slice a batch carrying unaligned fields: {sorted(unassigned)}. Every "
@@ -104,6 +101,8 @@ def subscript_step_data(
 
     updates = {field: _index_obj(step_data.get(field), tgt_idxs) for field in target_fields}
     updates.update({field: _index_obj(step_data.get(field), src_idxs) for field in source_fields})
+    if tgt_idxs is not None:
+        updates["n_obs"] = len(tgt_idxs)
     return {**step_data, **updates}
 
 
@@ -124,25 +123,6 @@ def expand_conditioning(
     expanded_cond = {k: v.unsqueeze(0).expand(n_samples, *v.shape) for k, v in condition_dict.items()}
     expanded_source = None if source is None else source.unsqueeze(0).expand(n_samples, *source.shape)
     return expanded_cond, expanded_source
-
-
-def _batch_size_from(
-    source: torch.Tensor | None,
-    condition_dict: dict[str, torch.Tensor],
-    target: torch.Tensor | None = None,
-) -> int | None:
-    """How many rows a batch has, or ``None`` when nothing in it says.
-
-    A source has one row per observation and sets the count. Without one, an unconditional batch has no
-    rows to follow (the standalone-sample case, inference only), and a conditional batch has one row per
-    target observation: the longest leading axis among ``target`` and the conditioning tensors, where a
-    group's categorical encoding is a single row broadcast to all of them.
-    """
-    if source is not None:
-        return source.shape[0]
-    if len(condition_dict) == 0:
-        return None
-    return max(t.shape[0] for t in (target, *condition_dict.values()) if t is not None)
 
 
 def prepare_latent_train(
@@ -177,7 +157,7 @@ def prepare_latent_inference(
     n_samples: int | None = None,
     generate_from_noise: bool = False,
     generator: torch.Generator,
-    target: torch.Tensor | None = None,
+    n_obs: int | None = None,
 ) -> torch.Tensor:
     """Sizes and draws the inference latent.
 
@@ -197,15 +177,22 @@ def prepare_latent_inference(
     no        no            no           any     ``(1, D)``
     ========  ============  ===========  ======  =========================
 
-    ``B`` is the batch's row count, the longest leading axis among ``source``, ``target`` and the
-    conditioning tensors (see :func:`_batch_size_from`). ``D`` is ``dims.state_dim``. Device and dtype come
+    ``B`` is the batch's row count: ``source``'s rows when present, else ``n_obs``. An unconditional batch
+    without a source has no rows to follow and draws standalone samples. ``D`` is ``dims.state_dim``. Device and dtype come
     from the caller; the batch is never asked for them.
     """
     # Short-circuit: paired and not generating -- the source is the latent.
     if source is not None and not generate_from_noise:
         return source
 
-    batch_size = _batch_size_from(source, condition_dict, target)
+    if source is not None:
+        batch_size = source.shape[0]
+    elif len(condition_dict) == 0:
+        batch_size = None
+    elif n_obs is None:
+        raise ValueError("a conditional batch without a source needs its row count, `n_obs`.")
+    else:
+        batch_size = n_obs
 
     # Standalone samples: no batch axis, draw `n_samples` (or one).
     if batch_size is None:

@@ -115,6 +115,27 @@ class TestSetEncoder:
         }
         assert encoder(condition_dict).shape == (*batch, output_dim)
 
+    @pytest.mark.parametrize(
+        ("continuous", "where"),
+        [([], "input"), ([], "output"), (["condition0"], "input")],
+        ids=["categorical-input", "categorical-only-output", "categorical-input-with-continuous"],
+    )
+    def test_batchnorm_over_a_group_row_is_refused(self, continuous: list[str], where: str) -> None:
+        """A categorical covariate is one row per batch; batch statistics over it are meaningless."""
+        layers = {k: dict(v) for k, v in input_layers_double_condition.items()}
+        output_layers_kwargs = {}
+        if where == "input":
+            layers["condition1"]["use_batchnorm"] = True
+        else:
+            output_layers_kwargs["use_batchnorm"] = True
+        with pytest.raises(ValueError, match="Batch normalization over one group's encoding"):
+            SetEncoder(
+                input_layers=layers,
+                output_dim=output_dim,
+                continuous_covariates=continuous,
+                output_layers_kwargs=output_layers_kwargs,
+            )
+
     def test_a_group_row_broadcasts_against_per_observation_covariates(self) -> None:
         """A group's categorical covariate is one row `(1, c, d)`; continuous ones have a row per observation."""
         encoder = SetEncoder(

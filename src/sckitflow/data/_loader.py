@@ -67,6 +67,7 @@ _STEP_DATA_KEYS = (
     "source_coupling_quad",
     "source_condition_data",
     "source_group_data",
+    "n_obs",
 )
 
 _PRIMARY = "primary"
@@ -222,7 +223,7 @@ class _StepDataBridge:
         self._leaf_to_gid: dict[tuple, int] = {leaf: i for i, leaf in enumerate(self._leaves)}
         self._adatas = adatas
         self._uns = adatas[0].uns  # the tables groups are encoded from; the same in every AnnData
-        self._encode_cache: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
+        self._encode_cache: dict[int, dict[str, Any]] = {}
 
     @cached_property
     def _leaf_size(self) -> dict[tuple, int]:
@@ -281,44 +282,36 @@ class _StepDataBridge:
         if self._dtype is None and self._device is None:
             return step_data
         for key, value in step_data.items():
-            if value is None:
+            if value is None or key == "n_obs":
                 continue
             step_data[key] = (
                 {k: self._conform(v) for k, v in value.items()} if isinstance(value, dict) else self._conform(value)
             )
         return step_data
 
-    def _encode_group_cached(self, gid: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        """The group's ``(condition, group)`` categorical encodings, ``(1, c, d)``, cached per group.
+    def _encode_group_cached(self, gid: int) -> dict[str, Any]:
+        """The group's categorical encodings (groups and categorical conditions), ``(1, c, d)``, cached per group.
 
         Cached already conformed to ``dtype``/``device``; every batch of the group reuses the same tensors.
         """
         if gid not in self._encode_cache:
-            entry, cond_keys, group_keys = self._encode_group(self._leaves[gid])
-            conformed = {k: _group_row(self._conform(_as_tensor(v), streamed=False)) for k, v in entry.items()}
-            self._encode_cache[gid] = (
-                {k: conformed[k] for k in cond_keys},
-                {k: conformed[k] for k in group_keys},
-            )
+            entry = self._encode_group(self._leaves[gid])
+            self._encode_cache[gid] = {
+                k: _group_row(self._conform(_as_tensor(v), streamed=False)) for k, v in entry.items()
+            }
         return self._encode_cache[gid]
 
-    def _encode_group(self, leaf: tuple) -> tuple[dict[str, np.ndarray], list, list]:
-        """Encode one group's values to ``{key: vector}`` plus the condition/group key lists."""
+    def _encode_group(self, leaf: tuple) -> dict[str, np.ndarray]:
+        """Encode one group's values -- its group columns and categorical conditions -- to ``{key: vector}``."""
         entry: dict[str, np.ndarray] = {}
-        cond_keys: list[str] = []
-        group_keys: list[str] = []
         values = pd.DataFrame([leaf], columns=list(self._group_cols))
-        condition_data = self._cond_schema.categorical_data(values, self._uns)
-        if condition_data is not None:
-            reps = condition_data.extract_reps().mapping
-            entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
-            cond_keys = list(reps)
-        groups_data = self._groups_schema.categorical_data(values, self._uns)
-        if groups_data is not None:
-            reps = groups_data.extract_reps().mapping
-            entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
-            group_keys = list(reps)
-        return entry, cond_keys, group_keys
+        for data in (
+            self._cond_schema.categorical_data(values, self._uns),
+            self._groups_schema.categorical_data(values, self._uns),
+        ):
+            if data is not None:
+                entry.update({k: _leaf_encoding(v) for k, v in data.extract_reps().mapping.items()})
+        return entry
 
     def _batch_size(self, batch: dict, target_state: Any, n_rows: int) -> int:
         """Rows the batch has, which the source is aligned to: what the primary delivered, else ``n_rows``.
@@ -371,9 +364,9 @@ class _StepDataBridge:
     def _step_data_from_batch(self, batch: dict, gid: int, *, has_state: bool, n_rows: int) -> StepData:
         """Assemble one scfit batch (+ its group id) into a ``StepData``.
 
-        The categorical condition/group encoding is cached per group, one row ``(1, c, d)``; continuous
-        covariates are the per-obs aligned reps already in the batch, and the source is row-aligned to
-        the same count. ``has_state=False`` omits the target state (metadata-only prediction), and
+        The categorical encodings (groups and categorical conditions) are cached per group, one row
+        ``(1, c, d)``, in ``target_group_data``; continuous covariates are the per-obs aligned reps already in the
+        batch, in ``target_condition_data``, and the source is row-aligned to the same count, ``n_obs``. ``has_state=False`` omits the target state (metadata-only prediction), and
         ``n_rows`` is the caller's row count for that case -- see :meth:`_batch_size`.
         """
         target_state = _as_tensor(batch[_PRIMARY][self._state_loc]) if has_state else None
@@ -381,13 +374,11 @@ class _StepDataBridge:
         batch_size = self._batch_size(batch, target_state, n_rows)
         source_state = self._align_source(source_state, batch_size)
 
-        cond_enc, group_enc = self._encode_group_cached(gid)
-        condition: dict[str, Any] = dict(cond_enc)  # copied: continuous covariates are added below
-        group: dict[str, Any] = group_enc
+        group = self._encode_group_cached(gid)
         # continuous covariates: per-obs aligned reps (present only when the stream carries them)
-        for loc, key in self._cond_cont_locs.items():
-            if loc in batch[_PRIMARY]:
-                condition[key] = _as_tensor(batch[_PRIMARY][loc])
+        condition = {
+            key: _as_tensor(batch[_PRIMARY][loc]) for loc, key in self._cond_cont_locs.items() if loc in batch[_PRIMARY]
+        }
         response = {
             key: _as_tensor(batch[_PRIMARY][loc]) for loc, key in self._resp_cont_locs.items() if loc in batch[_PRIMARY]
         }
@@ -402,6 +393,7 @@ class _StepDataBridge:
         step_data["target_condition_data"] = condition or None
         step_data["target_group_data"] = group or None
         step_data["target_response_data"] = response or None
+        step_data["n_obs"] = batch_size
         # Update step data with coupling reps
         step_data.update(src_couplings)
         step_data.update(tgt_couplings)

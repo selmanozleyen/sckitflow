@@ -81,7 +81,7 @@ class TestLoaderStepDataMapping:
         assert batches, "loader must yield at least one batch"
         for sd in batches:
             grp = sd["target_group_data"]["source_split"]
-            drug = sd["target_condition_data"]["drug"]
+            drug = sd["target_group_data"]["drug"]  # categorical conditions describe the group too
             # (1, c, d): one row, broadcast to every observation of the batch. `c` is the columns mapped to the
             # realm -- 1 here -- and is the axis the `SetEncoder` pools over.
             assert grp.shape == (1, 1, LINE_DIM)

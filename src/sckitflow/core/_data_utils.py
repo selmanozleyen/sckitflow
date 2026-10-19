@@ -114,9 +114,8 @@ def expand_conditioning(
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None]:
     """Replicate ``condition_dict`` and ``source`` along the leading dimension of ``latent``.
 
-    Assumes original ``condition_dict`` values and ``source`` have shape
-    ``(batch_size, ...)`` and ``latent`` has shape ``(n_samples, batch_size, dim)``
-    or ``(batch_size, dim)``. Returns expanded copies.
+    ``condition_dict`` values have shape ``(1 or batch_size, ...)``, ``source`` ``(batch_size, ...)`` and
+    ``latent`` ``(n_samples, batch_size, dim)`` or ``(batch_size, dim)``. Returns expanded views.
     """
     if latent.dim() <= 2:  # no extra sample dimension
         return condition_dict, source
@@ -148,46 +147,23 @@ def _batch_size_from(
 
 def prepare_latent_train(
     source: torch.Tensor | None,
-    condition_dict: dict[str, torch.Tensor],
     noise_sampler: SamplerFn,
     dims: DataDimensions,
     *,
+    batch_size: int,
     device: torch.device,
     dtype: torch.dtype,
-    batch_size: int | None = None,
     generate_from_noise: bool = False,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    """Sizes and draws the training latent.
+    """Draws the training latent, ``(batch_size, dims.state_dim)``.
 
-    A training step is always over a batch of observations, so there is no
-    standalone-sample branch. The row count comes from ``batch_size`` when the
-    caller supplies it, else from ``source`` (a per-observation tensor), else
-    from ``condition_dict``. ``CFMTraining.compute_loss`` passes
-    ``batch_size=target.shape[0]`` -- the target is already in hand and its row
-    count is the batch size.
-
-    The state width is ``dims.state_dim`` in every branch; device and dtype come
-    from the caller (pass ``method.device`` / ``method.dtype``), never from the
-    batch. ``source`` present with ``generate_from_noise=False`` short-circuits:
-    it *is* the latent, returned unchanged.
-
-    :raises ValueError: If no batch size can be resolved.
+    ``source`` present with ``generate_from_noise=False`` short-circuits: it *is* the latent, returned
+    unchanged. Device and dtype come from the caller (pass ``method.device`` / ``method.dtype``).
     """
     if source is not None and not generate_from_noise:
         return source
-
-    if batch_size is None:
-        batch_size = _batch_size_from(source, condition_dict)
-    if batch_size is None:
-        raise ValueError(
-            "cannot size the training latent: no `batch_size`, no source, and no "
-            "conditioning tensor. Training always has a batch -- this is a caller "
-            "problem, not a shape one."
-        )
-
-    shape = (batch_size, dims.state_dim)
-    return noise_sampler(shape, generator=generator, device=device, dtype=dtype)
+    return noise_sampler((batch_size, dims.state_dim), generator=generator, device=device, dtype=dtype)
 
 
 def prepare_latent_inference(

@@ -1,7 +1,7 @@
 """Unit tests for :class:`sckitflow.data._loader.Loader`.
 
 Covers the scfit-batch -> ``StepData`` bridge: weight-based group selection, the label-gid ->
-cached categorical encoding (tiled to the batch), continuous covariates riding as per-cell reps,
+cached categorical encoding (one row per group), continuous covariates riding as per-cell reps,
 and the finite/cycling iteration contract the trainer relies on.
 """
 
@@ -316,7 +316,7 @@ class TestLoaderDtypeAndDevice:
         assert sd["target_state"].dtype is torch.float32
         assert sd["source_state"].dtype is torch.float32
         assert sd["target_condition_data"]["Xcond"].dtype is torch.float32
-        # the tiled per-group encodings go through the same conform step
+        # the per-group encodings go through the same conform step
         assert sd["target_group_data"]["source_split"].dtype is torch.float32
 
     def test_no_dtype_leaves_the_streamed_tensors_untouched(self, loader_adata):

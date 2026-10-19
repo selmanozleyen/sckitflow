@@ -282,11 +282,11 @@ def test_prepare_latent_train_called_with_dims_placement_and_flags(make_cfm, ste
         cfm.compute_loss(step_data, generator=g, rng=rng())
 
     args, kwargs = mock_prep.call_args
-    # Positional: source, condition_dict, noise_sampler, dims.
+    # Positional: source, noise_sampler, dims; the batch size is the target's.
     assert args[0] is step_data["source_state"]
-    assert set(args[1]) == {"c1", "g1"}
-    assert args[2] is cfm.noise_sampler
-    assert args[3] is dims
+    assert args[1] is cfm.noise_sampler
+    assert args[2] is dims
+    assert kwargs["batch_size"] == step_data["target_state"].shape[0]
     # Keyword: placement, flags, generator.
     first_param = next(dummy_module.parameters())
     assert kwargs["device"] == first_param.device
@@ -350,9 +350,9 @@ def test_train_latent_uses_dims_state_dim():
     source = torch.randn(3, 999)  # wrong on purpose
     latent = prepare_latent_train(
         source,
-        {},
         IsotropicGaussianNoiseSamplerConfig().build(),
         wide,
+        batch_size=3,
         device=torch.device("cpu"),
         dtype=torch.float32,
         generate_from_noise=True,

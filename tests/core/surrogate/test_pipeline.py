@@ -645,7 +645,8 @@ class TestRealInference:
             pytest.param(
                 ("target",),
                 marks=pytest.mark.xfail(
-                    strict=True, reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too"
+                    strict=True,
+                    reason="set encoder rank bug, likely fixed on main by #171; plain predict_adata fails too",
                 ),
             ),
         ],
@@ -657,7 +658,7 @@ class TestRealInference:
 
         dmod = build_datamodule(
             adata,
-            conditions_covariates=(CONT_COV_1,),
+            continuous_conditions=(CONT_COV_1,),
             groups=groups,
             groups_encoding=None if groups is None else {"target": "label"},
         )

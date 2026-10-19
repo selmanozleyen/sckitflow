@@ -302,7 +302,7 @@ class TestStreamingLeavesTheCallersDataAlone:
         loaders = dm.get_dataloaders(adata_small, batch_size=8)
         for loader in loaders.values():
             next(iter(loader))  # actually stream, so nothing is derived lazily on first read
-            self._assert_shares_everything(loader._adata, adata_small)
+            self._assert_shares_everything(loader._adatas[0], adata_small)
         assert list(adata_small.obs.columns) == before, "the caller's obs gained a column"
 
     @pytest.mark.parametrize("case", ["matched_keys", "unconditional"])
@@ -312,7 +312,7 @@ class TestStreamingLeavesTheCallersDataAlone:
         el = self._managers()[case].get_eval_loader(adata_small)
 
         next(iter(el))
-        self._assert_shares_everything(el._adata, adata_small)
+        self._assert_shares_everything(el._adatas[0], adata_small)
         assert list(adata_small.obs.columns) == before
 
 
@@ -646,3 +646,42 @@ class TestTrainingOnlyCoupling:
         dm = _make_manager(rep_lin="X_lin")
         with pytest.raises(TypeError, match="owned by the schema"):
             dm.get_dataloaders(adata_small, coupling_schema=dm.coupling_data_schema)
+
+
+class TestSeveralAnnData:
+    """Several AnnData are read as one dataset: the same groups and dims as the one they were cut from."""
+
+    @staticmethod
+    def _parts(adata: AnnData) -> list[AnnData]:
+        """Two parts, each knowing only its own categories, so they must be unioned to be read together."""
+        lines = adata.obs["cell_line"].cat.categories
+        parts = [adata[adata.obs["cell_line"] == lines[0]].copy(), adata[adata.obs["cell_line"] != lines[0]].copy()]
+        for part in parts:
+            for col in part.obs.columns:
+                part.obs[col] = part.obs[col].cat.remove_unused_categories()
+        return parts
+
+    def test_dims_and_groups_match_the_whole(self, adata_small: AnnData):
+        dm = _make_manager(control_values_dict={"drug": "control"})
+        parts = self._parts(adata_small)
+        assert dm.get_data_dimensionalities(parts).feature_names.equals(
+            dm.get_data_dimensionalities(adata_small).feature_names
+        )
+        assert set(dm.get_eval_loader(parts)._leaves) == set(dm.get_eval_loader(adata_small)._leaves)
+
+    def test_training_streams_targets_with_controls_across_parts(self, adata_small: AnnData):
+        dm = _make_manager(control_values_dict={"drug": "control"})
+        batch = next(iter(dm.get_dataloaders(self._parts(adata_small), batch_size=8)["train"]))
+        assert batch["source_state"] is not None and batch["target_state"].shape[0] == 8
+
+    def test_parts_with_different_uns_tables_are_refused(self, adata_small: AnnData):
+        parts = self._parts(adata_small)
+        parts[1].uns["drug"] = {k: v + 1 for k, v in parts[1].uns["drug"].items()}
+        with pytest.raises(ValueError, match=r"\.uns\['drug'\] of AnnData 1 differs"):
+            _make_manager().get_data_dimensionalities(parts)
+
+    def test_parts_with_different_features_are_refused(self, adata_small: AnnData):
+        parts = self._parts(adata_small)
+        parts[1].var_names = [f"other_{i}" for i in range(parts[1].n_vars)]
+        with pytest.raises(ValueError, match="AnnData 1 disagrees"):
+            _make_manager().get_data_dimensionalities(parts)

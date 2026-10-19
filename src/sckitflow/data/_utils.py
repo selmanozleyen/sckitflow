@@ -1,5 +1,5 @@
 import copy
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -16,7 +16,41 @@ __all__ = [
     "get_one_hot_encoder",
     "convert_to_categorical_in_place",
     "with_derived_obs",
+    "AnnDataLike",
+    "as_adatas",
+    "with_derived_obs_stacked",
+    "row_of",
 ]
+
+AnnDataLike = AnnData | Sequence[AnnData]
+"""One ``AnnData``, or several read as one dataset: their observations stacked in list order."""
+
+
+def as_adatas(data: AnnDataLike) -> list[AnnData]:
+    """``data`` as a non-empty list of ``AnnData``, in the order its observations are stacked."""
+    adatas = [data] if isinstance(data, AnnData) else list(data)
+    if not adatas:
+        raise ValueError("no AnnData given.")
+    return adatas
+
+
+def with_derived_obs_stacked(adatas: Sequence[AnnData], cols: Mapping[str, Any]) -> list[AnnData]:
+    """:func:`with_derived_obs` for several files: each column's values run over the stacked observations."""
+    out, start = [], 0
+    for adata in adatas:
+        stop = start + adata.n_obs
+        out.append(with_derived_obs(adata, {name: values[start:stop] for name, values in cols.items()}))
+        start = stop
+    return out
+
+
+def row_of(adatas: Sequence[AnnData], row: int) -> AnnData:
+    """The one-observation view at stacked position ``row``."""
+    for adata in adatas:
+        if row < adata.n_obs:
+            return adata[row : row + 1]
+        row -= adata.n_obs
+    raise IndexError("row past the last observation.")
 
 
 def with_derived_obs(adata: AnnData, cols: Mapping[str, Any]) -> AnnData:

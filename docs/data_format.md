@@ -29,8 +29,11 @@ A target is matched to controls sharing its `groups` values. The training loader
 cells in memory**, shared by every split, and streams the rest; the memory cost is the number of controls
 times the state width. Prediction reads them per group.
 
-## Several stores
+## Several AnnData
 
-Planned: a list of zarr stores, each laid out as above and listed explicitly (no glob patterns), read as one
-dataset. Their `.obs` categories are merged, the state must have one width across them, and `.uns`
-embeddings must agree. A store holding only controls is just one more entry.
+Wherever an `AnnData` is taken, a list of them is too, read as one dataset: their `.obs` are stacked in list
+order with categories unioned, and the controls of any of them can serve the targets of any other. They must
+agree on the state width, on the feature names, and on every `.uns` table the schema reads; a split column
+(`split_by`) must be in each. A list of zarr stores is opened lazily with `scfit.data.open_source(paths,
+keys=..., cols=..., uns=...)`, listing every store explicitly. A store holding only controls is just one more
+entry.

@@ -22,6 +22,7 @@ from sckitflow.core._types import PredictionData, StepData, concatenate_predicti
 from sckitflow.core.methods._base import SupportsInference
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
+from sckitflow.data._utils import AnnDataLike
 
 __all__ = ["prediction_record", "predictions_to_adata", "predict_adata"]
 
@@ -206,7 +207,7 @@ def predictions_to_adata(
 def predict_adata(
     datamodule: FlowDataModule,
     inference_method: SupportsInference,
-    adata: AnnData,
+    adata: AnnDataLike,
     *,
     return_raw: bool = False,
     max_per_group: int | None = None,
@@ -226,7 +227,7 @@ def predict_adata(
 
     :param datamodule: Supplies the schema and the streamed dtype.
     :param inference_method: The method whose ``predict`` is called per group.
-    :param adata: The input adata carrying the metadata to predict over.
+    :param adata: The input adata carrying the metadata to predict over, or several read as one dataset.
     :param return_raw: If ``True``, also return the concatenated `PredictionData`.
     :param max_per_group: Per-group cap on observations.
     :param require_target_state: Whether ``adata`` must carry a target state representation.

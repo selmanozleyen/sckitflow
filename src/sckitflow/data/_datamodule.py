@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import lightning.pytorch as pl
@@ -17,7 +16,7 @@ from sckitflow.data._manager import DataManager, DataManagerConfig
 from sckitflow.data.splitters import SplitterConfig
 
 if TYPE_CHECKING:
-    from sckitflow.data._loader import EvalLoader, Loader
+    from sckitflow.data._loader import Loader
     from sckitflow.data._manager import LoaderKwargs
 
 __all__ = ["FlowDataModule"]
@@ -45,10 +44,9 @@ class FlowDataModule(pl.LightningDataModule):
 
     :param dm: The fitted data manager describing the data schema.
     :param data_dims: The dimensionalities derived from the registration data.
-    :param adata: The annotated data object to stream. May be attached later
-        with :meth:`attach`, which is what reloading does.
-    :param control_adata: Optional separate control (source) pool, shared by
-        every split.
+    :param adata: The annotated data object to stream. Fixed for the module's
+        life: streaming other data means building another module, which is cheap.
+        ``None`` only for a schema-only module, e.g. to read its dimensionalities.
     :param train_split: The split value whose loader drives optimization.
     :param n_train_steps: Batches the training loader yields per epoch; the
         ``Trainer`` decides how many are actually consumed.
@@ -68,7 +66,6 @@ class FlowDataModule(pl.LightningDataModule):
         data_dims: DataDimensions,
         adata: AnnData | None = None,
         *,
-        control_adata: AnnData | None = None,
         train_split: str = "train",
         n_train_steps: int = 100_000,
         batch_size: int = 128,
@@ -80,15 +77,11 @@ class FlowDataModule(pl.LightningDataModule):
         self._dm = dm
         self._data_dims = data_dims
         self._adata = adata
-        self._control_adata = control_adata
         self._train_split = train_split
         self._n_train_steps = n_train_steps
         self._batch_size = batch_size
         self._loader_kwargs = dict(loader_kwargs or {})
         self._loaders: dict[str, Loader] | None = None
-        # What `predict_dataloader` streams; set by `set_predict_data`.
-        self._predict_adata: AnnData | None = None
-        self._predict_kwargs: dict[str, Any] = {}
 
     @classmethod
     def from_adata(
@@ -96,7 +89,6 @@ class FlowDataModule(pl.LightningDataModule):
         adata: AnnData,
         dm: DataManager,
         *,
-        control_adata: AnnData | None = None,
         train_split: str = "train",
         n_train_steps: int = 100_000,
         batch_size: int = 128,
@@ -112,7 +104,6 @@ class FlowDataModule(pl.LightningDataModule):
             dm,
             dm.get_data_dimensionalities(adata),
             adata,
-            control_adata=control_adata,
             train_split=train_split,
             n_train_steps=n_train_steps,
             batch_size=batch_size,
@@ -120,47 +111,13 @@ class FlowDataModule(pl.LightningDataModule):
             loader_kwargs=loader_kwargs,
         )
 
-    def attach(self, adata: AnnData, *, control_adata: AnnData | None = None) -> FlowDataModule:
-        """Points this schema at an ``AnnData``, e.g. after reloading. Returns self."""
-        self._adata = adata
-        if control_adata is not None:
-            self._control_adata = control_adata
-        self._loaders = None
-        return self
-
-    def set_predict_data(
-        self,
-        adata: AnnData,
-        *,
-        max_per_group: int | None = None,
-        require_target_state: bool = True,
-        control_values_dict: dict[str, str] | None = None,
-        matched_keys: Mapping[tuple, tuple] | None = None,
-        control_adata: AnnData | None = None,
-    ) -> FlowDataModule:
-        """Points :meth:`predict_dataloader` at ``adata``. Returns self.
-
-        Separate from :meth:`attach` because predicting is usually over a
-        different set of observations than training, and takes its own
-        pairing options. See :meth:`DataManager.get_eval_loader`.
-        """
-        self._predict_adata = adata
-        self._predict_kwargs = {
-            "max_per_group": max_per_group,
-            "require_target_state": require_target_state,
-            "control_values_dict": control_values_dict,
-            "matched_keys": matched_keys,
-            "control_adata": control_adata if control_adata is not None else self._control_adata,
-        }
-        return self
-
     # ---------------- Lightning hooks ----------------
     def setup(self, stage: str | None = None) -> None:
         """Builds one loader per split. Called by Lightning before fitting."""
         if self._loaders is not None:
             return
         if self._adata is None:
-            raise ValueError("no `adata` attached: build with `from_adata` or call `attach(adata)`.")
+            raise ValueError("no `adata`: this module only holds a schema; build one with `adata`.")
 
         kwargs = dict(self._loader_kwargs)
         kwargs.setdefault("to", None)
@@ -168,7 +125,7 @@ class FlowDataModule(pl.LightningDataModule):
         # Build the batch in the module's dtype. Without this the loader emits the
         # AnnData's native dtype (often float64) against a float32 module.
         kwargs.setdefault("dtype", self._dtype)
-        self._loaders = self._dm.get_dataloaders(self._adata, control_adata=self._control_adata, **kwargs)
+        self._loaders = self._dm.get_dataloaders(self._adata, **kwargs)
         if self._train_split not in self._loaders:
             raise KeyError(
                 f"train split {self._train_split!r} has no loader; available splits: {list(self._loaders)}. "
@@ -184,28 +141,13 @@ class FlowDataModule(pl.LightningDataModule):
         self.setup()
         return [loader for split, loader in self._loaders.items() if split != self._train_split]
 
-    def predict_dataloader(self) -> EvalLoader:
-        """Deterministic ``(StepData, leaf)`` loader, one pass per selected group.
-
-        Built from whatever :meth:`set_predict_data` was given. Lightning's
-        predict loop drives it, so batching and device placement are its job.
-        """
-        if self._predict_adata is None:
-            raise ValueError("no prediction data set: call `set_predict_data(adata)` first.")
-        return self._dm.get_eval_loader(
-            self._predict_adata,
-            to=None,
-            dtype=self._dtype,
-            **self._predict_kwargs,
-        )
-
     # ---------------- Serialization ----------------
     def state_dict(self) -> dict[str, Any]:
         """The schema, for the Lightning checkpoint.
 
         The ``AnnData`` and the built loaders are deliberately left out: a
-        checkpoint should not carry the dataset. Reattach it with :meth:`attach`
-        after loading.
+        checkpoint should not carry the dataset. Pass it to
+        :meth:`load_from_checkpoint`.
         """
         splitter = self._dm.splitter
         return {
@@ -246,8 +188,7 @@ class FlowDataModule(pl.LightningDataModule):
             ) from e
 
         streaming = ("train_split", "n_train_steps", "batch_size", "dtype", "loader_kwargs")
-        dmod = cls(*_schema_from_state(state), **{k: state[k] for k in streaming})
-        return dmod if adata is None else dmod.attach(adata)
+        return cls(*_schema_from_state(state), adata, **{k: state[k] for k in streaming})
 
     # ---------------- Accessors ----------------
     @property
@@ -261,8 +202,13 @@ class FlowDataModule(pl.LightningDataModule):
         return self._data_dims
 
     @property
+    def dtype(self) -> torch.dtype:
+        """The dtype every streamed tensor is built with."""
+        return self._dtype
+
+    @property
     def adata(self) -> AnnData | None:
-        """The attached annotated data object, if any."""
+        """The streamed annotated data object, if any."""
         return self._adata
 
     @property

@@ -17,10 +17,14 @@ import torch
 from sckitflow.core._types import PredictionData
 from sckitflow.core.surrogate import MeanSamplesReadoutConfig, SquaredErrorPotentialConfig, SurrogatePotential
 from sckitflow.data import DataManagerConfig, FlowDataModule
+from sckitflow.data._group_encoders import LabelEncoderConfig
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+TARGET_LABELS = LabelEncoderConfig(classes=tuple(f"target{i}" for i in range(5)))
+SOURCE_SPLIT_LABELS = LabelEncoderConfig(classes=tuple(f"source_split{i}" for i in range(5)))
 
 CONT_COV_1 = "drugA_time"
 CONT_COV_2 = "drugA_dose"
@@ -294,7 +298,7 @@ class TestWithGroups:
             cond_dict_single,
             ystar,
             groups=("target",),
-            groups_encoding={"target": "label"},
+            groups_encoding={"target": TARGET_LABELS},
             continuous_conditions=(CONT_COV_1,),
         )
         out = potential(cond_dict_single)
@@ -308,7 +312,7 @@ class TestWithGroups:
             categorical_conditions={"drug": ("drugA", "drugB")},
             categorical_reps={"drug": "drug"},
             groups=("source_split",),
-            groups_encoding={"source_split": "label"},
+            groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             continuous_conditions=(CONT_COV_1,),
         )
         out = potential(cond_dict_single)
@@ -321,7 +325,7 @@ class TestWithGroups:
             ystar,
             n_samples=4,
             groups=("target",),
-            groups_encoding={"target": "label"},
+            groups_encoding={"target": TARGET_LABELS},
             continuous_conditions=(CONT_COV_1,),
         )
         out = potential(cond_dict_single)
@@ -342,7 +346,7 @@ class TestWithControls:
             categorical_conditions={"drug": ("drugA", "drugB")},
             categorical_reps={"drug": "drug"},
             groups=("source_split",),
-            groups_encoding={"source_split": "label"},
+            groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             control_values_dict={"drug": "control"},
             continuous_conditions=(CONT_COV_1,),
         )
@@ -358,7 +362,7 @@ class TestWithControls:
             categorical_conditions={"drug": ("drugA", "drugB")},
             categorical_reps={"drug": "drug"},
             groups=("source_split",),
-            groups_encoding={"source_split": "label"},
+            groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             control_values_dict={"drug": "control"},
             continuous_conditions=(CONT_COV_1,),
         )
@@ -374,7 +378,7 @@ class TestWithControls:
             categorical_conditions={"drug": ("drugA", "drugB")},
             categorical_reps={"drug": "drug"},
             groups=("source_split",),
-            groups_encoding={"source_split": "label"},
+            groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             control_values_dict={"drug": "control"},
             continuous_conditions=(CONT_COV_1,),
         )
@@ -620,7 +624,7 @@ class TestRealInference:
             adata,
             continuous_conditions=(CONT_COV_1,),
             groups=groups,
-            groups_encoding=None if groups is None else {"target": "label"},
+            groups_encoding=None if groups is None else {"target": TARGET_LABELS},
         )
         dims = dmod.data_dims
         layers = {**dims.condition_continuous_dims, **(dims.groups_reps_dims or {})}

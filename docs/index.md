@@ -6,6 +6,7 @@
 :hidden: true
 :maxdepth: 1
 
+data_format.md
 api.md
 changelog.md
 contributing.md

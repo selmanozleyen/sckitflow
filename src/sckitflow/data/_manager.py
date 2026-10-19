@@ -690,6 +690,8 @@ class DataManager:
 class DataManagerConfig(Component):
     """The schema :class:`DataManager` is built from; portable, so it travels inside a run's spec.
 
+    What it expects of the ``AnnData``, and how controls are held, is described in ``docs/data_format.md``.
+
     The splitter is not a field: it has its own seed, so it is built beside this config and passed to
     :meth:`build`.
     """

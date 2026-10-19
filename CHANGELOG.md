@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Added
 
+- `sckitflow.core.surrogate.SurrogatePotential`: a differentiable potential of continuous condition covariates through a trained inference method, averaged over the groups of its context data (`adata`), which it reads once per device onto the inference module's device
 - Basic tool, preprocessing and plotting functions
 - `docs/scripts/fit_cfm.py` trains a run from one YAML spec; install with the `scripts` extra
 - `RunConfig.build` and `load_run` take `control_adata`, and `RunConfig.build` takes `metrics`

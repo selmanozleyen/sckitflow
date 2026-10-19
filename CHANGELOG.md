@@ -13,3 +13,10 @@ and this project adheres to [Semantic Versioning][].
 ### Added
 
 - Basic tool, preprocessing and plotting functions
+- `docs/scripts/fit_cfm.py` trains a run from one YAML spec; install with the `scripts` extra
+- `RunConfig.build` and `load_run` take `control_adata`, and `RunConfig.build` takes `metrics`
+
+### Changed
+
+- Flow method configs take only configs: live probability paths and raw sampler callables are rejected
+- Time and noise samplers are separate families (`TimeSamplerConfig`, `NoiseSamplerConfig`)

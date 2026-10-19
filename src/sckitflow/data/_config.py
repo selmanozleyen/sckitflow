@@ -61,6 +61,7 @@ class FlowDataModuleConfig(Component):
 
         :param adata: The `AnnData` to derive dimensionalities from and stream.
         :param rng: The loaders' sampling schedule is seeded from it.
+        :param control_adata: Control cells kept in a separate `AnnData`, used as the source.
         :param splitter: Applied to ``adata`` before streaming; exclusive with ``manager.split_by``.
         """
         return FlowDataModule.from_adata(

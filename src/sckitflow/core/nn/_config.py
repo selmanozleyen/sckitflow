@@ -6,7 +6,6 @@ filled in by :meth:`ModuleConfig.build` from the data module's :class:`~sckitflo
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any, Literal
 
 import torch
@@ -65,17 +64,7 @@ def _resolve_nn_module_class(
     )
 
 
-# Fields on the sub-dicts (`*_mlp_kwargs`) whose values may be strings or classes.
 _ACTIVATION_KEYS: tuple[str, ...] = ("activation_cls", "final_activation_cls")
-
-# Fields on `MLPVelocityConfig` that contain sub-dicts with the keys above.
-_MLP_KWARGS_FIELDS: tuple[str, ...] = (
-    "state_encoder_mlp_kwargs",
-    "time_encoder_mlp_kwargs",
-    "vf_decoder_mlp_kwargs",
-    "source_encoder_mlp_kwargs",
-    "condition_encoder_output_layers_kwargs",
-)
 
 
 def _normalize_activation_to_string(
@@ -90,25 +79,6 @@ def _normalize_activation_to_string(
     if isinstance(value, type) and issubclass(value, torch.nn.Module):
         return value.__name__
     raise TypeError(f"activation must be a str or a torch.nn.Module subclass, got {type(value).__name__}")
-
-
-def _resolve_mlp_kwargs_activations(
-    kwargs: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Return a copy of ``kwargs`` with `activation_cls`/`final_activation_cls` resolved to classes.
-
-    Strings are resolved via :func:`_resolve_nn_module_class`; classes and
-    ``None`` pass through unchanged. The caller's ``kwargs`` is not mutated,
-    so the config keeps holding the strings for serialization.
-    """
-    if not kwargs:
-        return kwargs
-    out = dict(kwargs)
-    for key in _ACTIVATION_KEYS:
-        value = out.get(key)
-        if isinstance(value, str):
-            out[key] = _resolve_nn_module_class(value)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +96,7 @@ class ModuleConfig(Component):
 
 @component("mlp", builds=MLP)
 class MLPConfig(ModuleConfig):
-    hidden_dims: Sequence[int] | None = None
+    hidden_dims: tuple[int, ...] | None = None
     activation_cls: str | None = None
     final_activation_cls: str | None = None
     use_batchnorm: bool = False
@@ -142,8 +112,9 @@ class MLPConfig(ModuleConfig):
     dropout_inplace: bool = False
     activation_cls_kwargs: dict[str, Any] | None = None
     final_activation_cls_kwargs: dict[str, Any] | None = None
+    bias: bool = True
 
-    @field_validator("activation_cls", "final_activation_cls")
+    @field_validator("activation_cls", "final_activation_cls", mode="before")
     @classmethod
     def _coerce_activation_to_string(
         cls,
@@ -152,14 +123,16 @@ class MLPConfig(ModuleConfig):
         """Accept either a class or a string; store as string for JSON-serializability."""
         return _normalize_activation_to_string(value)
 
-    def build(self, input_dim: int, output_dim: int) -> MLP:
-        kwargs = {name: getattr(self, name) for name in type(self).model_fields}
-        # Resolve strings -> classes on a copy; `self` keeps the strings.
+    def mlp_kwargs(self) -> dict[str, Any]:
+        """The keyword arguments of :class:`MLP`, with activation names resolved to classes."""
+        kwargs = dict(self)
         for key in _ACTIVATION_KEYS:
-            value = kwargs.get(key)
-            if isinstance(value, str):
-                kwargs[key] = _resolve_nn_module_class(value)
-        return MLP(input_dim, output_dim, **kwargs)
+            if isinstance(kwargs[key], str):
+                kwargs[key] = _resolve_nn_module_class(kwargs[key])
+        return kwargs
+
+    def build(self, input_dim: int, output_dim: int) -> MLP:
+        return MLP(input_dim, output_dim, **self.mlp_kwargs())
 
 
 @component("velocity_field.mlp", builds=MLPVelocity)
@@ -177,9 +150,9 @@ class MLPVelocityConfig(ModuleConfig):
     max_period: int | None = None
     state_encoder_output_dim: int | None = None
     time_encoder_output_dim: int | None = None
-    state_encoder_mlp_kwargs: dict[str, Any] | None = None
-    time_encoder_mlp_kwargs: dict[str, Any] | None = None
-    vf_decoder_mlp_kwargs: dict[str, Any] | None = None
+    state_encoder_mlp_kwargs: MLPConfig | None = None
+    time_encoder_mlp_kwargs: MLPConfig | None = None
+    vf_decoder_mlp_kwargs: MLPConfig | None = None
     conditioning_id: ConditioningLayersId | None = None
     conditioning_kwargs: dict[str, Any] | None = None
     condition_encoder_input_layers: dict[str, dict[str, Any]] | None = None
@@ -190,8 +163,8 @@ class MLPVelocityConfig(ModuleConfig):
     condition_encoder_pooling_proj_dim: int | None = None
     condition_encoder_pooling_proj_bias: bool = True
     condition_encoder_covariates_not_pooled: tuple[str, ...] | None = None
-    condition_encoder_output_layers_kwargs: dict[str, Any] | None = None
-    source_encoder_mlp_kwargs: dict[str, Any] | None = None
+    condition_encoder_output_layers_kwargs: MLPConfig | None = None
+    source_encoder_mlp_kwargs: MLPConfig | None = None
     source_encoder_output_dim: int | None = None
 
     @field_validator("condition_encoder_input_layers")
@@ -202,32 +175,8 @@ class MLPVelocityConfig(ModuleConfig):
             raise ValueError(f"`input_dim` comes from the data; drop it from {set_by_hand}.")
         return layers
 
-    @field_validator(*_MLP_KWARGS_FIELDS)
-    @classmethod
-    def _normalize_mlp_kwargs_activations(
-        cls,
-        kwargs: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        """Store any `activation_cls` / `final_activation_cls` in the sub-dict as a string.
-
-        Accepts classes or strings at construction; always returns a dict whose
-        activation entries are strings, so ``to_spec()`` / ``save_run`` stay
-        JSON-serializable regardless of how the caller specified them.
-        """
-        if not kwargs:
-            return kwargs
-        out = dict(kwargs)
-        for key in _ACTIVATION_KEYS:
-            if key in out:
-                out[key] = _normalize_activation_to_string(out[key])
-        return out
-
     def build(self, dims: DataDimensions) -> MLPVelocity:
-        kwargs = {name: getattr(self, name) for name in type(self).model_fields}
-
-        # Resolve activation strings -> classes on copies of the sub-dicts.
-        for field in _MLP_KWARGS_FIELDS:
-            kwargs[field] = _resolve_mlp_kwargs_activations(kwargs.get(field))
+        kwargs = {k: v.mlp_kwargs() if isinstance(v, MLPConfig) else v for k, v in dict(self).items()}
 
         # Fill in per-condition-encoder `input_dim` from the data dimensions.
         if self.condition_encoder_input_layers is not None:

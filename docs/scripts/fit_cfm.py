@@ -356,9 +356,9 @@ def main(config: DictConfig) -> float:
         max_period=config.module.max_period,
         state_encoder_output_dim=config.module.state_encoder_output_dim,
         time_encoder_output_dim=config.module.time_encoder_output_dim,
-        state_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.state_encoder_mlp_kwargs),
-        time_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.time_encoder_mlp_kwargs),
-        vf_decoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.vf_decoder_mlp_kwargs),
+        state_encoder_mlp_kwargs=config.module.state_encoder_mlp_kwargs,
+        time_encoder_mlp_kwargs=config.module.time_encoder_mlp_kwargs,
+        vf_decoder_mlp_kwargs=config.module.vf_decoder_mlp_kwargs,
         conditioning_id=config.module.conditioning_id,
         conditioning_kwargs=resolve_omegaconf_to_dictionary(config.module.conditioning_kwargs),
         condition_encoder_input_layers=config.module.condition_encoder_input_layers,
@@ -370,10 +370,8 @@ def main(config: DictConfig) -> float:
         condition_encoder_pooling_proj_dim=config.module.condition_encoder_pooling_proj_dim,
         condition_encoder_pooling_proj_bias=config.module.condition_encoder_pooling_proj_bias,
         condition_encoder_covariates_not_pooled=config.module.condition_encoder_covariates_not_pooled,
-        condition_encoder_output_layers_kwargs=resolve_omegaconf_to_dictionary(
-            config.module.condition_encoder_output_layers_kwargs
-        ),
-        source_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.source_encoder_mlp_kwargs),
+        condition_encoder_output_layers_kwargs=config.module.condition_encoder_output_layers_kwargs,
+        source_encoder_mlp_kwargs=config.module.source_encoder_mlp_kwargs,
         source_encoder_output_dim=config.module.source_encoder_output_dim,
     )
     module = module_cfg.build(datamodule.data_dims)

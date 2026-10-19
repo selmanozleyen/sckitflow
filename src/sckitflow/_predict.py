@@ -213,7 +213,6 @@ def predict_adata(
     require_target_state: bool = True,
     control_values_dict: dict[str, str] | None = None,
     matched_keys: Mapping[tuple, tuple] | None = None,
-    control_adata: AnnData | None = None,
     predict_kwargs: dict[str, Any] | None = None,
     seed: int = 0,
 ) -> AnnData | tuple[AnnData, PredictionData]:
@@ -233,7 +232,6 @@ def predict_adata(
     :param require_target_state: Whether ``adata`` must carry a target state representation.
     :param control_values_dict: Mapping from each condition level to its control value.
     :param matched_keys: ``{source group key: target group key}`` pairs for fixed matching.
-    :param control_adata: Optional separate control (source) pool.
     :param predict_kwargs: Forwarded to the inference method's ``predict``.
     :param seed: Each group's noise comes from generators derived from it and the group's position.
     """
@@ -245,7 +243,6 @@ def predict_adata(
         require_target_state=require_target_state,
         control_values_dict=control_values_dict,
         matched_keys=matched_keys,
-        control_adata=control_adata,
     )
     predict_kwargs = {} if predict_kwargs is None else predict_kwargs
 

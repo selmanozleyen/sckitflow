@@ -134,11 +134,11 @@ class SurrogatePotential(torch.nn.Module):
 
     def __init__(
         self,
+        *,
         inferer: SupportsInference,
         ystar: torch.Tensor,
         datamodule: FlowDataModule,
         adata: AnnDataLike,
-        *,
         readout: Readout,
         potential: Potential,
         max_per_group: int | None = None,

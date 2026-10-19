@@ -94,7 +94,9 @@ def _mse(y, ystar):
 
 
 def surrogate(inferer, ystar, datamodule, *, readout=_identity, potential=_mse, **kwargs):
-    return SurrogatePotential(inferer, ystar, datamodule, None, readout=readout, potential=potential, **kwargs)
+    return SurrogatePotential(
+        inferer=inferer, ystar=ystar, datamodule=datamodule, adata=None, readout=readout, potential=potential, **kwargs
+    )
 
 
 class Recorder:

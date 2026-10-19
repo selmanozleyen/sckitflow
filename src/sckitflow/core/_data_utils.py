@@ -49,11 +49,15 @@ def _index_obj(value: Any, idx: Any | None) -> Any:
     a plain ``dict[str, tensor]`` (each value is indexed; ``None`` values pass
     through), and any row-indexable object -- a ``torch.Tensor`` / array or a
     container that implements ``__getitem__``. A ``None`` index is a no-op.
+    A tensor with a leading axis of 1 (a group's encoding, the same for every row)
+    is left as it is: there is nothing to reorder.
     """
     if value is None or idx is None:
         return value
     if isinstance(value, dict):
-        return {k: (None if v is None else v[idx]) for k, v in value.items()}
+        return {k: _index_obj(v, idx) for k, v in value.items()}
+    if isinstance(value, torch.Tensor) and value.shape[0] == 1:
+        return value
     return value[idx]
 
 
@@ -126,23 +130,20 @@ def expand_conditioning(
 def _batch_size_from(
     source: torch.Tensor | None,
     condition_dict: dict[str, torch.Tensor],
+    target: torch.Tensor | None = None,
 ) -> int | None:
     """How many rows a batch has, or ``None`` when nothing in it says.
 
-    Two references, tried in order:
-
-    1. ``source`` -- a per-observation tensor whose axis 0 is the row count.
-    2. The first conditioning tensor -- tiled to the same rows by the loader, so
-       its axis 0 is the same number.
-
-    A batch that carries neither is the standalone-sample case (inference only):
-    there is no batch, so there is no batch size. Training never hits it.
+    A source has one row per observation and sets the count. Without one, an unconditional batch has no
+    rows to follow (the standalone-sample case, inference only), and a conditional batch has one row per
+    target observation: the longest leading axis among ``target`` and the conditioning tensors, where a
+    group's categorical encoding is a single row broadcast to all of them.
     """
     if source is not None:
         return source.shape[0]
-    if condition_dict:
-        return next(iter(condition_dict.values())).shape[0]
-    return None
+    if len(condition_dict) == 0:
+        return None
+    return max(t.shape[0] for t in (target, *condition_dict.values()) if t is not None)
 
 
 def prepare_latent_train(
@@ -200,6 +201,7 @@ def prepare_latent_inference(
     n_samples: int | None = None,
     generate_from_noise: bool = False,
     generator: torch.Generator,
+    target: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Sizes and draws the inference latent.
 
@@ -219,15 +221,15 @@ def prepare_latent_inference(
     no        no            no           any     ``(1, D)``
     ========  ============  ===========  ======  =========================
 
-    ``B`` is the batch's row count, read off ``source`` when present, else off the
-    first conditioning tensor. ``D`` is ``dims.state_dim``. Device and dtype come
+    ``B`` is the batch's row count, the longest leading axis among ``source``, ``target`` and the
+    conditioning tensors (see :func:`_batch_size_from`). ``D`` is ``dims.state_dim``. Device and dtype come
     from the caller; the batch is never asked for them.
     """
     # Short-circuit: paired and not generating -- the source is the latent.
     if source is not None and not generate_from_noise:
         return source
 
-    batch_size = _batch_size_from(source, condition_dict)
+    batch_size = _batch_size_from(source, condition_dict, target)
 
     # Standalone samples: no batch axis, draw `n_samples` (or one).
     if batch_size is None:

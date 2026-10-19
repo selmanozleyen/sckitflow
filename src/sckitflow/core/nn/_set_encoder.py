@@ -12,6 +12,12 @@ from sckitflow.core.nn._utils import init_module_from_dict
 __all__ = ["SetEncoder", "TokenAttentionPooling", "SeedAttentionPooling"]
 
 
+def _broadcast_batch(tensors: list[torch.Tensor]) -> list[torch.Tensor]:
+    """``tensors`` expanded (as views) to one shared leading shape; only their last axis may differ."""
+    lead = torch.broadcast_shapes(*(t.shape[:-1] for t in tensors))
+    return [t.expand(*lead, t.shape[-1]) for t in tensors]
+
+
 class _AttentionPooling(torch.nn.Module):
     """Pools a set ``[..., n, input_dim]`` with one learned query attending over it."""
 
@@ -277,7 +283,7 @@ class SetEncoder(torch.nn.Module):
 
         # continuous covariates
         if len(encoded_continuous) > 0:
-            continuous_covariates = torch.concatenate(tuple(encoded_continuous.values()), dim=-1)
+            continuous_covariates = torch.concatenate(_broadcast_batch(list(encoded_continuous.values())), dim=-1)
         else:
             continuous_covariates = None
 
@@ -290,7 +296,8 @@ class SetEncoder(torch.nn.Module):
         if len(to_concat) == 0:
             msg = "No condition covariate found."
             raise ValueError(msg)
-        latent_cond = torch.concatenate(to_concat, dim=-1)
+        # A group's categorical covariates have a batch axis of 1, continuous ones one row per observation.
+        latent_cond = torch.concatenate(_broadcast_batch(to_concat), dim=-1)
 
         return self._condition_encoder["output_layer"](latent_cond)
 

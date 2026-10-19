@@ -39,7 +39,11 @@ def _predict_empty(data_dims: DataDimensions, return_raw: bool) -> AnnData | tup
 def _pred_obs_from_leaf(group_cols: tuple[str, ...], leaf: tuple, pred_obj: PredictionData) -> pd.DataFrame:
     """Rebuild a group's obs rows from its ``leaf`` (the ``group_by`` value tuple), one per predicted observation."""
     n_pred_obs = pred_obj.X.shape[0] if getattr(pred_obj, "X", None) is not None else 1
-    return pd.DataFrame({col: np.repeat(val, n_pred_obs) for col, val in zip(group_cols, leaf, strict=True)})
+    # the index sizes the frame, so an unconditional run (no group columns) still gets one row per observation
+    return pd.DataFrame(
+        {col: np.repeat(val, n_pred_obs) for col, val in zip(group_cols, leaf, strict=True)},
+        index=pd.RangeIndex(n_pred_obs),
+    )
 
 
 def _get_pred_traj(pred_obj: PredictionData) -> np.ndarray | None:

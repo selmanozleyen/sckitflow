@@ -1,90 +1,21 @@
-"""Full training pipeline for a Conditional Flow Matching (CFM) model.
+"""Train a conditional flow matching run from ``docs/configs/fit_cfm.yaml``.
 
-Wires together the components needed to train a Conditional Flow Matching
-model on single-cell data with an MLP-parameterised velocity field. Designed
-to be invoked via Hydra as the entry point of a training run:
+    python docs/scripts/fit_cfm.py [hydra overrides, e.g. run.training.coupling.type=coupling.pot.sinkhorn]
 
-    python -m <package>.fit_cfm [+config overrides]
-
-(e.g. ``python -m sckitflow.training.fit_cfm`` — the ``-m`` flag takes a
-module path, not a file; adjust to the module's actual location.)
-
-Pipeline (in the order ``main`` executes them)
-----------------------------------------------
-1. Seed everything from ``config.run.method_seed`` (``lightning.seed_everything``).
-2. Load AnnData from disk (``read_adatas``; paths in ``config.paths``).
-3. Build a ``CombinationSplitter`` from ``config.splitter`` (control/train/val/test
-   splits) and a ``FlowDataModule`` from ``config.datamanager`` + ``config.datamodule``.
-4. Build the MLP velocity field (``MLPVelocityConfig`` from ``config.module``).
-5. Build the training method from the ``config.training`` spec (a matched CFM: its
-   probability path, samplers and coupling are nested specs picked by ``type``)
-   and the inference method (``ODEInferenceConfig``).
-6. Build an optimizer (``OptimizerConfig``) and validation metrics
-   (``EnergyDistance``, ``MaximumMeanDiscrepancy``) from ``config.metrics``.
-7. Build a ``TrainingPlan`` (the ``LightningModule`` wrapper) from
-   ``config.training_plan``, wiring together the training/inference methods,
-   metrics, optimizer, and transforms.
-8. Configure ``WandbLogger`` + ``CSVLogger``, callbacks (``EarlyStopping``,
-   ``GradientAccumulationScheduler``, ``LearningRateMonitor``, ``ModelCheckpoint``),
-   and the ``lightning.pytorch.Trainer``.
-9. ``trainer.fit(...)``.
-10. Persist the run via ``save_run`` (writes ``specs.json`` + ``weights.pt``).
-    Training checkpoints are written separately by the ``ModelCheckpoint``
-    callback during ``trainer.fit``.
-11. Return the last validation ``edist`` from ``trainer.callback_metrics``
-    (fallback: ``+inf``) for sweeps / shell exit codes. The key is
-    ``f"{val_name}/edist"`` where ``val_name`` is the first entry of
-    ``datamodule.val_names`` (default ``"val"`` → ``"val/edist"``).
-
-Key concepts
-------------
-- **Conditional Flow Matching (CFM)**: learns a velocity field v(x, t | c) that
-  transports a source distribution to a target distribution conditioned on c.
-- **Probability path**: defines the interpolation between source and target
-  samples. Supported: ``linear_dirac``, ``linear_gaussian``,
-  ``schrodinger_bridge``, ``variance_preserving``. See
-  ``sckitflow.core.probability_paths``.
-- **Velocity field**: the network that predicts the time derivative along the
-  path. Here an MLP with separate state/time/condition encoders.
-- **Coupling**: at training time, pairs source samples with target samples
-  before regression. Selected by ``config.training.coupling.type``, e.g.
-  ``coupling.independent`` or ``coupling.pot.sinkhorn``. See ``sckitflow.core.coupling``.
-- **Sampler**: time and noise draws during training / inference.
-  ``time_sampler`` and ``noise_sampler`` in the config are ``SamplerConfig``
-  objects (portable — the run's spec serializes them). See
-  ``sckitflow.core._samplers``.
-- **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
-  configured via ``ODEInferenceConfig``.
-
-Configuration
--------------
-The full YAML is expected at ``<module_dir>/../config/fit_cfm.yaml`` (Hydra).
-See that file for every key, its meaning, and its default. The training method,
-including its coupling, is one spec under ``config.training``.
-``hydra.job.chdir: false`` is recommended so relative paths
-(``save.run_dir``, ``callbacks.model_checkpoint.dirpath``, logger
-``save_dir``) resolve from the launch directory rather than Hydra's
-``outputs/<date>/<time>/`` tree.
-
-Outputs
--------
-- Checkpoints: ``config.callbacks.model_checkpoint.dirpath`` (written by the
-  ``ModelCheckpoint`` callback during training; best-``val_edist`` weights
-  plus ``last.ckpt``).
-- Loggers: ``config.loggers.{wandb,csv}.save_dir``.
-- Serialised run: ``config.save.run_dir`` (via ``save_run``; contains
-  ``specs.json`` — the portable ``RunConfig`` — and ``weights.pt``). Suitable
-  for reloading with ``sckitflow.load_run`` for **inference**; a reloaded
-  plan carries no validation metrics, so it is not suitable for re-training
-  with validation.
-- Return value: last ``<val_name>/edist`` from
-  ``trainer.callback_metrics`` (``+inf`` if validation never ran).
+Needs ``hydra-core`` and ``wandb`` (the ``scripts`` extra). ``config.run`` is a portable
+:class:`~sckitflow.RunConfig` spec, built as is; the other sections configure the Lightning
+loggers, callbacks and trainer around it. After training, the best checkpoint's weights are saved
+with the spec via :func:`~sckitflow.save_run`, so :func:`~sckitflow.load_run` rebuilds the run.
+Returns the last validation energy distance (``inf`` if validation never ran), for sweeps.
 """
 
-from typing import Any
+import logging
+from pathlib import Path
+from typing import Any, cast
 
 import anndata as ad
 import hydra
+import torch
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -92,434 +23,56 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from lightning.pytorch.loggers import WandbLogger, CSVLogger
-import numpy as np
+from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
-from sckitflow import RunConfig, get_logger, save_run
-from sckitflow.core.methods import ODEInferenceConfig, TrainingMethodConfig
+from sckitflow import RunConfig, save_run
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
-from sckitflow.core.nn import MLPVelocityConfig
-from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDataModuleConfig
-from sckitflow.trainer import TrainingPlan, OptimizerConfig
+
+logger = logging.getLogger(__name__)
 
 
-logger = get_logger(__name__)
-
-EDIST_KEY = "edist"
-MMD_KEY = "mmd"
-
-
-def read_adatas(config: DictConfig) -> tuple[ad.AnnData, ad.AnnData | None]:
-    """Reads the input data from disk.
-
-    Returns a tuple of ``(target_adata, control_adata)``; ``target_adata`` is always
-    read from the ``config.paths.target_adata`` field, while the ``control_adata`` is
-    only returned when ``config.paths.control_adata`` is not ``None``. Otherwise,
-    ``control_adata`` will be ``None`` and will directly be inferred as a subset of
-    ``target_adata``, if the datamodule is configured in a case-control setting.
-    """
-    logger.info(f"Reading target adata from {config.paths.target_adata}.")
-    target_adata = ad.read_h5ad(config.paths.target_adata)
-    logger.info(f"Target adata read: {target_adata}")
-    if config.paths.control_adata is not None:
-        logger.info(f"Loading control adata from {config.paths.control_adata}.")
-        control_adata = ad.read_h5ad(config.paths.control_adata)
-        logger.info(f"Control adata read: {control_adata}")
-    else:
-        logger.info("No control adata provided, skipping.")
-        control_adata = None
-    return target_adata, control_adata
-
-
-def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfig) -> dict[str, Any]:
-    """Resolves the omegaconf ``DictConfig`` to a plain dictionary."""
-    out_dict = {}
-    if conf_dict is not None:
-        out_dict = conf_dict
-        if isinstance(out_dict, dict):
-            out_dict = OmegaConf.create(out_dict)
-        out_dict = OmegaConf.to_container(out_dict, resolve=True)
-    return out_dict
-
-
-@hydra.main(config_path="../config", config_name="fit_cfm", version_base=None)
+@hydra.main(config_path="../configs", config_name="fit_cfm", version_base=None)
 def main(config: DictConfig) -> float:
-    """Main entrypoint for CFM training."""
-    # Seed everything with lightning
-    # This is the master seeding, and it will be also saved to the run
-    # for further reproducibility.
-    logger.info(f"Setting the global run seed to {config.run.method_seed}")
-    seed_everything(seed=config.run.method_seed, workers=True)
+    """Trains ``config.run`` and returns its last validation energy distance."""
+    cfg = cast(dict[str, Any], OmegaConf.to_container(config, resolve=True))
+    run_dir, allow_overwrite = Path(cfg["save"]["run_dir"]), cfg["save"]["allow_overwrite"]
+    if (run_dir / "specs.json").exists() and not allow_overwrite:  # fail before training, not after
+        raise FileExistsError(f"{run_dir} already holds a run; set save.allow_overwrite=true.")
 
-    # Load data from disk using the utility function.
-    # Please override this function to allow custom operations on the
-    # data after loading; at the moment, only vanilla loading
-    # with ``anndata`` is performed, and no other transformation is
-    # applied to the data.
-    target_adata, control_adata = read_adatas(config)
-
-    # Prepare splitter for training.
-    # The splitter defines control, train, validation and test splits
-    # and writes a column in the input ``ad.AnnData``. We should always
-    # fit any data transformation only on the training cases. At the moment,
-    # no transformation is applied, so everything works -- but we need to
-    # leave it here as a TODO for the future: once the splitter is fitted
-    # on the data, fit the transformations on the training data only.
-    logger.info(f"Initializing splitter with seed {config.run.splitter_seed}.")
-    splitter_rng = np.random.default_rng(config.run.splitter_seed)
-    splitter_cfg = CombinationSplitterConfig(
-        group_keys=config.splitter.group_keys,
-        always_train_keys=config.splitter.always_train_keys,
-        control_key=config.splitter.control_key,
-        control_value=config.splitter.control_value,
-        test_fraction=config.splitter.test_fraction,
-        train_label=config.splitter.train_label,
-        test_label=config.splitter.test_label,
-        control_label=config.splitter.control_label,
-    )
-    splitter = splitter_cfg.build(rng=splitter_rng)
-
-    # Prepare data manager.
-    # The ``DataManager`` is never materialized directly here: it lives
-    # in the ``datamodule``, of which it is an attribute.
-    logger.info("Initializing datamanager.")
-    dm_cfg = DataManagerConfig(
-        sample_rep=config.datamanager.sample_rep,
-        conditions=config.datamanager.conditions,
-        conditions_reps=config.datamanager.conditions_reps,
-        conditions_covariates=config.datamanager.conditions_covariates,
-        control_values_dict=config.datamanager.control_values_dict,
-        matched_pairs=config.datamanager.matched_pairs,
-        # split_by=config.datamanager.split_by,
-        condition_state_key=config.datamanager.condition_state_key,
-        target_categorical_covs_dict=config.datamanager.target_categorical_covs_dict,
-        target_continuous_covs=config.datamanager.target_continuous_covs,
-        groups=config.datamanager.groups,
-        groups_reps=config.datamanager.groups_reps,
-        groups_encoding=config.datamanager.groups_encoding,
-        rep_lin=config.datamanager.rep_lin,
-        source_rep_quad=config.datamanager.source_rep_quad,
-        target_rep_quad=config.datamanager.target_rep_quad,
-        use_linear=config.datamanager.use_linear,
-    )
-
-    # Initialize datamodule.
-    # We set the datamodule-specific generator for reproducibility.
-    # The datamodule configuration takes the datamanager_cfg and
-    # provides a builder for the ``pl.DataModule`` wrapper.
-    logger.info(f"Initializing datamodule with seed {config.run.loader_seed}")
-    datamodule_rng = np.random.default_rng(config.run.loader_seed)
-    datamodule_cfg = FlowDataModuleConfig(
-        manager=dm_cfg,
-        train_split=config.datamodule.train_split,
-        n_train_steps=config.datamodule.n_train_steps,
-        batch_size=config.datamodule.batch_size,
-        dtype=config.datamodule.dtype,
-        loader_kwargs=resolve_omegaconf_to_dictionary(config.datamodule.loader_kwargs),
-    )
-    datamodule = datamodule_cfg.build(
-        target_adata,
-        rng=datamodule_rng,
-        control_adata=control_adata,
-        splitter=splitter,
-    )
-
-    # Initialize neural network.
-    # The dimensionalities are automatically inferred from the
-    # data_dims object, linked to the datamodule.
-    logger.info("Initializing neural velocity field.")
-    module_cfg = MLPVelocityConfig(
-        encode_state=config.module.encode_state,
-        encode_time=config.module.encode_time,
-        time_features_id=config.module.time_features_id,
-        num_time_features=config.module.num_time_features,
-        max_period=config.module.max_period,
-        state_encoder_output_dim=config.module.state_encoder_output_dim,
-        time_encoder_output_dim=config.module.time_encoder_output_dim,
-        state_encoder_mlp_kwargs=config.module.state_encoder_mlp_kwargs,
-        time_encoder_mlp_kwargs=config.module.time_encoder_mlp_kwargs,
-        vf_decoder_mlp_kwargs=config.module.vf_decoder_mlp_kwargs,
-        conditioning_id=config.module.conditioning_id,
-        conditioning_kwargs=resolve_omegaconf_to_dictionary(config.module.conditioning_kwargs),
-        condition_encoder_input_layers=config.module.condition_encoder_input_layers,
-        condition_encoder_output_dim=config.module.condition_encoder_output_dim,
-        condition_encoder_pooling_mode=config.module.condition_encoder_pooling_mode,
-        condition_encoder_pooling_kwargs=resolve_omegaconf_to_dictionary(
-            config.module.condition_encoder_pooling_kwargs
-        ),
-        condition_encoder_pooling_proj_dim=config.module.condition_encoder_pooling_proj_dim,
-        condition_encoder_pooling_proj_bias=config.module.condition_encoder_pooling_proj_bias,
-        condition_encoder_covariates_not_pooled=config.module.condition_encoder_covariates_not_pooled,
-        condition_encoder_output_layers_kwargs=config.module.condition_encoder_output_layers_kwargs,
-        source_encoder_mlp_kwargs=config.module.source_encoder_mlp_kwargs,
-        source_encoder_output_dim=config.module.source_encoder_output_dim,
-    )
-    module = module_cfg.build(datamodule.data_dims)
-
-    # Initialize probability path, time sampler and noise sampler.
-    # One spec: each `type` picks a registered config (probability path, samplers, coupling).
-    logger.info("Initializing training method.")
-    training_cfg = TrainingMethodConfig.from_spec(config.training)
-    # inference integrates the same path as training; a matched method wraps the flow method
-    flow_cfg = getattr(training_cfg, "method", training_cfg)
-
-    #  We use the wrapped matched method in ``training_cfg`` to build the training protocol,
-    # this ensures that the matching is correctly computed before each training step.
-    logger.info("Building training method.")
-    training_method = training_cfg.build(
-        module,
-        dims=datamodule.data_dims,
-    )
-
-    # Initialize inference module. This inference module is
-    # used for the validation step during training. Note that
-    # the computational complexity of the solver can significantly
-    # affect the wall time, especially with high frequency validation
-    # passes. It is hence highly reccomended to set configure it
-    # as a cheap sampler (reasonably low ``n_steps``, with euler integration).
-    # More accurate predictors modules can be then initialized at inference time,
-    # without causing eccessive computational overhead.
-    logger.info("Initializing inference method.")
-    inference_cfg = ODEInferenceConfig(
-        probability_path=flow_cfg.probability_path,
-        time_sampler=flow_cfg.time_sampler,
-        noise_sampler=flow_cfg.noise_sampler,
-        generate_from_noise=config.inference.generate_from_noise,
-        solver_kwargs=resolve_omegaconf_to_dictionary(config.inference.solver_kwargs),
-        return_trajectory=config.inference.return_trajectory,
-        n_steps=config.inference.n_steps,
-        n_samples=config.inference.n_samples,
-    )
-    logger.info("Building inference method.")
-    inference_method = inference_cfg.build(module, dims=datamodule.data_dims)
-
-    # Prepare optimizer and scheduler.
-    # ``sckitflow`` provides a public API to handle optimizers; this is not the case
-    # for the learning rate schedulers.
-    # TODO: maybe consider providing the same utility wrappers for the lr schedulers,
-    # so that the pipeline can be fully specified with the necessary configuration files.
-    logger.info("Initializing optimizer.")
-    optimizer_cfg = OptimizerConfig(
-        name=config.optimizer.name,
-        kwargs=resolve_omegaconf_to_dictionary(config.optimizer.kwargs),
-    )
-    logger.info("Building optimizer.")
-    optimizer = optimizer_cfg.build(module.parameters())
-    lr_scheduler = None
-
-    # Initialize metrics used to evaluate model's preditions during validation.
-    # We use two distributional metrics: energy distance and maximum mean discrepancy.
-    # These metrics are useful in the unpaired setting, when there is not a direct and
-    # immediate correspondence between source and target samples -- and we want to
-    # compare probability distributions instead.
-    logger.info("Initializing metrics.")
-    edist = EnergyDistance(dist_sync_on_step=config.metrics.edist.dist_sync_on_step)
-    mmd = MaximumMeanDiscrepancy(
-        gammas=config.metrics.mmd.gammas,
-        dist_sync_on_step=config.metrics.mmd.dist_sync_on_step,
-    )
-    # The trainer expects a dictionary with named metrics; we use the global constants to
-    # define the respective keys for each metric.
+    spec = RunConfig.from_spec(cfg["run"])
+    seed_everything(spec.method_seed, workers=True)
+    paths = cfg["paths"]
+    adata = ad.read_h5ad(paths["target_adata"])
+    control_adata = ad.read_h5ad(paths["control_adata"]) if paths["control_adata"] else None
     metrics = {
-        EDIST_KEY: edist,
-        MMD_KEY: mmd,
+        "edist": EnergyDistance(**cfg["metrics"]["edist"]),
+        "mmd": MaximumMeanDiscrepancy(**cfg["metrics"]["mmd"]),
     }
+    datamodule, plan = spec.build(adata, control_adata=control_adata, metrics=metrics)
 
-    # Initialize prediction transformations.
-    # TODO: Double check ``sckitflow`` API to verify how this transformation should be defined
-    pred_transform = None  # TODO
-
-    # Initialize target transformations.
-    # TODO: Double check ``sckitflow`` API to verify how this transformation should be defined
-    target_transform = None  # TODO
-
-    # Initialize training plan. This still lives in the ``sckitflow`` namespace as a wrapper
-    # around ``lightning`` API. All the ``lightning.pytorch.Trainer`` needs is this configured
-    # plan and the ``datamodule`` we constructed before. After this, we only need to configure
-    # general ``lightning``, as everything from the ``sckitflow`` side will be already prepared.
-    logger.info("Initializing training plan.")
-    plan = TrainingPlan(
-        training_method,
-        optimizer,
-        lr_scheduler=lr_scheduler,
-        lr_scheduler_interval=config.training_plan.lr_scheduler_interval,
-        inference_method=inference_method,
-        metrics=metrics,
-        val_names=datamodule.val_names,
-        pred_transform=pred_transform,
-        target_transform=target_transform,
-        seed=config.training_plan.seed,
-    )
-
-    # Prepare wandb and csv loggers. The loggers are then passed to the
-    # ``lightning.pytorch.Trainer`` at initialization. Please note that
-    # wandb needs to be installed and configured for this to work. The
-    # logging objects live in the ``lightning.pytorch`` and are ``sckitflow``
-    # indpendent. We use wandb for remote logging, and csv for local logging.
-    # For additional loggers, check https://pytorch-lighting.readthedocs.io/en/stable/api_references.html#loggers.
-    logger.info("Initializing wandb logger.")
-    wandb_logger = WandbLogger(
-        name=config.loggers.wandb.name,
-        save_dir=config.loggers.wandb.save_dir,
-        offline=config.loggers.wandb.offline,
-        id=config.loggers.wandb.id,
-        anonymous=config.loggers.wandb.anonymous,
-        version=config.loggers.wandb.version,
-        project=config.loggers.wandb.project,
-        log_model=config.loggers.wandb.log_model,
-        experiment=config.loggers.wandb.experiment,
-        prefix=config.loggers.wandb.prefix,
-        **resolve_omegaconf_to_dictionary(config.loggers.wandb.init_kwargs),
-    )
-    logger.info("Initializing csv logger.")
-    csv_logger = CSVLogger(
-        config.loggers.csv.save_dir,
-        name=config.loggers.csv.name,
-        version=config.loggers.csv.version,
-        prefix=config.loggers.csv.prefix,
-        flush_logs_every_n_steps=config.loggers.csv.flush_logs_every_n_steps,
-    )
-    training_loggers = [wandb_logger, csv_logger]
-
-    # Prepare callbacks. We use four callbacks at the moment, but this can
-    # be easily extended in an analogous way. The used callbacks are: early stopping,
-    # gradient accumulation, learning rate monitoring, and model checkpointing.
-    # They all live in the ``lightning.pytorch.callbacks`` namespace. Visit
-    # https://pytorch-lighting.readthedocs.io/en/stable/api_references.html#callbacks
-    # for all the available callbacks and their respective construction parameters.
-    # TODO: maybe consider registering the configurations for lightining callbacks as
-    # components in ``scfit``, so that their configurations can be effectively serialized
-    # for full end-to-end reproducibility.
-    logger.info("Initializing early stopping callback.")
-    early_stopping = EarlyStopping(
-        monitor=config.callbacks.early_stopping.monitor,
-        min_delta=config.callbacks.early_stopping.min_delta,
-        patience=config.callbacks.early_stopping.patience,
-        verbose=config.callbacks.early_stopping.verbose,
-        mode=config.callbacks.early_stopping.mode,
-        strict=config.callbacks.early_stopping.strict,
-        check_finite=config.callbacks.early_stopping.check_finite,
-        stopping_threshold=config.callbacks.early_stopping.stopping_threshold,
-        divergence_threshold=config.callbacks.early_stopping.divergence_threshold,
-        check_on_train_epoch_end=config.callbacks.early_stopping.check_on_train_epoch_end,
-    )
-    logger.info("Initializing gradient accumulation callback.")
-    grad_accumulation = GradientAccumulationScheduler(scheduling=config.callbacks.grad_accumulation.scheduling)
-    logger.info("Initializing learning rate monitor callback.")
-    lr_monitor = LearningRateMonitor(
-        logging_interval=config.callbacks.lr_monitor.logging_interval,
-        log_momentum=config.callbacks.lr_monitor.log_momentum,
-    )
-    logger.info("Initializing model checkpoint callback.")
-    model_checkpoint = ModelCheckpoint(
-        dirpath=config.callbacks.model_checkpoint.dirpath,
-        filename=config.callbacks.model_checkpoint.filename,
-        monitor=config.callbacks.model_checkpoint.monitor,
-        verbose=config.callbacks.model_checkpoint.verbose,
-        save_last=config.callbacks.model_checkpoint.save_last,
-        save_top_k=config.callbacks.model_checkpoint.save_top_k,
-        save_weights_only=config.callbacks.model_checkpoint.save_weights_only,
-        mode=config.callbacks.model_checkpoint.mode,
-        auto_insert_metric_name=config.callbacks.model_checkpoint.auto_insert_metric_name,
-        every_n_train_steps=config.callbacks.model_checkpoint.every_n_train_steps,
-        train_time_interval=config.callbacks.model_checkpoint.train_time_interval,
-        every_n_epochs=config.callbacks.model_checkpoint.every_n_epochs,
-        save_on_train_epoch_end=config.callbacks.model_checkpoint.save_on_train_epoch_end,
-    )
-    callbacks = [early_stopping, grad_accumulation, lr_monitor, model_checkpoint]
-
-    # Configuring the training plugings. This step is skipped for the moment and the
-    # plugins are hard-coded to ``None``. They are here just as a reminder that they can be set,
-    # and for us to consider whether to actually use them.
-    # Visit https://pytorch-lighting.readthedocs.io/en/stable/api_references.html#plugins
-    # for the available plugins. TODO: consider which plugins to utilize the plugins for training.
-    plugins = None  # TODO
-
-    # Initialize ``lightning.pytorch.Trainer`` object and set all the specified arguments.
-    # The available arguments to initialize the Trainer can be verified from
-    # https://pytorch-lighting.readthedocs.io/en/stable/api/pytorch_lightning.trainer.trainer.Trainer.html#pytorch_lightning.trainer.trainer.Trainer.
-    # TODO: consider adding a ``TrainerConfig`` object to the ``sckitflow`` API for full end-to-end reproducibility.
-    logger.info("Initializing trainer.")
+    callbacks = cfg["callbacks"]
+    checkpoint = ModelCheckpoint(**callbacks["model_checkpoint"])
     trainer = Trainer(
-        accelerator=config.trainer.accelerator,
-        strategy=config.trainer.strategy,
-        devices=config.trainer.devices,
-        num_nodes=config.trainer.num_nodes,
-        precision=config.trainer.precision,
-        logger=training_loggers,
-        callbacks=callbacks,
-        fast_dev_run=config.trainer.fast_dev_run,
-        max_epochs=config.trainer.max_epochs,
-        min_epochs=config.trainer.min_epochs,
-        max_steps=config.trainer.max_steps,
-        min_steps=config.trainer.min_steps,
-        max_time=config.trainer.max_time,
-        limit_train_batches=config.trainer.limit_train_batches,
-        limit_val_batches=config.trainer.limit_val_batches,
-        limit_test_batches=config.trainer.limit_test_batches,
-        limit_predict_batches=config.trainer.limit_predict_batches,
-        overfit_batches=config.trainer.overfit_batches,
-        val_check_interval=config.trainer.val_check_interval,
-        check_val_every_n_epoch=config.trainer.check_val_every_n_epoch,
-        num_sanity_val_steps=config.trainer.num_sanity_val_steps,
-        log_every_n_steps=config.trainer.log_every_n_steps,
-        enable_checkpointing=config.trainer.enable_checkpointing,
-        enable_progress_bar=config.trainer.enable_progress_bar,
-        enable_model_summary=config.trainer.enable_model_summary,
-        gradient_clip_val=config.trainer.gradient_clip_val,
-        gradient_clip_algorithm=config.trainer.gradient_clip_algorithm,
-        deterministic=config.trainer.deterministic,
-        benchmark=config.trainer.benchmark,
-        inference_mode=config.trainer.inference_mode,
-        use_distributed_sampler=config.trainer.use_distributed_sampler,
-        profiler=config.trainer.profiler,  # TODO: this can be an object, resolve it somehow.
-        detect_anomaly=config.trainer.detect_anomaly,
-        barebones=config.trainer.barebones,
-        plugins=plugins,
-        sync_batchnorm=config.trainer.sync_batchnorm,
-        reload_dataloaders_every_n_epochs=config.trainer.reload_dataloaders_every_n_epochs,
-        default_root_dir=config.trainer.default_root_dir,
-        enable_autolog_hparams=config.trainer.enable_autolog_hparams,
-        model_registry=config.trainer.model_registry,
+        **cfg["trainer"],
+        logger=[WandbLogger(**cfg["loggers"]["wandb"]), CSVLogger(**cfg["loggers"]["csv"])],
+        callbacks=[
+            EarlyStopping(**callbacks["early_stopping"]),
+            GradientAccumulationScheduler(**callbacks["grad_accumulation"]),
+            LearningRateMonitor(**callbacks["lr_monitor"]),
+            checkpoint,
+        ],
     )
-    # We call the ``Trainer.fit`` method by passing the ``datamodule``, instantiated
-    # using the ``sckitflow`` API. We also pass the ``ckpt_path`` for model checkpointing.
-    # TODO: consider how the ``ckpt_path`` interacts with the ``ModelCheckpoint`` and
-    # possibly consider using only one of the two.
-    logger.info("Fitting the model.")
-    trainer.fit(plan, datamodule=datamodule, ckpt_path=config.trainer.ckpt_path)
+    trainer.fit(plan, datamodule=datamodule, ckpt_path=cfg["ckpt_path"])
 
-    # Build run config and save to disk. This object contains all the configurations
-    # currently defining a run. It is required for persistency and reproducibility, as
-    # the ``save_run`` expects this object as input.
-    logger.info("Initializing run configuration for reproducibility.")
-    run_cfg = RunConfig(
-        data=datamodule_cfg,
-        training=training_cfg,
-        inference=inference_cfg,
-        splitter=splitter_cfg,
-        loader_seed=config.run.loader_seed,
-        splitter_seed=config.run.splitter_seed,
-        method_seed=config.run.method_seed,
-        module=module_cfg,
-        optimizer=optimizer_cfg,
-    )
-    logger.info(f"Saving run {config.save.run_dir}.")
-    save_run(config.save.run_dir, run_cfg, module, allow_overwrite=config.run.allow_overwrite)
-
-    # Capture the edist from the latest validation step. This is the value
-    # that will be returned to the caller (Hydra sweep / Optuna trial / shell
-    # exit code). If validation never ran (fast_dev_run, limit_val_batches=0),
-    # fall back to +inf so downstream comparators treat the run as the worst.
-    # We guard ``dict.get`` with a ``float("inf")`` default to prevent ``KeyError``s
-    # TODO: double check that the key which to retrieve the last metric from
-    # is the correct one.
-    val_edist_key = f"{datamodule.val_names[0]}/{EDIST_KEY}"  # e.g. "val/edist"
-    last_val_edist = trainer.callback_metrics.get(val_edist_key, float("inf"))
-    returned_metric = float(last_val_edist)
-    logger.info(f"Finishing the run with edist of {returned_metric:.4f}")
-    return returned_metric
+    if checkpoint.best_model_path:  # save the best weights, not the last epoch's
+        plan.load_state_dict(
+            torch.load(checkpoint.best_model_path, map_location="cpu", weights_only=False)["state_dict"]
+        )
+    save_run(run_dir, spec, plan.module, allow_overwrite=allow_overwrite)
+    score = float(trainer.callback_metrics.get(f"{datamodule.val_names[0]}/edist", float("inf")))
+    logger.info(f"Saved the run to {run_dir}; validation energy distance {score:.4f}.")
+    return score
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from scfit.registry import component
 from sckitflow.core._samplers import (
     IsotropicGaussianNoiseSamplerConfig,
     SamplerConfig,
+    TimeSamplerConfig,
     UniformTimeSamplerConfig,
     _standard_normal,
     _uniform,
@@ -127,7 +128,7 @@ def _scaled_ones(
 
 
 @component("time_sampler.scaled_ones")
-class ScaledOnesSamplerConfig(SamplerConfig):
+class ScaledOnesSamplerConfig(TimeSamplerConfig):
     """Test-only sampler that bakes a scale into the built callable."""
 
     fn = _scaled_ones

@@ -77,6 +77,40 @@ class MLPConfig(ModuleConfig):
         return MLP(input_dim, output_dim, **self.mlp_kwargs())
 
 
+def _resolve_layer_dict(layers: dict[str, Any]) -> dict[str, Any]:
+    """Resolve activation names → classes, recursively.
+
+    Two shapes need resolution:
+    * Flat MLP option dicts (``{"activation_cls": "silu", "hidden_dims": …}``)
+      for ``condition_encoder_output_layers_kwargs`` / ``source_encoder_mlp_kwargs``.
+    * One level of nesting for ``condition_encoder_input_layers``, whose
+      values are per-key layers dicts (``{"drug": {"output_dim": 2, …}}``).
+    Entries that are already classes (e.g. when pydantic has already run
+    ``MLPConfig.mlp_kwargs()``) are left untouched.
+    """
+    out: dict[str, Any] = {}
+    for key, value in layers.items():
+        if isinstance(value, dict):
+            out[key] = _resolve_layer_dict(value)
+        elif key in ("activation_cls", "final_activation_cls") and isinstance(value, str):
+            out[key] = _ACTIVATIONS[value]
+        else:
+            out[key] = value
+    return out
+
+
+def _compile_dict(kwargs_dict: dict[str, Any]) -> dict[str, Any]:
+    out_dict: dict[str, Any] = {}
+    for arg_name, arg_val in kwargs_dict.items():
+        if isinstance(arg_val, MLPConfig):
+            out_dict[arg_name] = arg_val.mlp_kwargs()
+        elif isinstance(arg_val, dict):
+            out_dict[arg_name] = _resolve_layer_dict(arg_val)
+        else:
+            out_dict[arg_name] = arg_val
+    return out_dict
+
+
 @component("velocity_field.mlp", builds=MLPVelocity)
 class MLPVelocityConfig(ModuleConfig):
     """The JSON-able arguments of :class:`MLPVelocity`; see it for their meaning.
@@ -117,7 +151,7 @@ class MLPVelocityConfig(ModuleConfig):
         return layers
 
     def build(self, dims: DataDimensions) -> MLPVelocity:
-        kwargs = {k: v.mlp_kwargs() if isinstance(v, MLPConfig) else v for k, v in dict(self).items()}
+        kwargs = _compile_dict(dict(self))
 
         # Fill in per-condition-encoder `input_dim` from the data dimensions.
         if self.condition_encoder_input_layers is not None:

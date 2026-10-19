@@ -105,10 +105,10 @@ splitter:
 # -----------------------------------------------------------------------------
 datamanager:
   sample_rep: "X_pca"
-  conditions: ["condition"]
-  conditions_reps: {}
-  conditions_covariates: []
-  control_values_dict: {"condition": "control"}
+  categorical_conditions: {}
+  categorical_reps: {}
+  continuous_conditions: []
+  control_values_dict: {}
   matched_pairs: false
   split_by: "${splitter.split_key}"
   condition_state_key: null
@@ -162,7 +162,6 @@ transform:
 #   state_encoder_mlp_kwargs, time_encoder_mlp_kwargs, vf_decoder_mlp_kwargs,
 #   conditioning_id, conditioning_kwargs, condition_encoder_input_layers,
 #   condition_encoder_output_dim, condition_encoder_pooling_*,
-#   condition_encoder_covariates_not_pooled,
 #   condition_encoder_output_layers_kwargs,
 #   source_encoder_mlp_kwargs, source_encoder_output_dim
 #
@@ -214,7 +213,6 @@ module:
   condition_encoder_pooling_kwargs: {}
   condition_encoder_pooling_proj_dim: 64
   condition_encoder_pooling_proj_bias: true
-  condition_encoder_covariates_not_pooled: []
   condition_encoder_output_layers_kwargs:
     hidden_dims: [128]
     activation_cls: "silu"

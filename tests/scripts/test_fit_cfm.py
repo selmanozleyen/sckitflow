@@ -3,7 +3,7 @@
 Three pair matrices, all built on the same principle: a DM override and the
 VF override it implies are **bundled together**, so they cannot drift.
 
-* ``_SCHEMA_PAIRS`` — datamanager schema (conditions, covariates, paired/
+* ``_SCHEMA_PAIRS`` — datamanager schema (categorical_conditions, covariates, paired/
   unpaired, groups) paired with the VF configuration it requires — including
   one ``condition_encoder_input_layers`` entry per condition key.
 * ``_COUPLING_PAIRS`` — coupling method paired with the datamanager reps
@@ -177,9 +177,9 @@ _OVERRIDES_SPLITTER: list[tuple[str, list[str]]] = [
 def _dm_shared(**overrides_kwargs) -> dict:
     """Base datamanager kwargs; each pair extends specific fields."""
     base = {
-        "conditions": {},
-        "conditions_reps": {},
-        "conditions_covariates": [],
+        "categorical_conditions": {},
+        "categorical_reps": {},
+        "continuous_conditions": [],
         "control_values_dict": {},
         "groups": [],
         "groups_encoding": {},
@@ -291,7 +291,7 @@ def _lookup(variants, name):
 # --------------------------- schema pairs ----------------------------------
 _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     # ---- Group-only, unpaired -----------------------------------------
-    # No conditions → no condition_encoder_input_layers entries.
+    # No categorical_conditions → no condition_encoder_input_layers entries.
     "groups_only": (
         overrides("datamanager", sample_rep="X_repr", **_dm_shared()),
         [],
@@ -302,13 +302,12 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
         overrides(
             "datamanager",
             sample_rep="X_repr",
-            **_dm_shared(conditions_covariates=["X_tgt"]),
+            **_dm_shared(continuous_conditions=["X_tgt"]),
         ),
         [
             _per_condition_layers(["X_tgt"]),
             *overrides(
                 "module",
-                condition_encoder_covariates_not_pooled=["X_tgt"],
             ),
         ],
     ),
@@ -318,8 +317,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"]},
-                conditions_reps={"drug": "drug"},
+                categorical_conditions={"drug": ["drugA"]},
+                categorical_reps={"drug": "drug"},
             ),
         ),
         [_per_condition_layers(["drug"])],
@@ -330,8 +329,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"]},
-                conditions_reps={"drug": "drug"},
+                categorical_conditions={"drug": ["drugA"]},
+                categorical_reps={"drug": "drug"},
                 control_values_dict={"drug": "control"},
             ),
         ),
@@ -342,8 +341,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"]},
-                conditions_reps={"drug": "drug"},
+                categorical_conditions={"drug": ["drugA"]},
+                categorical_reps={"drug": "drug"},
                 control_values_dict={"drug": "control"},
                 groups=["source_split"],
                 groups_encoding={"source_split": "label"},
@@ -358,8 +357,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"], "ko": ["koA"]},
-                conditions_reps={"drug": "drug", "ko": "ko"},
+                categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
+                categorical_reps={"drug": "drug", "ko": "ko"},
             ),
         ),
         [_per_condition_layers(["drug", "ko"])],
@@ -369,8 +368,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"], "ko": ["koA"]},
-                conditions_reps={"drug": "drug", "ko": "ko"},
+                categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
+                categorical_reps={"drug": "drug", "ko": "ko"},
                 control_values_dict={"drug": "control", "ko": "control"},
             ),
         ),
@@ -381,8 +380,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"], "ko": ["koA"]},
-                conditions_reps={"drug": "drug", "ko": "ko"},
+                categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
+                categorical_reps={"drug": "drug", "ko": "ko"},
                 control_values_dict={"drug": "control", "ko": "control"},
                 groups=["source_split"],
                 groups_encoding={"source_split": "label"},
@@ -396,9 +395,9 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"]},
-                conditions_reps={"drug": "drug"},
-                conditions_covariates=["X_tgt"],
+                categorical_conditions={"drug": ["drugA"]},
+                categorical_reps={"drug": "drug"},
+                continuous_conditions=["X_tgt"],
                 control_values_dict={"drug": "control"},
             ),
         ),
@@ -406,7 +405,6 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             _per_condition_layers(["drug", "X_tgt"]),
             *overrides(
                 "module",
-                condition_encoder_covariates_not_pooled=["X_tgt"],
             ),
         ],
     ),
@@ -416,9 +414,9 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_repr",
             **_dm_shared(
-                conditions={"drug": ["drugA"], "ko": ["koA"]},
-                conditions_reps={"drug": "drug", "ko": "ko"},
-                conditions_covariates=["X_tgt"],
+                categorical_conditions={"drug": ["drugA"], "ko": ["koA"]},
+                categorical_reps={"drug": "drug", "ko": "ko"},
+                continuous_conditions=["X_tgt"],
                 control_values_dict={"drug": "control", "ko": "control"},
             ),
         ),
@@ -426,7 +424,6 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             _per_condition_layers(["drug", "ko", "X_tgt"]),
             *overrides(
                 "module",
-                condition_encoder_covariates_not_pooled=["X_tgt"],
             ),
         ],
     ),
@@ -436,8 +433,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             "datamanager",
             sample_rep="X_src",
             **_dm_shared(
-                conditions={"drug": ["drugA"]},
-                conditions_reps={"drug": "drug"},
+                categorical_conditions={"drug": ["drugA"]},
+                categorical_reps={"drug": "drug"},
                 control_values_dict={"drug": "control"},
             ),
         ),
@@ -654,7 +651,7 @@ class TestScriptLoads:
 
 
 class TestFitCFMRunsSchemaPairs:
-    """Schema matrix: conditions × covariates × paired/unpaired, all with groups.
+    """Schema matrix: categorical_conditions × covariates × paired/unpaired, all with groups.
 
     Every pair supplies ``condition_encoder_input_layers`` with one entry per
     condition key its DM produces, so the per-condition input-layer path is

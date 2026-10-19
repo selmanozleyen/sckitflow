@@ -276,9 +276,9 @@ def main(config: DictConfig) -> float:
     logger.info("Initializing datamanager.")
     dm_cfg = DataManagerConfig(
         sample_rep=config.datamanager.sample_rep,
-        conditions=config.datamanager.conditions,
-        conditions_reps=config.datamanager.conditions_reps,
-        conditions_covariates=config.datamanager.conditions_covariates,
+        categorical_conditions=config.datamanager.categorical_conditions,
+        categorical_reps=config.datamanager.categorical_reps,
+        continuous_conditions=config.datamanager.continuous_conditions,
         control_values_dict=config.datamanager.control_values_dict,
         matched_pairs=config.datamanager.matched_pairs,
         split_by=config.datamanager.split_by,
@@ -335,7 +335,6 @@ def main(config: DictConfig) -> float:
         ),
         condition_encoder_pooling_proj_dim=config.module.condition_encoder_pooling_proj_dim,
         condition_encoder_pooling_proj_bias=config.module.condition_encoder_pooling_proj_bias,
-        condition_encoder_covariates_not_pooled=config.module.condition_encoder_covariates_not_pooled,
         condition_encoder_output_layers_kwargs=resolve_omegaconf_to_dictionary(
             config.module.condition_encoder_output_layers_kwargs
         ),

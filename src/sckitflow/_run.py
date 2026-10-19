@@ -19,6 +19,7 @@ With a ``module`` config the spec is the whole model; without one the module is 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -77,16 +78,22 @@ class RunConfig(Component):
         module: torch.nn.Module | None = None,
         *,
         optimizer: torch.optim.Optimizer | None = None,
+        control_adata: AnnData | None = None,
+        metrics: Mapping[str, torch.nn.Module] | None = None,
     ) -> Run:
         """The data module over ``adata`` and a plan over ``module``, or over the module ``self.module`` builds.
 
         :param module: Overrides ``self.module``; required when it is ``None``.
         :param optimizer: Overrides ``self.optimizer``.
+        :param control_adata: Control cells kept in a separate AnnData, as given to the data module.
+        :param metrics: Validation metrics for the plan.
         """
         splitter = (
             self.splitter.build(rng=np.random.default_rng(self.splitter_seed)) if self.splitter is not None else None
         )
-        datamodule = self.data.build(adata, rng=np.random.default_rng(self.loader_seed), splitter=splitter)
+        datamodule = self.data.build(
+            adata, rng=np.random.default_rng(self.loader_seed), control_adata=control_adata, splitter=splitter
+        )
         dims = datamodule.data_dims
         if module is None:
             if self.module is None:
@@ -98,6 +105,7 @@ class RunConfig(Component):
             self.training.build(module, dims=dims),
             optimizer,
             inference_method=self.inference.build(module, dims=dims) if self.inference is not None else None,
+            metrics=metrics,
             val_names=datamodule.val_names,
             seed=self.method_seed,
         )
@@ -128,6 +136,7 @@ def load_run(
     module: torch.nn.Module | None = None,
     *,
     optimizer: torch.optim.Optimizer | None = None,
+    control_adata: AnnData | None = None,
     map_location: str | None = "cpu",
 ) -> Run:
     """Rebuilds a run from ``path``: the data module, and a plan over ``module``.
@@ -136,9 +145,10 @@ def load_run(
     :param module: A freshly built module of the right shape; ``None`` builds it from the spec's ``module``.
         Its weights are loaded from ``weights.pt``.
     :param optimizer: Overrides the spec's ``optimizer``.
+    :param control_adata: Control cells kept in a separate AnnData, as the run was trained with.
     """
     src = Path(path)
     spec = RunConfig.from_spec(json.loads((src / SPECS_NAME).read_text()))
-    run = spec.build(adata, module, optimizer=optimizer)
+    run = spec.build(adata, module, optimizer=optimizer, control_adata=control_adata)
     run.plan.module.load_state_dict(torch.load(src / WEIGHTS_NAME, map_location=map_location, weights_only=True))
     return run

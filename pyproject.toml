@@ -80,6 +80,11 @@ optional-dependencies.notebooks = [
   "nbformat",
   "sckitflow[torch]",
 ]
+# Runs docs/scripts/fit_cfm.py.
+optional-dependencies.scripts = [
+  "hydra-core>=1.3",
+  "sckitflow[logging]",
+]
 optional-dependencies.test = [
   "coverage",
   "hydra-core>=1.3",          # tests/scripts/test_fit_cfm.py loads docs/scripts/fit_cfm.py, which is @hydra.main

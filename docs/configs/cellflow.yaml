@@ -21,7 +21,6 @@ data:
 
 splitter:
   type: splitter.combination
-  version: 1
   group_keys: [cell_line, drug1, drug2]
   always_train_keys: [cell_line]
   control_key: drug1

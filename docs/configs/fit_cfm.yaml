@@ -36,33 +36,6 @@ paths:
   control_adata: null
 
 # -----------------------------------------------------------------------------
-# Probability path (`get_probability_path_cfg`)
-#
-# `name` must be one of:
-#   linear_dirac | linear_gaussian | schrodinger_bridge | variance_preserving
-# `eps` is only consumed by `schrodinger_bridge`, but the key is read
-# unconditionally, so keep it present.
-# -----------------------------------------------------------------------------
-probability_path:
-  name: "linear_gaussian"
-  sigma: 0.1
-  eps: 0.01
-
-# -----------------------------------------------------------------------------
-# Samplers (`get_time_sampler` / `get_noise_sampler`)
-#
-# Only one value each is supported:
-#   time_sampler.name  == "uniform"            → torch.rand
-#   noise_sampler.name == "isotropic_gaussian" → torch.randn
-# Any other value raises ValueError at `main()`.
-# -----------------------------------------------------------------------------
-time_sampler:
-  name: "uniform"
-
-noise_sampler:
-  name: "isotropic_gaussian"
-
-# -----------------------------------------------------------------------------
 # Splitter (`CombinationSplitterConfig`)
 #
 #   group_keys        obs columns forming split groups (e.g. batch IDs)
@@ -195,47 +168,26 @@ module:
 
 
 # -----------------------------------------------------------------------------
-# Training method (`CFMTrainingConfig`)
-#
-# generate_from_noise — start from a noise sample rather than a data sample
+# Training method: one spec. Each `type` names a registered config, so any
+# probability path, sampler or coupling is picked here without code changes,
+# e.g. `coupling: {type: coupling.pot.sinkhorn, version: 1, reg: 0.05}`.
 # -----------------------------------------------------------------------------
 training:
-  generate_from_noise: true
-
-# -----------------------------------------------------------------------------
-# Coupling (`get_coupling_cfg`) — NEW in this revision
-#
-# Wraps the base training method in a `MatchedTrainingConfig` that pairs
-# source/target samples before regression.
-#
-# `method` must be one of:
-#   independent | exact | sinkhorn | partial | unbalanced
-#               | gromov-wasserstein | fused
-#
-# Which keys are consumed depends on `method`. Keep ALL keys below so the
-# method is switchable from the YAML alone:
-#
-#   exact              → scale_cost, num_iter_max
-#   sinkhorn           → scale_cost, num_iter_max, reg, stop_thr
-#   partial            → scale_cost, num_iter_max, reg, stop_thr, m
-#   unbalanced         → scale_cost, num_iter_max, reg, stop_thr, reg_m
-#   gromov-wasserstein → scale_cost, epsilon, max_iter, tol
-#   fused              → scale_cost, epsilon, max_iter, tol, alpha
-#   independent        → (none of the above)
-# -----------------------------------------------------------------------------
-coupling:
-  method: "independent"
-  # keys read by the branch matching `method`
-  scale_cost: "mean"
-  num_iter_max: 100
-  reg: 0.05
-  stop_thr: 1.0e-6
-  m: 0.9
-  reg_m: 1.0
-  epsilon: 0.01
-  max_iter: 100
-  tol: 1.0e-6
-  alpha: 0.5
+  type: training_method.matched
+  version: 1
+  coupling:
+    type: coupling.independent
+    version: 1
+  method:
+    type: training_method.cfm
+    version: 1
+    generate_from_noise: true
+    probability_path:
+      type: probability_path.linear_gaussian
+      version: 1
+      sigma: 0.1
+    time_sampler: {type: time_sampler.uniform, version: 1}
+    noise_sampler: {type: noise_sampler.isotropic_gaussian, version: 1}
 
 # -----------------------------------------------------------------------------
 # Inference method (`ODEInferenceConfig`)

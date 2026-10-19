@@ -16,12 +16,9 @@ Pipeline (in the order ``main`` executes them)
 3. Build a ``CombinationSplitter`` from ``config.splitter`` (control/train/val/test
    splits) and a ``FlowDataModule`` from ``config.datamanager`` + ``config.datamodule``.
 4. Build the MLP velocity field (``MLPVelocityConfig`` from ``config.module``).
-5. Build the base training method (``CFMTrainingConfig``), wrap it in a
-   ``MatchedTrainingConfig`` that pairs source/target samples according to
-   ``config.coupling``, and build the inference method (``ODEInferenceConfig``).
-   Probability path and samplers arrive as portable ``*Config`` objects so
-   ``save_run`` can serialize them; each method resolves them to a callable
-   inside ``build``.
+5. Build the training method from the ``config.training`` spec (a matched CFM: its
+   probability path, samplers and coupling are nested specs picked by ``type``)
+   and the inference method (``ODEInferenceConfig``).
 6. Build an optimizer (``OptimizerConfig``) and validation metrics
    (``EnergyDistance``, ``MaximumMeanDiscrepancy``) from ``config.metrics``.
 7. Build a ``TrainingPlan`` (the ``LightningModule`` wrapper) from
@@ -50,9 +47,8 @@ Key concepts
 - **Velocity field**: the network that predicts the time derivative along the
   path. Here an MLP with separate state/time/condition encoders.
 - **Coupling**: at training time, pairs source samples with target samples
-  before regression. Selected by ``config.coupling.method``: ``independent``,
-  ``exact``, ``sinkhorn``, ``partial``, ``unbalanced``,
-  ``gromov-wasserstein``, ``fused``. See ``sckitflow.core.coupling``.
+  before regression. Selected by ``config.training.coupling.type``, e.g.
+  ``coupling.independent`` or ``coupling.pot.sinkhorn``. See ``sckitflow.core.coupling``.
 - **Sampler**: time and noise draws during training / inference.
   ``time_sampler`` and ``noise_sampler`` in the config are ``SamplerConfig``
   objects (portable — the run's spec serializes them). See
@@ -63,8 +59,8 @@ Key concepts
 Configuration
 -------------
 The full YAML is expected at ``<module_dir>/../config/fit_cfm.yaml`` (Hydra).
-See that file for every key, its meaning, and its default. The coupling
-selection and its hyperparameters live under ``config.coupling``.
+See that file for every key, its meaning, and its default. The training method,
+including its coupling, is one spec under ``config.training``.
 ``hydra.job.chdir: false`` is recommended so relative paths
 (``save.run_dir``, ``callbacks.model_checkpoint.dirpath``, logger
 ``save_dir``) resolve from the launch directory rather than Hydra's
@@ -101,31 +97,9 @@ import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
 from sckitflow import RunConfig, get_logger, save_run
-from sckitflow.core._samplers import (
-    IsotropicGaussianNoiseSamplerConfig,
-    SamplerConfig,
-    UniformTimeSamplerConfig,
-)
-from sckitflow.core.coupling import (
-    CouplingConfig,
-    IndependentCouplingConfig,
-    ExactCouplingConfig,
-    SinkhornCouplingConfig,
-    PartialCouplingConfig,
-    UnbalancedCouplingConfig,
-    GromovWassersteinCouplingConfig,
-    FusedGromovWassersteinCouplingConfig,
-)
-from sckitflow.core.methods import CFMTrainingConfig, MatchedTrainingConfig, ODEInferenceConfig
+from sckitflow.core.methods import ODEInferenceConfig, TrainingMethodConfig
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
 from sckitflow.core.nn import MLPVelocityConfig
-from sckitflow.core.probability_paths import (
-    ProbabilityPathConfig,
-    LinearDiracProbabilityPathConfig,
-    LinearGaussianProbabilityPathConfig,
-    SchrodingerBridgeProbabilityPathConfig,
-    VariancePreservingDiracProbabilityPathConfig,
-)
 from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDataModuleConfig
 from sckitflow.trainer import TrainingPlan, OptimizerConfig
 
@@ -156,99 +130,6 @@ def read_adatas(config: DictConfig) -> tuple[ad.AnnData, ad.AnnData | None]:
         logger.info("No control adata provided, skipping.")
         control_adata = None
     return target_adata, control_adata
-
-
-def get_probability_path_cfg(config: DictConfig) -> ProbabilityPathConfig:
-    """Retrieves the probability path configuration object from the given specification."""
-    if config.probability_path.name == "linear_dirac":
-        return LinearDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
-    elif config.probability_path.name == "linear_gaussian":
-        return LinearGaussianProbabilityPathConfig(sigma=config.probability_path.sigma)
-    elif config.probability_path.name == "schrodinger_bridge":
-        return SchrodingerBridgeProbabilityPathConfig(
-            sigma=config.probability_path.sigma, eps=config.probability_path.eps
-        )
-    elif config.probability_path.name == "variance_preserving":
-        return VariancePreservingDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
-    else:
-        raise ValueError(f"Invalid probability path name {config.probability_path.name}.")
-
-
-def get_time_sampler_cfg(config: DictConfig) -> SamplerConfig:
-    """Retrieves the time-sampler *config* for CFM training.
-
-    The returned ``SamplerConfig`` is portable — ``save_run`` can serialize it
-    into ``specs.json`` — while the method that consumes it resolves it to a
-    raw callable in ``AbstractFlowMethod.__init__``. At the moment, the only
-    available time sampler is ``"uniform"``.
-    """
-    if config.time_sampler.name == "uniform":
-        return UniformTimeSamplerConfig()
-    else:
-        raise ValueError(f"Invalid time sampler name {config.time_sampler.name}.")
-
-
-def get_noise_sampler_cfg(config: DictConfig) -> SamplerConfig:
-    """Retrieves the noise-sampler *config* for CFM training.
-
-    Same rationale as :func:`get_time_sampler_cfg`. At the moment, the only
-    available noise sampler is ``"isotropic_gaussian"``.
-    """
-    if config.noise_sampler.name == "isotropic_gaussian":
-        return IsotropicGaussianNoiseSamplerConfig()
-    else:
-        raise ValueError(f"Invalid noise sampler name {config.noise_sampler.name}.")
-
-
-def get_coupling_cfg(config: DictConfig) -> CouplingConfig:
-    """Resolves the coupling configuration from the input."""
-    if config.coupling.method == "independent":
-        return IndependentCouplingConfig()
-    elif config.coupling.method == "exact":
-        return ExactCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-        )
-    elif config.coupling.method == "sinkhorn":
-        return SinkhornCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-            reg=config.coupling.reg,
-            stop_thr=config.coupling.stop_thr,
-        )
-    elif config.coupling.method == "partial":
-        return PartialCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-            reg=config.coupling.reg,
-            stop_thr=config.coupling.stop_thr,
-            m=config.coupling.m,
-        )
-    elif config.coupling.method == "unbalanced":
-        return UnbalancedCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-            reg=config.coupling.reg,
-            stop_thr=config.coupling.stop_thr,
-            reg_m=config.coupling.reg_m,
-        )
-    elif config.coupling.method == "gromov-wasserstein":
-        return GromovWassersteinCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            epsilon=config.coupling.epsilon,
-            max_iter=config.coupling.max_iter,
-            tol=config.coupling.tol,
-        )
-    elif config.coupling.method == "fused":
-        return FusedGromovWassersteinCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            epsilon=config.coupling.epsilon,
-            max_iter=config.coupling.max_iter,
-            tol=config.coupling.tol,
-            alpha=config.coupling.alpha,
-        )
-    else:
-        raise ValueError(f"Invalid coupling method {config.coupling.method}")
 
 
 def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfig) -> dict[str, Any]:
@@ -377,45 +258,11 @@ def main(config: DictConfig) -> float:
     module = module_cfg.build(datamodule.data_dims)
 
     # Initialize probability path, time sampler and noise sampler.
-    # This initialization is somewhat of a hack at the moment, we should
-    # probably access the registered components from scfit; however, it is
-    # not clear to me how to access the ``scfit.registry._REGISTRY`` with
-    # ``scfit`` public API. TODO: Consider changing the initialization
-    # of the probability path to use ``scfit`` components.
-    # Instantiating probability path configuration.
-    logger.info("Initializing probability path.")
-    probability_path_cfg = get_probability_path_cfg(config)
-    # Instantiating time sampler.
-    logger.info("Initializing time sampler.")
-    time_sampler_cfg = get_time_sampler_cfg(config)
-    # Instantiating noise sampler.
-    logger.info("Initializing noise sampler.")
-    noise_sampler_cfg = get_noise_sampler_cfg(config)
-
-    # Initialize training module.
-    # In this script, we train a CFM model. This could be potentially
-    # generalized to allow for arbitrary training components.
-    # The pipeline would be quite similar for other models, and
-    # the same steps cand be executed in the same order as here.
-    logger.info("Initializing base training method.")
-    base_training_cfg = CFMTrainingConfig(
-        probability_path=probability_path_cfg,
-        time_sampler=time_sampler_cfg,
-        noise_sampler=noise_sampler_cfg,
-        generate_from_noise=config.training.generate_from_noise,
-    )
-
-    # Initialize coupling configuration and matched training configurations.
-    # The ``MatchedTrainingConfig`` wraps a base training configuration and a
-    # coupling configuration to perform matching before calling the training method.
-    # We wrap around the ``base_training_cfg`` that we defined just above.
-    logger.info("Initializing coupling module.")
-    coupling_cfg = get_coupling_cfg(config)
-    logger.info("Initializing matched wrapper.")
-    training_cfg = MatchedTrainingConfig(
-        method=base_training_cfg,
-        coupling=coupling_cfg,
-    )
+    # One spec: each `type` picks a registered config (probability path, samplers, coupling).
+    logger.info("Initializing training method.")
+    training_cfg = TrainingMethodConfig.from_spec(config.training)
+    # inference integrates the same path as training; a matched method wraps the flow method
+    flow_cfg = getattr(training_cfg, "method", training_cfg)
 
     #  We use the wrapped matched method in ``training_cfg`` to build the training protocol,
     # this ensures that the matching is correctly computed before each training step.
@@ -435,9 +282,9 @@ def main(config: DictConfig) -> float:
     # without causing eccessive computational overhead.
     logger.info("Initializing inference method.")
     inference_cfg = ODEInferenceConfig(
-        probability_path=probability_path_cfg,
-        time_sampler=time_sampler_cfg,
-        noise_sampler=noise_sampler_cfg,
+        probability_path=flow_cfg.probability_path,
+        time_sampler=flow_cfg.time_sampler,
+        noise_sampler=flow_cfg.noise_sampler,
         generate_from_noise=config.inference.generate_from_noise,
         solver_kwargs=resolve_omegaconf_to_dictionary(config.inference.solver_kwargs),
         return_trajectory=config.inference.return_trajectory,

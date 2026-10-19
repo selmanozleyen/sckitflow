@@ -237,11 +237,11 @@ def test_script_loads() -> None:
         pytest.param(combine(), id="base"),
         pytest.param(combine(dm="sample_rep_x_src"), id="dm-sample-rep-x-src"),
         pytest.param(
-            combine(coupling=["coupling.method=sinkhorn"]),
+            combine(coupling=["training.coupling.type=coupling.pot.sinkhorn"]),
             id="coupling-sinkhorn",
         ),
         pytest.param(
-            combine(probability_path=["probability_path.name=schrodinger_bridge"]),
+            combine(probability_path=["training.method.probability_path.type=probability_path.schrodinger_bridge"]),
             id="schrodinger-bridge",
         ),
     ],

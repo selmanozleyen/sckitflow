@@ -4,8 +4,11 @@ import pandas as pd
 import pytest
 import torch
 from pydantic import ValidationError
+from scfit.registry import component
 
-from sckitflow.core._samplers import IsotropicGaussianNoiseSamplerConfig, SamplerConfig, UniformTimeSamplerConfig
+from sckitflow.core._samplers import (
+    NoiseSamplerConfig,
+)
 from sckitflow.core._types import PredictionData
 from sckitflow.core.methods.inference._ode import ODEInference, ODEInferenceConfig
 from sckitflow.data._dims import DataDimensions
@@ -64,26 +67,9 @@ def step_data():
 
 @pytest.fixture
 def make_inference(dummy_module, dims):
-    """Build an ``ODEInference`` whose samplers are always configs.
-
-    Accepts raw sampler callables from the tests and wraps them into configs,
-    so the config is config-only at every construction site.
-    """
+    """Build an ``ODEInference`` from config fields."""
 
     def _make(latent=None, **config):
-        # Normalize time_sampler
-        ts = config.pop("time_sampler", None)
-        if ts is None or not isinstance(ts, SamplerConfig):
-            ts = UniformTimeSamplerConfig()
-        config["time_sampler"] = ts
-
-        # Normalize noise_sampler (optional)
-        ns = config.pop("noise_sampler", None)
-        if ns is not None and not isinstance(ns, SamplerConfig):
-            ns = IsotropicGaussianNoiseSamplerConfig()
-        if ns is not None:
-            config["noise_sampler"] = ns
-
         return ODEInference(dummy_module, ODEInferenceConfig(**config), dims=dims, latent=latent)
 
     return _make
@@ -299,3 +285,16 @@ def test_standalone_generation_without_source_or_conditioning(dummy_module, dims
 
     drawn = solver_cls.return_value.solve.call_args.args[0]
     assert drawn.shape == (5, dims.state_dim)
+
+
+def _zeros(shape, *, generator, device=None, dtype=None):
+    return torch.zeros(shape, device=device, dtype=dtype)
+
+
+@component("noise_sampler.test_zeros")
+class _ZerosNoiseConfig(NoiseSamplerConfig):
+    fn = _zeros
+
+
+def test_custom_noise_sampler_reaches_the_method(make_inference):
+    assert make_inference(noise_sampler=_ZerosNoiseConfig()).noise_sampler is _zeros

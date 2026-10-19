@@ -6,7 +6,7 @@ import torch
 
 from sckitflow.core._samplers import (
     IsotropicGaussianNoiseSamplerConfig,
-    SamplerConfig,
+    TimeSamplerConfig,
     UniformTimeSamplerConfig,
     _standard_normal,
     _uniform,
@@ -58,7 +58,7 @@ def my_sampler(shape, *, generator, device=None, dtype=None):
     return torch.zeros(shape, device=device, dtype=dtype)
 
 
-class _MySamplerConfig(SamplerConfig):
+class _MySamplerConfig(TimeSamplerConfig):
     """Tiny config that binds the module-level ``my_sampler`` for the tests."""
 
     fn = my_sampler
@@ -221,15 +221,16 @@ def test_config_rejects_raw_callable_sampler():
 
 def test_config_rejects_live_probability_path():
     """Live ``BaseProbabilityPath`` instances are rejected; only configs are accepted."""
-    live = LinearGaussianProbabilityPath(sigma=0.5)
-    # If pydantic coerces this to a config (e.g. via ``from_attributes``) the
-    # spec is still portable, which is what we care about. The assertion here
-    # checks the *common* case: rejection, or coercion, both acceptable.
-    try:
-        config = CFMTrainingConfig(probability_path=live)
-    except pydantic.ValidationError:
-        return
-    assert isinstance(config.probability_path, type(None).__class__) or True
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(probability_path=LinearGaussianProbabilityPath(sigma=0.5))
+
+
+def test_config_rejects_swapped_samplers():
+    """A noise sampler cannot fill the time slot, nor the other way round."""
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(time_sampler=IsotropicGaussianNoiseSamplerConfig())
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(noise_sampler=UniformTimeSamplerConfig())
 
 
 def test_config_with_sampler_config_is_portable():

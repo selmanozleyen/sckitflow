@@ -91,10 +91,10 @@ class FakeInferer:
 def mean_mse_surrogate(inferer, ystar, datamodule, adata, **kwargs):
     """Averages the samples over every axis before the conditions', then a summed squared error."""
     return SurrogatePotential(
-        inferer,
-        ystar,
-        datamodule,
-        adata,
+        inferer=inferer,
+        ystar=ystar,
+        datamodule=datamodule,
+        adata=adata,
         readout=MeanSamplesReadoutConfig().build(),
         potential=SquaredErrorPotentialConfig().build(),
         **kwargs,

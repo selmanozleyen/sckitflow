@@ -159,8 +159,8 @@ class AbstractMethod:
 class FlowMethodConfig(Component):
     """The flow configuration every flow method shares; each method's config extends it.
 
-    Only configs are accepted, never live objects or raw callables, so ``save_run`` can write the
-    spec and ``load_run`` rebuilds the same method from it.
+    Only configs are accepted, never live objects or raw callables, so ``Model.save_pretrained`` can
+    write the spec and ``Model.from_pretrained`` rebuilds the same method from it.
     """
 
     probability_path: ProbabilityPathConfig | None = None

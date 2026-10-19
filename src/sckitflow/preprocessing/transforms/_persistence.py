@@ -9,11 +9,11 @@ Two files, mirroring the config/runtime split of the transforms themselves:
   ``components``, ``W``, ``iW``, ...). ``np.savez_compressed`` is numpy's own
   pickle-free format, so nothing arbitrary is deserialized on load.
 
-These helpers are deliberately separate from :func:`sckitflow.save_run` /
-:class:`sckitflow.RunConfig`: whether ``RunConfig`` should grow a ``transform``
+These helpers are deliberately separate from :meth:`sckitflow.Model.save_pretrained` /
+:class:`sckitflow.ModelConfig`: whether ``ModelConfig`` should grow a ``transform``
 field is a design decision still under discussion. When that decision lands,
 :func:`save_transform` can be deleted and its two writes folded into
-``save_run``; until then this module is the persistence boundary.
+``save_pretrained``; until then this module is the persistence boundary.
 
 Usage from a training script::
 
@@ -58,8 +58,8 @@ def save_transform(
         run_dir: Directory to write into. Created (including parents) if it
             does not exist.
         transform_cfg: The portable config that describes the transform.
-            Serialized via ``to_spec()`` — the same dict ``save_run`` embeds
-            inside ``specs.json``.
+            Serialized via ``to_spec()`` — the same dict ``Model.save_pretrained``
+            embeds inside ``config.json``.
         transform: The fitted runtime transform. Must have been ``fit`` /
             ``fit_adata``; ``params`` must be a single :class:`TransformParams`
             instance (not a collection — no transform currently uses one, but

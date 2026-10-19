@@ -288,6 +288,10 @@ def _lookup(variants, name):
     raise KeyError(f"unknown variant {name!r}; available: {[n for n, _ in variants]}")
 
 
+# The fixture's source_split values, as an explicit label vocabulary.
+SOURCE_SPLIT_LABELS = {"type": "group_encoder.label", "classes": [f"source_split{i}" for i in range(5)]}
+
+
 # --------------------------- schema pairs ----------------------------------
 _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     # ---- Group-only, unpaired -----------------------------------------
@@ -298,7 +302,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             sample_rep="X_repr",
             **_dm_shared(
                 groups=["source_split"],
-                groups_encoding={"source_split": "label"},
+                groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             ),
         ),
         [_per_condition_layers(["source_split"])],
@@ -312,7 +316,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
             **_dm_shared(
                 continuous_conditions=["X_tgt"],
                 groups=["source_split"],
-                groups_encoding={"source_split": "label"},
+                groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             ),
         ),
         [_per_condition_layers(["X_tgt", "source_split"])],
@@ -351,7 +355,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 categorical_reps={"drug": "drug"},
                 control_values_dict={"drug": "control"},
                 groups=["source_split"],
-                groups_encoding={"source_split": "label"},
+                groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             ),
         ),
         # groups_reps={} means no group dims → no group input-layer entry.
@@ -390,7 +394,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 categorical_reps={"drug": "drug", "ko": "ko"},
                 control_values_dict={"drug": "control", "ko": "control"},
                 groups=["source_split"],
-                groups_encoding={"source_split": "label"},
+                groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             ),
         ),
         [_per_condition_layers(["drug", "ko", "source_split"])],

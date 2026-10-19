@@ -293,8 +293,15 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
     # ---- Group-only, unpaired -----------------------------------------
     # No categorical_conditions → no condition_encoder_input_layers entries.
     "groups_only": (
-        overrides("datamanager", sample_rep="X_repr", **_dm_shared()),
-        [],
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                groups=["source_split"],
+                groups_encoding={"source_split": "label"},
+            ),
+        ),
+        [_per_condition_layers(["source_split"])],
     ),
     # ---- Continuous-only condition, unpaired --------------------------
     # One covariate key (X_tgt) → one input-layer entry.
@@ -302,14 +309,13 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
         overrides(
             "datamanager",
             sample_rep="X_repr",
-            **_dm_shared(continuous_conditions=["X_tgt"]),
-        ),
-        [
-            _per_condition_layers(["X_tgt"]),
-            *overrides(
-                "module",
+            **_dm_shared(
+                continuous_conditions=["X_tgt"],
+                groups=["source_split"],
+                groups_encoding={"source_split": "label"},
             ),
-        ],
+        ),
+        [_per_condition_layers(["X_tgt", "source_split"])],
     ),
     # ---- 1 categorical, unpaired --------------------------------------
     "one_cat_unpaired": (
@@ -401,14 +407,8 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 control_values_dict={"drug": "control"},
             ),
         ),
-        [
-            _per_condition_layers(["drug", "X_tgt"]),
-            *overrides(
-                "module",
-            ),
-        ],
+        [_per_condition_layers(["drug", "X_tgt"])],
     ),
-    # ---- 2 categorical + 1 continuous, paired -------------------------
     "two_cat_one_cont_paired": (
         overrides(
             "datamanager",
@@ -420,12 +420,7 @@ _SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
                 control_values_dict={"drug": "control", "ko": "control"},
             ),
         ),
-        [
-            _per_condition_layers(["drug", "ko", "X_tgt"]),
-            *overrides(
-                "module",
-            ),
-        ],
+        [_per_condition_layers(["drug", "ko", "X_tgt"])],
     ),
     # ---- alternative state representation -----------------------------
     "sample_rep_x_src": (

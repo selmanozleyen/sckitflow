@@ -332,7 +332,7 @@ class TestGetEvalLoader:
             sizes.append(n)
             assert step_data["source_state"].shape[0] == n
             for field in ("target_condition_data", "target_group_data"):
-                assert all(v.shape[0] == n for v in (step_data[field] or {}).values())
+                assert all(v.shape[0] == 1 for v in (step_data[field] or {}).values())  # one row per group
         assert sizes and max(sizes) > 1, "groups must be bigger than their 1-cell control pool to be a real test"
 
     @pytest.mark.parametrize("cap", [1, 2, None])
@@ -346,7 +346,7 @@ class TestGetEvalLoader:
             assert step_data["target_state"] is None
             expected = counts[leaf] if cap is None else min(counts[leaf], cap)
             assert step_data["source_state"].shape[0] == expected
-            assert all(v.shape[0] == expected for v in step_data["target_group_data"].values())
+            assert all(v.shape[0] == 1 for v in step_data["target_group_data"].values())  # one row per group
 
     def test_control_values_override_makes_it_paired(self, adata_small: AnnData):
         dm = _make_manager()  # instance is unpaired

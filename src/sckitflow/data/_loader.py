@@ -121,20 +121,19 @@ def _leaf_encoding(array: np.ndarray) -> np.ndarray:
     return array[0]
 
 
-def _tile(encoding: torch.Tensor, batch_size: int) -> torch.Tensor:
-    """One group's encoding ``(c, d)`` -> ``(batch_size, c, d)``, the shape :class:`SetEncoder` pools.
+def _group_row(encoding: torch.Tensor) -> torch.Tensor:
+    """One group's encoding ``(c, d)`` -> ``(1, c, d)``: one row, broadcast to every observation of the batch.
 
-    The ``c`` axis is what pooling reduces (``dim=-2``), so the batch axis is prepended, never written over.
+    A batch is one group, so its categorical encodings are the same for every observation; the leading axis
+    of 1 says so instead of repeating them. The ``c`` axis is what :class:`SetEncoder` pools (``dim=-2``).
     """
-    if batch_size < 1:
-        raise ValueError(f"batch_size must be at least 1, got {batch_size}.")
     if encoding.ndim == 1:  # a flat (d,) rep carries no set axis of its own
         encoding = encoding.unsqueeze(0)
     elif encoding.ndim != 2:
         # Rank 3 here means the per-observation axis was never dropped -- `_leaf_encoding` was skipped -- and
         # the batch axis would land in front of it, handing the encoder a 4-D tensor to pool.
         raise ValueError(f"expected an encoding of rank 1 or 2, got shape {tuple(encoding.shape)}.")
-    return encoding.unsqueeze(0).expand(batch_size, *encoding.shape).contiguous()
+    return encoding.unsqueeze(0)
 
 
 def _get_coupling_locs(coupling_schema: CouplingDataSchema | None) -> tuple[dict[str, str], dict[str, str]]:
@@ -294,13 +293,13 @@ class _StepDataBridge:
         return step_data
 
     def _encode_group_cached(self, gid: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        """The group's ``(condition, group)`` categorical encodings -- computed once per group, then cached.
+        """The group's ``(condition, group)`` categorical encodings, ``(1, c, d)`` -- computed once per group, then cached.
 
-        Cached already conformed to ``dtype``/``device``, so the per-batch tile is a device-local expand.
+        Cached already conformed to ``dtype``/``device``; every batch of the group reuses the same tensors.
         """
         if gid not in self._encode_cache:
             entry, cond_keys, group_keys = self._encode_group(self._leaves[gid])
-            conformed = {k: self._conform(_as_tensor(v), streamed=False) for k, v in entry.items()}
+            conformed = {k: _group_row(self._conform(_as_tensor(v), streamed=False)) for k, v in entry.items()}
             self._encode_cache[gid] = (
                 {k: conformed[k] for k in cond_keys},
                 {k: conformed[k] for k in group_keys},
@@ -387,8 +386,8 @@ class _StepDataBridge:
         source_state = self._align_source(source_state, batch_size)
 
         cond_enc, group_enc = self._encode_group_cached(gid)
-        condition: dict[str, Any] = {k: _tile(v, batch_size) for k, v in cond_enc.items()}
-        group: dict[str, Any] = {k: _tile(v, batch_size) for k, v in group_enc.items()}
+        condition: dict[str, Any] = dict(cond_enc)  # (1, c, d): the same for every observation of the batch
+        group: dict[str, Any] = dict(group_enc)
         # continuous covariates: per-obs aligned reps (present only when the stream carries them)
         for loc, key in self._cond_cont_locs.items():
             if loc in batch[_PRIMARY]:

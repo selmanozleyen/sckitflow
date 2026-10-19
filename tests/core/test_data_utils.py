@@ -78,6 +78,14 @@ def _col(field) -> list[float]:
 
 
 class TestSubscriptStepData:
+    def test_a_group_row_is_not_reordered(self):
+        """A leading axis of 1 is the same for every row (a group's encoding), so a permutation leaves it."""
+        group_row = torch.tensor([[7.0]])
+        batch = {**_batch(), "target_group_data": {"line": group_row}}
+        out = subscript_step_data(batch, tgt_idxs=torch.tensor([3, 1, 2, 0]))
+        assert out["target_group_data"]["line"] is group_row
+        assert _col(out["target_state"]) == [3.0, 1.0, 2.0, 0.0]
+
     def test_each_side_is_indexed_independently(self):
         out = subscript_step_data(_batch(), src_idxs=torch.tensor([3, 2]), tgt_idxs=torch.tensor([0, 1]))
 

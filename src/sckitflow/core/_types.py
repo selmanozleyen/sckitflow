@@ -110,6 +110,10 @@ class StepData(TypedDict, total=False):
     Built from one scfit batch by the data loaders. Every field is optional; the
     source side stays ``None`` in the unpaired ("generate from noise") setting. Use
     :func:`new_step_data` to build an instance with every field defaulting to ``None``.
+
+    A batch is one group, so a group's categorical encodings (in ``target_condition_data`` and
+    ``target_group_data``) carry a leading axis of 1 and broadcast to every observation; per-observation
+    tensors (states, continuous covariates) have one row each. Nothing is repeated per observation.
     """
 
     target_state: torch.Tensor | None

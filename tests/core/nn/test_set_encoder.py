@@ -115,6 +115,18 @@ class TestSetEncoder:
         }
         assert encoder(condition_dict).shape == (*batch, output_dim)
 
+    def test_a_group_row_broadcasts_against_per_observation_covariates(self) -> None:
+        """A group's categorical covariate is one row `(1, c, d)`; continuous ones have a row per observation."""
+        encoder = SetEncoder(
+            input_layers=input_layers_double_condition, output_dim=output_dim, continuous_covariates=["condition0"]
+        )
+        condition1 = torch.randn(1, n_combs, condition1_input_dim)
+        condition_dict = {"condition0": torch.randn(batch_size, condition0_input_dim), "condition1": condition1}
+        repeated = {**condition_dict, "condition1": condition1.expand(batch_size, -1, -1)}
+        out = encoder(condition_dict)
+        assert out.shape == (batch_size, output_dim)
+        torch.testing.assert_close(out, encoder(repeated))  # the same as repeating it per observation
+
     @pytest.mark.xfail(
         reason="https://github.com/theislab/sckitflow/issues/144 - validation raises ValueError, not KeyError",
         strict=True,

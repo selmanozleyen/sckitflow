@@ -16,6 +16,7 @@ ProbabilityPathId = Literal[
 TimeFeaturesId = Literal["ott-jax", "torch-cfm"]
 
 ConditioningLayersId = Literal["concat", "resnet1d"]
+ActivationId = Literal["relu", "leaky_relu", "elu", "gelu", "silu", "tanh", "sigmoid", "softplus"]
 
 LayersDict = dict[str, Any]
 NestedLayersDict = dict[str, LayersDict]

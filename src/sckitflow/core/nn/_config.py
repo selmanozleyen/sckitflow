@@ -12,7 +12,7 @@ import torch
 from pydantic import field_validator
 from scfit.registry import Component, component
 
-from sckitflow._types import ConditioningLayersId, TimeFeaturesId
+from sckitflow._types import ActivationId, ConditioningLayersId, TimeFeaturesId
 from sckitflow.core.nn._modules import MLP
 from sckitflow.core.nn._vf import MLPVelocity
 from sckitflow.data._dims import DataDimensions
@@ -20,65 +20,16 @@ from sckitflow.data._dims import DataDimensions
 __all__ = ["ModuleConfig", "MLPConfig", "MLPVelocityConfig"]
 
 
-# ---------------------------------------------------------------------------
-# Activation resolution
-#
-# Serializability requires the config to store activations as strings ("silu"),
-# not as classes (torch.nn.SiLU), because classes aren't JSON-serializable and
-# `save_run` dumps configs to `specs.json`. `build()` resolves the strings
-# back to classes before they reach `MLP.__init__`, where a class is required.
-#
-# Two directions, both handled below:
-#   * `field_validator`  — normalizes classes → strings on construction
-#   * `_resolve_...`     — resolves strings → classes at build time
-# ---------------------------------------------------------------------------
-def _resolve_nn_module_class(
-    name: str,
-    *,
-    base_cls: type = torch.nn.Module,
-) -> type[torch.nn.Module]:
-    """Map a string name (``"SiLU"``, ``"silu"``, ``"ReLU"``, …) to its ``torch.nn`` class.
-
-    Tries an exact match first, then a case-insensitive scan over ``torch.nn``
-    attributes. Raises ``ValueError`` if no matching subclass exists — a bad
-    name fails at config build, before the model is constructed.
-
-    :param name: The class name (case-insensitive).
-    :param base_cls: The class to look up. Defaults to :class:`torch.nn.Module`;
-        pass e.g. :class:`torch.optim.Optimizer` for the analogous optimizer case.
-    """
-    # Exact match first: "SiLU" -> torch.nn.SiLU
-    cls = getattr(torch.nn, name, None)
-    if cls is not None and isinstance(cls, type) and issubclass(cls, base_cls) and cls is not base_cls:
-        return cls
-
-    # Case-insensitive fallback: "silu" -> torch.nn.SiLU
-    for attr in dir(torch.nn):
-        obj = getattr(torch.nn, attr)
-        if isinstance(obj, type) and issubclass(obj, base_cls) and obj is not base_cls and attr.lower() == name.lower():
-            return obj
-
-    raise ValueError(
-        f"torch.nn has no {base_cls.__name__} subclass named {name!r}. "
-        f"Try e.g. 'SiLU', 'ReLU', 'GELU', 'LeakyReLU', 'Tanh'."
-    )
-
-
-_ACTIVATION_KEYS: tuple[str, ...] = ("activation_cls", "final_activation_cls")
-
-
-def _normalize_activation_to_string(
-    value: str | type[torch.nn.Module] | None,
-) -> str | None:
-    """Store an activation as a string, whether given a class or a string.
-
-    ``torch.nn.SiLU`` → ``"SiLU"``; ``"silu"`` → ``"silu"``; ``None`` → ``None``.
-    """
-    if value is None or isinstance(value, str):
-        return value
-    if isinstance(value, type) and issubclass(value, torch.nn.Module):
-        return value.__name__
-    raise TypeError(f"activation must be a str or a torch.nn.Module subclass, got {type(value).__name__}")
+_ACTIVATIONS: dict[ActivationId, type[torch.nn.Module]] = {
+    "relu": torch.nn.ReLU,
+    "leaky_relu": torch.nn.LeakyReLU,
+    "elu": torch.nn.ELU,
+    "gelu": torch.nn.GELU,
+    "silu": torch.nn.SiLU,
+    "tanh": torch.nn.Tanh,
+    "sigmoid": torch.nn.Sigmoid,
+    "softplus": torch.nn.Softplus,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +48,8 @@ class ModuleConfig(Component):
 @component("mlp", builds=MLP)
 class MLPConfig(ModuleConfig):
     hidden_dims: tuple[int, ...] | None = None
-    activation_cls: str | None = None
-    final_activation_cls: str | None = None
+    activation_cls: ActivationId | None = None
+    final_activation_cls: ActivationId | None = None
     use_batchnorm: bool = False
     batchnorm_eps: float = 1e-3
     batchnorm_momentum: float = 1e-2
@@ -114,21 +65,12 @@ class MLPConfig(ModuleConfig):
     final_activation_cls_kwargs: dict[str, Any] | None = None
     bias: bool = True
 
-    @field_validator("activation_cls", "final_activation_cls", mode="before")
-    @classmethod
-    def _coerce_activation_to_string(
-        cls,
-        value: str | type[torch.nn.Module] | None,
-    ) -> str | None:
-        """Accept either a class or a string; store as string for JSON-serializability."""
-        return _normalize_activation_to_string(value)
-
     def mlp_kwargs(self) -> dict[str, Any]:
-        """The keyword arguments of :class:`MLP`, with activation names resolved to classes."""
+        """The keyword arguments of :class:`MLP`, with activation names mapped to their classes."""
         kwargs = dict(self)
-        for key in _ACTIVATION_KEYS:
-            if isinstance(kwargs[key], str):
-                kwargs[key] = _resolve_nn_module_class(kwargs[key])
+        for key in ("activation_cls", "final_activation_cls"):
+            if kwargs[key] is not None:
+                kwargs[key] = _ACTIVATIONS[kwargs[key]]
         return kwargs
 
     def build(self, input_dim: int, output_dim: int) -> MLP:

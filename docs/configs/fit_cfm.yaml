@@ -25,15 +25,11 @@ hydra:
 # -----------------------------------------------------------------------------
 # Input data paths (read by `read_adatas`)
 #
-# target_adata:  path to the `.h5ad` used for training.
-# control_adata: null → no separate control object; the datamodule infers the
-#                control subset from `target_adata` if the datamanager is
-#                configured for a case-control setting. A path here means a
-#                second `.h5ad` is loaded as the control.
+# target_adata:  path to the `.h5ad` used for training. Controls are picked from it by the
+#                datamanager's `control_values_dict` (or `matched_pairs`).
 # -----------------------------------------------------------------------------
 paths:
   target_adata: "/abs/path/to/target.h5ad"
-  control_adata: null
 
 # -----------------------------------------------------------------------------
 # Probability path (`get_probability_path_cfg`)

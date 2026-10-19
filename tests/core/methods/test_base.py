@@ -211,7 +211,7 @@ def test_config_rejects_non_sampler():
 def test_config_rejects_raw_callable_sampler():
     """A raw Python function is not a ``SamplerConfig`` -> validation fails.
 
-    The contract is now configs-only: ``save_run`` must not receive a spec
+    The contract is now configs-only: ``Model.save_pretrained`` must not receive a spec
     that can't be JSON-serialized, so the rejection happens at construction
     time instead of at ``to_spec`` time.
     """

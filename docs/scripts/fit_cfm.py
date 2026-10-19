@@ -20,9 +20,9 @@ Pipeline (in the order ``main`` executes them)
    ``MatchedTrainingConfig`` that pairs source/target samples according to
    ``config.coupling``, and build the inference method (``ODEInferenceConfig``).
    Probability path and samplers arrive as portable ``*Config`` objects so
-   ``save_run`` can serialize them; each method resolves them to a callable
+   ``Model.save_pretrained`` can serialize them; each method resolves them to a callable
    inside ``build``.
-6. Build an optimizer (``OptimizerConfig``) and validation metrics
+6. Build a ``torch.optim`` optimizer and validation metrics
    (``EnergyDistance``, ``MaximumMeanDiscrepancy``) from ``config.metrics``.
 7. Build a ``TrainingPlan`` (the ``LightningModule`` wrapper) from
    ``config.training_plan``, wiring together the training/inference methods,
@@ -31,12 +31,13 @@ Pipeline (in the order ``main`` executes them)
    ``GradientAccumulationScheduler``, ``LearningRateMonitor``, ``ModelCheckpoint``),
    and the ``lightning.pytorch.Trainer``.
 9. ``trainer.fit(...)``.
-10. Persist the run via ``save_run`` (writes ``specs.json`` + ``weights.pt``).
-    Training checkpoints are written separately by the ``ModelCheckpoint``
-    callback during ``trainer.fit``. The fitted transform is persisted
-    separately (``transform.json`` + ``transform_params.npz``) via
-    ``save_transform``, since ``RunConfig`` does not yet carry a ``transform``
-    field.
+10. Persist the model via ``Model.save_pretrained`` (writes ``config.json`` +
+    ``module/model.safetensors``). Training checkpoints are written separately by
+    the ``ModelCheckpoint`` callback during ``trainer.fit``. The fitted transform
+    is persisted separately (``transform.json`` + ``transform_params.npz``) via
+    ``save_transform``, since ``ModelConfig`` does not yet carry a ``transform``
+    field. How the run went (optimizer, seeds, batch size) is this config's, not
+    the model's.
 11. Return the last validation ``edist`` from ``trainer.callback_metrics``
     (fallback: ``+inf``) for sweeps / shell exit codes. The key is
     ``f"{val_name}/edist"`` where ``val_name`` is the first entry of
@@ -82,11 +83,10 @@ Outputs
   ``ModelCheckpoint`` callback during training; best-``val_edist`` weights
   plus ``last.ckpt``).
 - Loggers: ``config.loggers.{wandb,csv}.save_dir``.
-- Serialised run: ``config.save.run_dir`` (via ``save_run``; contains
-  ``specs.json`` — the portable ``RunConfig`` — and ``weights.pt``). Suitable
-  for reloading with ``sckitflow.load_run`` for **inference**; a reloaded
-  plan carries no validation metrics, so it is not suitable for re-training
-  with validation.
+- Saved model: ``config.save.run_dir`` (via ``Model.save_pretrained``; contains
+  ``config.json`` — the portable ``ModelConfig`` — and ``module/model.safetensors``).
+  Reload it with ``sckitflow.Model.from_pretrained(run_dir, adata)`` for
+  **inference**.
 - Fitted transform: ``config.save.run_dir`` (via ``save_transform``; contains
   ``transform.json`` — the portable ``TransformConfig`` spec — and
   ``transform_params.npz`` — the fitted numpy arrays). Loadable via
@@ -112,10 +112,12 @@ import numpy as np
 from omegaconf import DictConfig, OmegaConf
 from scipy.sparse import issparse
 
+import torch
+
 from sckitflow import (
-    RunConfig,
+    Model,
+    ModelConfig,
     get_logger,
-    save_run,
     IsotropicGaussianNoiseSamplerConfig,
     UniformTimeSamplerConfig,
 )
@@ -137,7 +139,7 @@ from sckitflow.core.probability_paths import (
     SchrodingerBridgeProbabilityPathConfig,
     VariancePreservingDiracProbabilityPathConfig,
 )
-from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDataModuleConfig
+from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDataModule
 from sckitflow.preprocessing.transforms import (
     IdentityTransformConfig,
     PCATransformConfig,
@@ -145,7 +147,7 @@ from sckitflow.preprocessing.transforms import (
     ZScoreTransformConfig,
     save_transform,
 )
-from sckitflow.trainer import TrainingPlan, OptimizerConfig
+from sckitflow.trainer import TrainingPlan
 
 
 logger = get_logger(__name__)
@@ -295,20 +297,21 @@ def main(config: DictConfig) -> float:
     )
 
     # Initialize datamodule.
-    # We set the datamodule-specific generator for reproducibility.
-    # The datamodule configuration takes the datamanager_cfg and
-    # provides a builder for the ``pl.DataModule`` wrapper.
+    # The loaders' sampling schedule is seeded from ``config.run.loader_seed`` for reproducibility.
     logger.info(f"Initializing datamodule with seed {config.run.loader_seed}")
     datamodule_rng = np.random.default_rng(config.run.loader_seed)
-    datamodule_cfg = FlowDataModuleConfig(
-        manager=dm_cfg,
+    datamodule = FlowDataModule.from_adata(
+        adata,
+        dm_cfg.build(),
         train_split=config.datamodule.train_split,
         n_train_steps=config.datamodule.n_train_steps,
         batch_size=config.datamodule.batch_size,
-        dtype=config.datamodule.dtype,
-        loader_kwargs=resolve_omegaconf_to_dictionary(config.datamodule.loader_kwargs),
+        dtype=getattr(torch, config.datamodule.dtype),
+        loader_kwargs={
+            **resolve_omegaconf_to_dictionary(config.datamodule.loader_kwargs),
+            "seed": int(datamodule_rng.integers(2**63)),
+        },
     )
-    datamodule = datamodule_cfg.build(adata, rng=datamodule_rng)
 
     # Initialize neural network.
     # The dimensionalities are automatically inferred from the
@@ -463,12 +466,9 @@ def main(config: DictConfig) -> float:
 
     # Prepare optimizer and scheduler.
     logger.info("Initializing optimizer.")
-    optimizer_cfg = OptimizerConfig(
-        name=config.optimizer.name,
-        kwargs=resolve_omegaconf_to_dictionary(config.optimizer.kwargs),
+    optimizer = getattr(torch.optim, config.optimizer.name)(
+        module.parameters(), **resolve_omegaconf_to_dictionary(config.optimizer.kwargs)
     )
-    logger.info("Building optimizer.")
-    optimizer = optimizer_cfg.build(module.parameters())
     lr_scheduler = None
 
     # Initialize metrics used to evaluate model's predictions during validation.
@@ -621,22 +621,14 @@ def main(config: DictConfig) -> float:
     logger.info("Fitting the model.")
     trainer.fit(plan, datamodule=datamodule, ckpt_path=config.trainer.ckpt_path)
 
-    # Build run config and save to disk.
-    logger.info("Initializing run configuration for reproducibility.")
-    run_cfg = RunConfig(
-        data=datamodule_cfg,
-        training=training_cfg,
-        inference=inference_cfg,
-        loader_seed=config.run.loader_seed,
-        method_seed=config.run.method_seed,
-        module=module_cfg,
-        optimizer=optimizer_cfg,
-    )
-    logger.info(f"Saving run {config.save.run_dir}.")
-    save_run(config.save.run_dir, run_cfg, module, allow_overwrite=config.run.allow_overwrite)
+    # Save the trained model: its spec and the module's weights.
+    model_cfg = ModelConfig(data=dm_cfg, module=module_cfg, training=training_cfg, inference=inference_cfg)
+    model = Model(model_cfg, datamodule.dm, datamodule.data_dims, module, training_method, inference_method)
+    logger.info(f"Saving model {config.save.run_dir}.")
+    model.save_pretrained(config.save.run_dir, overwrite=config.run.allow_overwrite)
 
-    # Persist the fitted transform alongside the run. Kept separate from
-    # ``save_run`` because ``RunConfig`` does not yet carry a ``transform``
+    # Persist the fitted transform alongside the model. Kept separate from
+    # ``save_pretrained`` because ``ModelConfig`` does not yet carry a ``transform``
     # field — see ``save_transform``'s docstring in
     # ``sckitflow.preprocessing.transforms._persistence``.
     logger.info(f"Saving fitted transform to {config.save.run_dir}.")

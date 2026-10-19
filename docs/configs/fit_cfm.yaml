@@ -119,7 +119,7 @@ datamanager:
   use_linear: true
 
 # -----------------------------------------------------------------------------
-# DataModule (`FlowDataModuleConfig`)
+# DataModule (`FlowDataModule`)
 # -----------------------------------------------------------------------------
 datamodule:
   train_split: "train"
@@ -257,7 +257,7 @@ inference:
   n_samples: 1000
 
 # -----------------------------------------------------------------------------
-# Optimizer (`OptimizerConfig`)
+# Optimizer (a `torch.optim` class by name, with its kwargs)
 # -----------------------------------------------------------------------------
 optimizer:
   name: "Adam"
@@ -407,7 +407,7 @@ run:
   allow_overwrite: false
 
 # -----------------------------------------------------------------------------
-# Saved-run directory (`save_run` + `save_transform`)
+# Saved-model directory (`Model.save_pretrained` + `save_transform`)
 # -----------------------------------------------------------------------------
 save:
   run_dir: "./runs/cfm_run"

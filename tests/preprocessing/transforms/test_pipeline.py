@@ -8,8 +8,8 @@ stack so that regressions surface at the layer where they live:
 * the AnnData adapter (``fit_adata`` / ``transform_adata``).
 
 A final test checks that every ``TransformConfig`` round-trips through
-``to_spec`` / ``from_spec`` — the contract that keeps a ``RunConfig`` written
-by ``save_run`` portable.
+``to_spec`` / ``from_spec`` — the contract that keeps a ``ModelConfig`` written
+by ``Model.save_pretrained`` portable.
 """
 
 import numpy as np
@@ -119,7 +119,7 @@ class TestConfigPipeline:
     """Chains built via ``TransformConfig.build`` and ``build_and_fit``.
 
     These mirror :class:`TestPreprocessingPipeline` — same chains, same
-    assertions — but go through the config layer that ends up in ``RunConfig``.
+    assertions — but go through the config layer that ends up in ``ModelConfig``.
     """
 
     def test_config_chain_zscore_then_pca(self, X_train: np.ndarray, X_test: np.ndarray) -> None:
@@ -250,7 +250,7 @@ class TestAnnDataPipeline:
 class TestSerializability:
     """Every ``TransformConfig`` must round-trip through ``to_spec``/``from_spec``.
 
-    This is what ``save_run`` writes into ``specs.json``; a config that cannot
+    This is what ``Model.save_pretrained`` writes into ``config.json``; a config that cannot
     round-trip makes a trained run unloadable.
     """
 
@@ -270,7 +270,7 @@ class TestSerializability:
         assert rebuilt == config
 
     def test_pipeline_of_configs_round_trips(self) -> None:
-        """A tuple of configs — the shape ``RunConfig`` actually stores — round-trips."""
+        """A tuple of configs — the shape a spec actually stores — round-trips."""
         configs = {
             "pred": ZScoreTransformConfig(epsilon=1e-8),
             "target": PCATransformConfig(n_components=10),

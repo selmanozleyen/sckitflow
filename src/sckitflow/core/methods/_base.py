@@ -1,16 +1,30 @@
+"""Core method abstractions and shared implementation.
+
+The two structural contracts (``SupportsTraining`` / ``SupportsInference``), their config families,
+and the shared ``AbstractFlowMethod`` that stores a module, its shape spec, its probability path and
+its time / noise samplers.
+"""
+
 import abc
-from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import torch
-from pydantic import ConfigDict
 from scfit.registry import Component
 
+from sckitflow._samplers import (
+    IsotropicGaussianNoiseSamplerConfig,
+    NoiseSamplerConfig,
+    TimeSamplerConfig,
+    UniformTimeSamplerConfig,
+)
 from sckitflow.core._data_utils import subscript_step_data
 from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
 from sckitflow.core.probability_paths._config import ProbabilityPathConfig
-from sckitflow.core.probability_paths._probability_paths import BaseProbabilityPath, LinearDiracProbabilityPath
+from sckitflow.core.probability_paths._probability_paths import (
+    BaseProbabilityPath,
+    LinearDiracProbabilityPath,
+)
 from sckitflow.data._dims import DataDimensions
 
 __all__ = [
@@ -20,7 +34,7 @@ __all__ = [
     # Code reuse for implementations -- not contracts.
     "AbstractMethod",
     "AbstractFlowMethod",
-    "AbstractFlowMethodConfig",
+    "FlowMethodConfig",
     # Config families
     "TrainingMethodConfig",
     "InferenceMethodConfig",
@@ -142,38 +156,22 @@ class AbstractMethod:
         return _placement_of(self.module)[1]
 
 
-def _uniform(
-    shape: tuple[int, ...],
-    *,
-    generator: torch.Generator,
-    device: torch.types.Device = None,
-    dtype: torch.dtype | None = None,
-) -> torch.Tensor:
-    return torch.rand(shape, generator=generator, device=device, dtype=dtype)
+class FlowMethodConfig(Component):
+    """The flow configuration every flow method shares; each method's config extends it.
 
+    Only configs are accepted, never live objects or raw callables, so ``save_run`` can write the
+    spec and ``load_run`` rebuilds the same method from it.
+    """
 
-def _standard_normal(
-    shape: tuple[int, ...],
-    *,
-    generator: torch.Generator,
-    device: torch.types.Device = None,
-    dtype: torch.dtype | None = None,
-) -> torch.Tensor:
-    return torch.randn(shape, generator=generator, device=device, dtype=dtype)
+    probability_path: ProbabilityPathConfig | None = None
+    """A probability-path config. ``None`` uses ``LinearDiracProbabilityPath``."""
 
+    time_sampler: TimeSamplerConfig | None = None
+    """A time-sampler config. ``None`` uses ``UniformTimeSamplerConfig``."""
 
-class AbstractFlowMethodConfig(Component):
-    """The flow configuration every flow method shares; each method's config extends it."""
+    noise_sampler: NoiseSamplerConfig | None = None
+    """A noise-sampler config. ``None`` uses ``IsotropicGaussianNoiseSamplerConfig``."""
 
-    # a live path or sampler still builds and trains; writing its spec raises
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    probability_path: ProbabilityPathConfig | BaseProbabilityPath | None = None
-    """A path config (portable) or a live path. ``None`` is a linear Dirac path."""
-    time_sampler: Callable[..., torch.Tensor] | None = None
-    """Samples times in ``[0, 1]``. ``None`` samples uniformly via `torch.rand`."""
-    noise_sampler: Callable[..., torch.Tensor] | None = None
-    """Samples source noise. ``None`` samples a standard normal via `torch.randn`."""
     generate_from_noise: bool = False
     """Interpolate from noise even when source states are present; the source is then extra conditioning."""
 
@@ -181,14 +179,14 @@ class AbstractFlowMethodConfig(Component):
 class AbstractFlowMethod(AbstractMethod):
     """Adds the flow configuration that flow trainers and flow predictors share.
 
-    Its settings come from one config object, an `AbstractFlowMethodConfig` or a
+    Its settings come from one config object, an `FlowMethodConfig` or a
     subclass of it. A training and an inference method given the same module and
     flow settings share the path, samplers and module. The data shape comes from
     `dims`; it is not carried on the config, because it is a property of the run's
     data, not of the flow settings.
     """
 
-    def __init__(self, module: torch.nn.Module, config: AbstractFlowMethodConfig, *, dims: DataDimensions) -> None:
+    def __init__(self, module: torch.nn.Module, config: FlowMethodConfig, *, dims: DataDimensions) -> None:
         """Builds the path and samplers from ``config``.
 
         :param module: An initialized neural module the method builds upon.
@@ -196,12 +194,10 @@ class AbstractFlowMethod(AbstractMethod):
         :param dims: The shape spec of the data the module was built for.
         """
         super().__init__(module, dims=dims)
-        path = config.probability_path
-        if isinstance(path, ProbabilityPathConfig):
-            path = path.build()
-        self._probability_path = LinearDiracProbabilityPath() if path is None else path
-        self._noise_sampler = _standard_normal if config.noise_sampler is None else config.noise_sampler
-        self._time_sampler = _uniform if config.time_sampler is None else config.time_sampler
+        path_cfg = config.probability_path
+        self._probability_path = LinearDiracProbabilityPath() if path_cfg is None else path_cfg.build()
+        self._time_sampler = (config.time_sampler or UniformTimeSamplerConfig()).build()
+        self._noise_sampler = (config.noise_sampler or IsotropicGaussianNoiseSamplerConfig()).build()
         self._generate_from_noise = config.generate_from_noise
 
     @property

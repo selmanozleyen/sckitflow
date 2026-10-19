@@ -1,12 +1,55 @@
-from sckitflow.preprocessing.transforms._base import BaseTransform, TransformParams
-from sckitflow.preprocessing.transforms._pca import PCAParams, PCATransform
-from sckitflow.preprocessing.transforms._zscore import ZScoreParams, ZScoreTransform
+from sckitflow.preprocessing.transforms._base import (
+    BaseTransform,
+    TransformConfig,
+    TransformParams,
+)
+from sckitflow.preprocessing.transforms._identity import (
+    IdentityParams,
+    IdentityTransform,
+    IdentityTransformConfig,
+)
+from sckitflow.preprocessing.transforms._pca import (
+    PCAParams,
+    PCATransform,
+    PCATransformConfig,
+)
+from sckitflow.preprocessing.transforms._persistence import (
+    TRANSFORM_PARAMS_FILENAME,
+    TRANSFORM_SPEC_FILENAME,
+    load_transform,
+    save_transform,
+)
+from sckitflow.preprocessing.transforms._whitening import (
+    WhiteningParams,
+    WhiteningTransform,
+    WhiteningTransformConfig,
+    compute_whitening_matrix,
+)
+from sckitflow.preprocessing.transforms._zscore import (
+    ZScoreParams,
+    ZScoreTransform,
+    ZScoreTransformConfig,
+)
 
 __all__ = [
-    "TransformParams",
     "BaseTransform",
+    "IdentityParams",
+    "IdentityTransform",
+    "IdentityTransformConfig",
     "PCAParams",
     "PCATransform",
+    "PCATransformConfig",
+    "TRANSFORM_PARAMS_FILENAME",
+    "TRANSFORM_SPEC_FILENAME",
+    "TransformConfig",
+    "TransformParams",
+    "WhiteningParams",
+    "WhiteningTransform",
+    "WhiteningTransformConfig",
     "ZScoreParams",
     "ZScoreTransform",
+    "ZScoreTransformConfig",
+    "compute_whitening_matrix",
+    "load_transform",
+    "save_transform",
 ]

@@ -3,21 +3,25 @@ import pandas as pd
 import pydantic
 import pytest
 import torch
-from scfit.registry import PortabilityError
 
+from sckitflow._samplers import (
+    IsotropicGaussianNoiseSamplerConfig,
+    TimeSamplerConfig,
+    UniformTimeSamplerConfig,
+    _standard_normal,
+    _uniform,
+)
 from sckitflow.core._types import new_step_data
 from sckitflow.core.methods._base import (
     AbstractFlowMethod,
-    AbstractFlowMethodConfig,
     AbstractMethod,
     BaseMatcher,
+    FlowMethodConfig,
     MatchedTrainingMethod,
     Matcher,
     SupportsInference,
     SupportsTraining,
     _placement_of,
-    _standard_normal,
-    _uniform,
 )
 from sckitflow.core.methods.training._cfm import CFMTrainingConfig
 from sckitflow.core.probability_paths._config import LinearGaussianProbabilityPathConfig
@@ -52,6 +56,12 @@ def module() -> torch.nn.Module:
 
 def my_sampler(shape, *, generator, device=None, dtype=None):
     return torch.zeros(shape, device=device, dtype=dtype)
+
+
+class _MySamplerConfig(TimeSamplerConfig):
+    """Tiny config that binds the module-level ``my_sampler`` for the tests."""
+
+    fn = my_sampler
 
 
 class Trainer:
@@ -148,15 +158,28 @@ def test_flow_method_builds_path_config(module, dims):
 
 
 def test_flow_method_custom_values(module, dims):
-    path = LinearGaussianProbabilityPath(sigma=0.5)
+    """Non-default configs are built; the method stores their live objects."""
+    path_cfg = LinearGaussianProbabilityPathConfig(sigma=0.5)
     config = CFMTrainingConfig(
-        probability_path=path, time_sampler=my_sampler, noise_sampler=my_sampler, generate_from_noise=True
+        probability_path=path_cfg,
+        time_sampler=UniformTimeSamplerConfig(),
+        noise_sampler=IsotropicGaussianNoiseSamplerConfig(),
+        generate_from_noise=True,
     )
     method = AbstractFlowMethod(module, config, dims=dims)
-    assert method.probability_path is path
-    assert method.time_sampler is my_sampler
-    assert method.noise_sampler is my_sampler
+    assert isinstance(method.probability_path, LinearGaussianProbabilityPath)
     assert method.generate_from_noise is True
+
+
+def test_flow_method_accepts_sampler_config(module, dims):
+    """A ``SamplerConfig`` is resolved to its underlying callable on the method."""
+    config = CFMTrainingConfig(
+        time_sampler=UniformTimeSamplerConfig(),
+        noise_sampler=IsotropicGaussianNoiseSamplerConfig(),
+    )
+    method = AbstractFlowMethod(module, config, dims=dims)
+    assert method.time_sampler is _uniform
+    assert method.noise_sampler is _standard_normal
 
 
 def test_flow_method_keeps_dims_by_identity(module, dims):
@@ -173,22 +196,53 @@ def test_default_samplers_draw_from_generator(sampler):
     assert not torch.equal(a, sampler((5,), generator=torch.Generator().manual_seed(1)))
 
 
-# -------------------- AbstractFlowMethodConfig --------------------
+# -------------------- FlowMethodConfig --------------------
 def test_family_base_config_is_not_buildable():
     with pytest.raises(pydantic.ValidationError, match="family base"):
-        AbstractFlowMethodConfig()
+        FlowMethodConfig()
 
 
-def test_config_rejects_non_callable_sampler():
-    with pytest.raises(pydantic.ValidationError, match="callable"):
+def test_config_rejects_non_sampler():
+    """A raw int is neither a ``SamplerConfig`` nor ``None`` -> validation fails."""
+    with pytest.raises(pydantic.ValidationError):
         CFMTrainingConfig(time_sampler=3)
 
 
-def test_config_with_live_sampler_is_not_portable():
-    config = CFMTrainingConfig(noise_sampler=my_sampler)
-    assert config.noise_sampler is my_sampler
-    with pytest.raises(PortabilityError):
-        config.to_spec()
+def test_config_rejects_raw_callable_sampler():
+    """A raw Python function is not a ``SamplerConfig`` -> validation fails.
+
+    The contract is now configs-only: ``save_run`` must not receive a spec
+    that can't be JSON-serialized, so the rejection happens at construction
+    time instead of at ``to_spec`` time.
+    """
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(time_sampler=my_sampler)
+
+
+def test_config_rejects_live_probability_path():
+    """Live ``BaseProbabilityPath`` instances are rejected; only configs are accepted."""
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(probability_path=LinearGaussianProbabilityPath(sigma=0.5))
+
+
+def test_config_rejects_swapped_samplers():
+    """A noise sampler cannot fill the time slot, nor the other way round."""
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(time_sampler=IsotropicGaussianNoiseSamplerConfig())
+    with pytest.raises(pydantic.ValidationError):
+        CFMTrainingConfig(noise_sampler=UniformTimeSamplerConfig())
+
+
+def test_config_with_sampler_config_is_portable():
+    """A ``SamplerConfig`` serializes cleanly and round-trips."""
+    config = CFMTrainingConfig(
+        time_sampler=UniformTimeSamplerConfig(),
+        noise_sampler=IsotropicGaussianNoiseSamplerConfig(),
+    )
+    spec = config.to_spec()
+    assert "time_sampler" in spec
+    assert "noise_sampler" in spec
+    assert CFMTrainingConfig.from_spec(spec) == config
 
 
 def test_cfm_config_spec_round_trips():

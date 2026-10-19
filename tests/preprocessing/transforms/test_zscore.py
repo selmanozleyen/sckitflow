@@ -1,8 +1,25 @@
+"""Tests for :mod:`sckitflow.preprocessing.transforms._zscore`.
+
+Covers three layers of the Z-score transform:
+
+* the runtime ``ZScoreTransform`` API on plain numpy arrays (original tests,
+  unchanged),
+* the portable ``ZScoreTransformConfig`` (``build`` / ``build_and_fit`` /
+  round-trip through ``to_spec`` / ``from_spec`` — the object that ends up in
+  ``RunConfig``), and
+* the AnnData adapter on ``BaseTransform`` (``fit_adata`` /
+  ``transform_adata`` / ``fit_transform_adata``).
+"""
+
 import numpy as np
 import pytest
+from anndata import AnnData
+from pydantic import ValidationError
 from scipy.sparse import csr_matrix
 
-from sckitflow.preprocessing.transforms import ZScoreTransform
+from sckitflow.preprocessing.transforms import ZScoreTransform, ZScoreTransformConfig
+
+# --------------------------- numpy runtime API ---------------------------- #
 
 
 class TestZScoreTransform:
@@ -152,6 +169,140 @@ class TestEdgeCases:
             zscore.fit(X)
 
 
+# --------------------------- config: portable API ------------------------- #
+
+
+class TestZScoreTransformConfig:
+    """Tests for the portable, serializable :class:`ZScoreTransformConfig`."""
+
+    def test_build_returns_fresh_unfitted_transform(self):
+        cfg = ZScoreTransformConfig(epsilon=1e-6)
+        transform = cfg.build()
+
+        assert isinstance(transform, ZScoreTransform)
+        assert not transform.is_fitted
+        # Runtime ``epsilon`` is stored on the private attribute.
+        assert transform._epsilon == pytest.approx(1e-6)
+
+    def test_build_matches_constructor_numerically(self):
+        """``build()`` must produce a transform that behaves like the constructor."""
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((30, 8)) * np.arange(1, 9)
+
+        via_config = ZScoreTransformConfig(epsilon=1e-8).build().fit_transform(X)
+        via_ctor = ZScoreTransform(epsilon=1e-8).fit_transform(X)
+
+        np.testing.assert_allclose(via_config, via_ctor, atol=1e-12)
+
+    def test_default_epsilon(self):
+        """The default epsilon is the documented ``1e-8``."""
+        assert ZScoreTransformConfig().epsilon == pytest.approx(1e-8)
+
+    def test_config_round_trips(self):
+        cfg = ZScoreTransformConfig(epsilon=1e-6)
+        rebuilt = ZScoreTransformConfig.from_spec(cfg.to_spec())
+        assert rebuilt == cfg
+
+    def test_config_round_trips_with_default(self):
+        cfg = ZScoreTransformConfig()
+        rebuilt = ZScoreTransformConfig.from_spec(cfg.to_spec())
+        assert rebuilt.epsilon == pytest.approx(cfg.epsilon)
+
+    def test_config_is_registered(self):
+        """The registry name is the ``type`` discriminator in the spec."""
+        assert ZScoreTransformConfig().to_spec().get("type") == "transform.zscore"
+
+    def test_config_rejects_negative_epsilon(self):
+        """A negative epsilon would defeat the numerical-stability guard."""
+        with pytest.raises(ValidationError):
+            ZScoreTransformConfig(epsilon=-1.0)
+
+
+# --------------------------- AnnData adapter ------------------------------ #
+class TestZScoreTransformAnnData:
+    """Tests for the ``*_adata`` adapters on :class:`BaseTransform`."""
+
+    @pytest.fixture
+    def adata(self) -> AnnData:
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((50, 20)) * np.arange(1, 21)
+        ad = AnnData(X.copy())
+        ad.layers["counts"] = X.copy()
+        return ad
+
+    def test_fit_adata_reads_x(self, adata: AnnData):
+        transform = ZScoreTransformConfig().build()
+        transform.fit_adata(adata)
+
+        assert transform.is_fitted
+        assert transform.params.n_features == adata.n_vars
+        np.testing.assert_allclose(transform.params.mean, adata.X.mean(axis=0), atol=1e-12)
+
+    def test_fit_adata_reads_layer(self, adata: AnnData):
+        transform = ZScoreTransformConfig().build()
+        transform.fit_adata(adata, layer="counts")
+
+        np.testing.assert_allclose(transform.params.mean, adata.layers["counts"].mean(axis=0), atol=1e-12)
+
+    def test_transform_adata_inplace_overwrites_x(self, adata: AnnData):
+        transform = ZScoreTransformConfig().build_and_fit(adata)
+        transform.transform_adata(adata, inplace=True)
+
+        # X is now z-scored.
+        np.testing.assert_allclose(adata.X.mean(axis=0), 0.0, atol=1e-8)
+        np.testing.assert_allclose(adata.X.std(axis=0), 1.0, atol=1e-6)
+
+    def test_transform_adata_layer_to_layer(self, adata: AnnData):
+        original_X = adata.X.copy()
+        transform = ZScoreTransformConfig().build_and_fit(adata, layer="counts")
+        transform.transform_adata(adata, layer="counts", out_layer="counts_z", inplace=True)
+
+        assert "counts_z" in adata.layers
+        assert adata.layers["counts_z"].shape == adata.layers["counts"].shape
+        # Source X untouched.
+        np.testing.assert_array_equal(adata.X, original_X)
+
+    def test_transform_adata_inplace_false_returns_copy(self, adata: AnnData):
+        original_X = adata.X.copy()
+        transform = ZScoreTransformConfig().build_and_fit(adata)
+
+        out = transform.transform_adata(adata, inplace=False)
+
+        assert out is not adata
+        assert not np.array_equal(out.X, original_X)
+        np.testing.assert_array_equal(adata.X, original_X)
+
+    def test_inverse_transform_adata_recovers_x(self, adata: AnnData):
+        original_X = adata.X.copy()
+        transform = ZScoreTransformConfig().build_and_fit(adata)
+
+        transform.transform_adata(adata, inplace=True)
+        transform.inverse_transform_adata(adata, inplace=True)
+
+        np.testing.assert_allclose(adata.X, original_X, atol=1e-6)
+
+    def test_build_and_fit_returns_fitted_transform(self, adata: AnnData):
+        transform = ZScoreTransformConfig(epsilon=1e-6).build_and_fit(adata)
+
+        assert isinstance(transform, ZScoreTransform)
+        assert transform.is_fitted
+        assert transform._epsilon == pytest.approx(1e-6)
+
+    def test_fit_transform_adata_matches_two_step(self, adata: AnnData):
+        """``fit_transform_adata`` == ``fit_adata`` + ``transform_adata``."""
+        stepwise = ZScoreTransformConfig().build()
+        stepwise.fit_adata(adata)
+        stepwise.transform_adata(adata, out_layer="stepwise", inplace=True)
+
+        one_shot = ZScoreTransformConfig().build()
+        one_shot.fit_transform_adata(adata, out_layer="one_shot", inplace=True)
+
+        np.testing.assert_allclose(adata.layers["stepwise"], adata.layers["one_shot"], atol=1e-12)
+
+
+# --------------------------- parameter access ----------------------------- #
+
+
 class TestParameterAccess:
     """Test accessing fitted parameters."""
 
@@ -169,8 +320,3 @@ class TestParameterAccess:
 
         # Check values
         assert np.allclose(zscore.params.mean, [2.0, 20.0])
-
-
-if __name__ == "__main__":
-    # Run tests with pytest
-    pytest.main([__file__, "-v"])

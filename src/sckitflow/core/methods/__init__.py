@@ -1,8 +1,8 @@
 from sckitflow.core.methods._base import (
     AbstractFlowMethod,
-    AbstractFlowMethodConfig,
     AbstractMethod,
     BaseMatcher,
+    FlowMethodConfig,
     InferenceMethodConfig,
     MatchedTrainingMethod,
     Matcher,
@@ -19,7 +19,7 @@ __all__ = [
     "SupportsInference",
     "AbstractMethod",
     "AbstractFlowMethod",
-    "AbstractFlowMethodConfig",
+    "FlowMethodConfig",
     "BaseMatcher",
     "Matcher",
     "MatchedTrainingMethod",

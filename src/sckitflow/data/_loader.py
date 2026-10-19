@@ -5,8 +5,8 @@ expressed as scfit **weights** over scfit's own leaf factorization (weight 0 == 
 materializes only the selected observations). No Python-side masking or copying of subsets.
 
 * the **primary** stream is the target/perturbed population -- controls get weight 0;
-* the **control** link is the source population -- a separate ``control_adata`` (fast to load, and the
-  cross-dataset case), or, when none is given, the *same* adata weighted so only controls are nonzero;
+* the **control** link is the source population -- the *same* adata weighted so only controls are nonzero,
+  held in memory by scfit;
 * **continuous** covariates ride as *aligned reps* (per-obs, straight from ``obsm``);
 * **categorical** condition/group encodings are computed per group at batch time (cached), keyed off the
   group the batch belongs to, then tiled to the batch.
@@ -28,9 +28,9 @@ import pandas as pd
 from anndata import AnnData
 from scfit.data import EvalLoader as ScfitEvalLoader
 from scfit.data import Loader as ScfitLoader
-from scfit.data import SamplerParams, Stream
+from scfit.data import SamplerParams, Stream, obs_columns
 
-from sckitflow.data._utils import with_derived_obs
+from sckitflow.data._utils import AnnDataLike, as_adatas
 
 
 @runtime_checkable
@@ -71,9 +71,6 @@ _STEP_DATA_KEYS = (
 
 _PRIMARY = "primary"
 _CONTROL = "control"
-
-# The implicit single group used when the schema declares no groups or conditions at all.
-_ALL_CELLS = "_sckitflow_all_cells"
 
 # Coupling terms
 _TARGET_LIN_TERM = "target_coupling_lin"
@@ -184,7 +181,7 @@ class _StepDataBridge:
 
     def __init__(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
@@ -213,11 +210,7 @@ class _StepDataBridge:
         # group it flows from -- appended to `group_by` so scfit can `match_on` it, and stripped back off
         # before a leaf is used as a group identity (see `_strip`).
         self._pair_cols: tuple[str, ...] = (pair_key,) if pair_key is not None else ()
-        if not self._group_cols:
-            # Unconditional schema (no groups, no conditions): scfit must still group on something, so stream
-            # one implicit group holding every observation, on a shallow copy of the caller's AnnData.
-            adata = with_derived_obs(adata, {_ALL_CELLS: pd.Categorical(np.full(adata.n_obs, "all"))})
-            self._group_cols = (_ALL_CELLS,)
+        adatas = as_adatas(adata)
         # Continuous covariates ride as aligned reps: {rep loc -> StepData dict key}.
         self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.continuous_conditions}
         self._resp_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in response_covs}
@@ -226,14 +219,14 @@ class _StepDataBridge:
         self._coupling_schema = coupling_schema
         self._source_coupling_locs, self._target_coupling_locs = _get_coupling_locs(self._coupling_schema)
 
-        # One O(N) drop_duplicates gives the group combos + a representative row per group (no per-obs logic).
-        # The categorical -> encoding is deferred to batch time (cached), keyed by the group's id.
-        sub = adata.obs.loc[:, list(self._group_cols)].reset_index(drop=True)
-        uniq = sub.drop_duplicates()
-        self._leaves: list[tuple] = list(map(tuple, uniq.to_numpy()))
+        # One O(N) drop_duplicates gives the group combos (no per-obs logic). Encoding a group needs only its values
+        # and the `.uns` tables, so it is deferred to batch time (cached), keyed by the group's id. An unconditional
+        # schema (no groups, no conditions) has one group of every cell, ``()``, which scfit streams as is.
+        uniq = obs_columns(adatas, self._group_cols).drop_duplicates()
+        self._leaves: list[tuple] = list(map(tuple, uniq.to_numpy())) if self._group_cols else [()]
         self._leaf_to_gid: dict[tuple, int] = {leaf: i for i, leaf in enumerate(self._leaves)}
-        self._rep_idx: list[int] = uniq.index.to_numpy().tolist()
-        self._adata = adata
+        self._adatas = adatas
+        self._uns = adatas[0].uns  # the tables groups are encoded from; the same in every AnnData
         self._encode_cache: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     @cached_property
@@ -247,7 +240,9 @@ class _StepDataBridge:
         ``groupby(sort=False)`` and the ``drop_duplicates`` behind :attr:`_leaves` both order by first
         appearance, so the counts zip straight onto the leaves (``strict`` makes a divergence loud).
         """
-        sub = self._adata.obs.loc[:, list(self._group_cols)]
+        sub = obs_columns(self._adatas, self._group_cols)
+        if not self._group_cols:
+            return {(): len(sub)}
         sizes = sub.groupby(list(self._group_cols), observed=True, sort=False).size()
         return {leaf: int(n) for leaf, n in zip(self._leaves, sizes.to_numpy(), strict=True)}
 
@@ -304,7 +299,7 @@ class _StepDataBridge:
         Cached already conformed to ``dtype``/``device``, so the per-batch tile is a device-local expand.
         """
         if gid not in self._encode_cache:
-            entry, cond_keys, group_keys = self._encode_group(self._adata[int(self._rep_idx[gid])])
+            entry, cond_keys, group_keys = self._encode_group(self._leaves[gid])
             conformed = {k: self._conform(_as_tensor(v), streamed=False) for k, v in entry.items()}
             self._encode_cache[gid] = (
                 {k: conformed[k] for k in cond_keys},
@@ -312,17 +307,18 @@ class _StepDataBridge:
             )
         return self._encode_cache[gid]
 
-    def _encode_group(self, cell: AnnData) -> tuple[dict[str, np.ndarray], list, list]:
-        """Encode one representative group cell to ``{key: vector}`` plus the condition/group key lists."""
+    def _encode_group(self, leaf: tuple) -> tuple[dict[str, np.ndarray], list, list]:
+        """Encode one group's values to ``{key: vector}`` plus the condition/group key lists."""
         entry: dict[str, np.ndarray] = {}
         cond_keys: list[str] = []
         group_keys: list[str] = []
-        condition_data = self._cond_schema.get_data(cell)
-        if condition_data is not None and condition_data.categorical_covariates is not None:
-            reps = condition_data.categorical_covariates.extract_reps().mapping
+        values = pd.DataFrame([leaf], columns=list(self._group_cols))
+        condition_data = self._cond_schema.categorical_data(values, self._uns)
+        if condition_data is not None:
+            reps = condition_data.extract_reps().mapping
             entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
             cond_keys = list(reps)
-        groups_data = self._groups_schema.get_data(cell)
+        groups_data = self._groups_schema.categorical_data(values, self._uns)
         if groups_data is not None:
             reps = groups_data.extract_reps().mapping
             entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
@@ -418,11 +414,10 @@ class _StepDataBridge:
 
     def _control_link(
         self,
-        control_adata: AnnData | None,
         control_weights: dict[tuple, float] | None,
         *,
         in_memory: bool = False,
-    ) -> tuple[AnnData | None, Stream | None]:
+    ) -> Stream | None:
         # Under fixed matching the pair column *is* the match: one id shared by a target group and the source
         # group it flows from, which is the only thing scfit's value-equality matching can key on. Otherwise a
         # target is matched to whatever shares its group columns.
@@ -430,17 +425,8 @@ class _StepDataBridge:
         # The control stream carries the pair column so `match_on` can reach it; without one it groups on the
         # full group columns (what its weights' keys are).
         group_by = [*self._group_cols, *self._pair_cols]
-        if control_adata is not None:
-            return control_adata, Stream(
-                _CONTROL,
-                # A separate pool groups on just what it is matched by, plus the pair column when fixed.
-                group_by=group_by if self._pair_cols else list(match_cols or self._group_cols),
-                reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
-                match_on=list(match_cols),
-                in_memory=in_memory,
-            )
         if control_weights:
-            return None, Stream(
+            return Stream(
                 _PRIMARY,  # same source as the primary; weights pick out the controls
                 group_by=group_by,
                 reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
@@ -448,7 +434,7 @@ class _StepDataBridge:
                 match_on=list(match_cols),
                 in_memory=in_memory,
             )
-        return None, None
+        return None
 
     @property
     def group_cols(self) -> tuple[str, ...]:
@@ -470,7 +456,7 @@ class Loader(_StepDataBridge):
     """Yields ``StepData`` batches for one population, backed by :class:`scfit.data.Loader`.
 
     :param adata: The annotated data object to stream (the whole thing -- selection is by weights).
-    :type adata: class: `AnnData`
+    :type adata: class: `AnnData | Sequence[AnnData]`
 
     :param condition_schema: The condition schema: its columns join ``group_by``, its continuous covariates
         stream as reps, and it encodes each group's categorical conditions.
@@ -504,12 +490,8 @@ class Loader(_StepDataBridge):
         tuples are ``(split, *group_cols)`` when ``split_by`` is set, ``group_cols`` otherwise.
     :type primary_weights: class: `dict | None`
 
-    :param control_adata: A separate matched control (source) pool -- faster to load and the
-        cross-dataset case. Takes precedence over ``control_weights``.
-    :type control_adata: class: `AnnData | None`
-
-    :param control_weights: scfit ``{group tuple: weight}`` selecting controls out of ``adata`` itself,
-        used only when ``control_adata`` is ``None``. ``None`` (and no ``control_adata``) => unpaired.
+    :param control_weights: scfit ``{group tuple: weight}`` selecting controls out of ``adata`` itself.
+        ``None`` => unpaired.
     :type control_weights: class: `dict | None`
 
     :param pair_key: An ``.obs`` column whose value a target group shares with the source group it flows
@@ -538,7 +520,7 @@ class Loader(_StepDataBridge):
 
     def __init__(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
@@ -547,7 +529,6 @@ class Loader(_StepDataBridge):
         response_covs: Collection[str] = (),
         split_by: str | None = None,
         primary_weights: dict[tuple, float] | None = None,
-        control_adata: AnnData | None = None,
         control_weights: dict[tuple, float] | None = None,
         pair_key: str | None = None,
         to: str | None = None,
@@ -598,18 +579,16 @@ class Loader(_StepDataBridge):
             reps=primary_reps,
             weights=primary_weights,
         )
-        # `self._adata`, not the argument: an unconditional schema streams a shallow copy carrying the
+        # `self._adatas`, not the argument: an unconditional schema streams shallow copies carrying the
         # implicit all-observations group column (see `with_derived_obs`).
-        sources: dict[str, AnnData] = {_PRIMARY: self._adata}
+        sources: dict[str, list[AnnData]] = {_PRIMARY: self._adatas}
         links: dict[str, Stream] = {}
 
         # Control link -- `in_memory` materializes just the selected control observations, a small pool re-drawn
         # every batch. The control stream never groups on the split: controls are shared across splits.
-        control_source, control_stream = self._control_link(control_adata, control_weights, in_memory=True)
+        control_stream = self._control_link(control_weights, in_memory=True)
         if control_stream is not None:
             links[_CONTROL] = control_stream
-            if control_source is not None:
-                sources[_CONTROL] = control_source
 
         # Make the scfit loader finite (one epoch by default) so a plain pass terminates and is
         # re-iterable; the caller (e.g. the trainer) sets the training length via `set_n_iters`.
@@ -698,14 +677,13 @@ class EvalLoader(_StepDataBridge):
 
     def __init__(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
         sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         primary_weights: dict[tuple, float] | None = None,
-        control_adata: AnnData | None = None,
         control_weights: dict[tuple, float] | None = None,
         pair_key: str | None = None,
         require_target_state: bool = True,
@@ -743,15 +721,13 @@ class EvalLoader(_StepDataBridge):
             reps=primary_reps,
             weights=primary_weights,
         )
-        sources: dict[str, AnnData] = {_PRIMARY: self._adata}
+        sources: dict[str, list[AnnData]] = {_PRIMARY: self._adatas}
         links: dict[str, Stream] = {}
 
         # Control link (source), matched on the group columns -- controls always carry a state to flow from.
-        control_source, control_stream = self._control_link(control_adata, control_weights)
+        control_stream = self._control_link(control_weights)
         if control_stream is not None:
             links[_CONTROL] = control_stream
-            if control_source is not None:
-                sources[_CONTROL] = control_source
 
         self._loader = ScfitEvalLoader(
             sources, primary=primary, links=links, to=to, max_per_group=max_per_group, subsample=subsample, seed=seed

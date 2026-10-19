@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 
 import numpy as np
+from pydantic import field_validator
+from scfit.registry import component
 
-from sckitflow.preprocessing.transforms._base import BaseTransform, TransformParams
+from sckitflow.preprocessing.transforms._base import BaseTransform, TransformConfig, TransformParams
 
-__all__ = ["ZScoreParams", "ZScoreTransform"]
+__all__ = ["ZScoreParams", "ZScoreTransform", "ZScoreTransformConfig"]
 
 
 @dataclass
@@ -41,6 +43,8 @@ class ZScoreTransform(BaseTransform):
             Default: 1e-8. Useful when a feature has zero variance.
     """
 
+    _params_cls = ZScoreParams
+
     def __init__(self, epsilon: float = 1e-8) -> None:
         """Initialize ZScoreTransform.
 
@@ -48,6 +52,8 @@ class ZScoreTransform(BaseTransform):
             epsilon (float): Small constant added to std to prevent division by zero.
         """
         super().__init__()
+        if epsilon < 0:
+            raise ValueError(f"epsilon must be non-negative, got {epsilon}.")
         self._epsilon = epsilon
         self._params: ZScoreParams | None = None
 
@@ -62,17 +68,11 @@ class ZScoreTransform(BaseTransform):
         -------
             Self
         """
-        # Validate
         self._validate_input(X)
 
-        # Compute
         mean = np.mean(X, axis=0)
-        std = np.std(X, axis=0, ddof=0)
+        std = np.std(X, axis=0, ddof=0) + self._epsilon
 
-        # Numerical stability
-        std = std + self._epsilon
-
-        # Store parameters
         self._params = ZScoreParams(mean=mean, std=std, is_fitted=True, n_features=X.shape[1])
 
         return self
@@ -91,15 +91,11 @@ class ZScoreTransform(BaseTransform):
         -------
             Z-Score array, shape (n_samples, n_features).
         """
-        # Validate
         self.params._validate_fitted()
         self._validate_input(X)
         self.params._validate_n_features(X)
 
-        # Transform
-        X_transformed = (X - self.params.mean) / self.params.std
-
-        return X_transformed
+        return (X - self.params.mean) / self.params.std
 
     def inverse_transform(self, X_transformed: np.ndarray) -> np.ndarray:
         """Reverse z-score transformation to original scale.
@@ -113,15 +109,11 @@ class ZScoreTransform(BaseTransform):
         -------
             Reconstructed data array in original scale, shape (n_samples, n_features).
         """
-        # Validate
         self.params._validate_fitted()
         self._validate_input(X_transformed)
         self.params._validate_n_features(X_transformed)
 
-        # Inverse Transform
-        X = X_transformed * self.params.std + self.params.mean
-
-        return X
+        return X_transformed * self.params.std + self.params.mean
 
     def fit_transform(self, X: np.ndarray) -> np.ndarray:
         """Convenience method that combines fit() and transform().
@@ -135,3 +127,29 @@ class ZScoreTransform(BaseTransform):
         """
         self.fit(X)
         return self.transform(X)
+
+
+@component("transform.zscore")
+class ZScoreTransformConfig(TransformConfig):
+    """Portable config for :class:`ZScoreTransform`.
+
+    Carries only the ``epsilon`` hyperparameter — the fitted ``mean`` and
+    ``std`` arrays live on the runtime transform, never in the spec.
+
+    ``epsilon`` is validated at construction time so a negative value (which
+    would defeat the numerical-stability guard at :meth:`ZScoreTransform.fit`)
+    fails before the training pipeline even starts.
+    """
+
+    epsilon: float = 1e-8
+
+    @field_validator("epsilon")
+    @classmethod
+    def _epsilon_non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("epsilon must be non-negative")
+        return v
+
+    def build(self) -> ZScoreTransform:
+        """Return a fresh, unfitted :class:`ZScoreTransform`."""
+        return ZScoreTransform(epsilon=self.epsilon)

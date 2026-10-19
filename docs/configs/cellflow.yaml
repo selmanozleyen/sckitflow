@@ -1,16 +1,13 @@
 # CellFlow: OT-matched conditional flow matching from control to perturbed cells.
 # Load with `RunConfig.from_spec(yaml.safe_load(...))`, then `datamodule, plan = spec.build(adata)`.
 type: run
-version: 1
 
 data:
   type: data_module.flow
-  version: 1
   batch_size: 1024
   n_train_steps: 50000
   manager:
     type: data_manager
-    version: 1
     sample_rep: X_pca
     categorical_conditions:
       drug: [drug1, drug2]          # a combination is a set of drugs
@@ -21,18 +18,10 @@ data:
     groups: [cell_line]             # controls are drawn from the same cell line
     groups_reps:
       cell_line: cell_line          # adata.uns["cell_line"][name] -> embedding
-
-splitter:
-  type: splitter.combination
-  version: 1
-  group_keys: [cell_line, drug1, drug2]
-  always_train_keys: [cell_line]
-  control_key: drug1
-  test_fraction: 0.2
+    split_by: split                 # written by the experiment beforehand, e.g. a splitter.combination
 
 module:
   type: velocity_field.mlp
-  version: 1
   time_features_id: ott-jax
   num_time_features: 128
   time_encoder_output_dim: 256
@@ -49,30 +38,23 @@ module:
 
 training:
   type: training_method.matched
-  version: 1
   coupling:
     type: coupling.pot.sinkhorn
-    version: 1
     reg: 0.5
   method:
     type: training_method.cfm
-    version: 1
     probability_path:               # CellFlow's default: constant noise 0
       type: probability_path.linear_dirac
-      version: 1
 
 inference:
   type: inference_method.ode
-  version: 1
   n_steps: 50
   solver_kwargs: {method: euler}
 
 optimizer:
   type: optimizer.torch
-  version: 1
   name: Adam
   kwargs: {lr: 1.0e-4}
 
 loader_seed: 0
-splitter_seed: 0
 method_seed: 0

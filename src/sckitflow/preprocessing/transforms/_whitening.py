@@ -226,7 +226,7 @@ class WhiteningTransformConfig(TransformConfig):
     fitted ``mean``, ``W`` and ``iW`` arrays live on the runtime transform,
     never in the spec. Both fields round-trip through ``to_spec`` /
     ``from_spec`` as plain scalars, so the config is safe to embed in a
-    ``RunConfig`` written by ``save_run``.
+    ``ModelConfig`` written by ``Model.save_pretrained``.
 
     ``epsilon`` is validated at construction time so a negative value (which
     would make the whitening matrix non-PSD) fails at config time rather than

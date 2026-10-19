@@ -630,8 +630,8 @@ def _run_and_assert(
     assert not math.isnan(score)
 
     run_dir = tmp_path / "run"
-    assert (run_dir / "specs.json").is_file()
-    assert (run_dir / "weights.pt").is_file()
+    assert (run_dir / "config.json").is_file()
+    assert (run_dir / "module" / "model.safetensors").is_file()
 
 
 # --------------------------- tests -----------------------------------------

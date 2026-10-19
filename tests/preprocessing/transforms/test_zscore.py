@@ -6,7 +6,7 @@ Covers three layers of the Z-score transform:
   unchanged),
 * the portable ``ZScoreTransformConfig`` (``build`` / ``build_and_fit`` /
   round-trip through ``to_spec`` / ``from_spec`` — the object that ends up in
-  ``RunConfig``), and
+  ``ModelConfig``), and
 * the AnnData adapter on ``BaseTransform`` (``fit_adata`` /
   ``transform_adata`` / ``fit_transform_adata``).
 """

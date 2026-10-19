@@ -393,7 +393,7 @@ class TransformConfig(Component):
     ``None`` — and ``build()`` returns a fresh :class:`BaseTransform`. The
     runtime object (with its fitted numpy arrays in ``_params``) is never
     serialized: only the hyperparameters in the config end up in a
-    ``specs.json`` written by ``save_run``.
+    ``config.json`` written by ``Model.save_pretrained``.
 
     Two usage patterns:
 

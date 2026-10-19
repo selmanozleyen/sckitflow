@@ -16,8 +16,8 @@ from sckitflow.data.splitters import CombinationSplitterConfig
 def _make_manager(**overrides) -> DataManager:
     """DataManager with cell_line as group and drug as condition."""
     defaults = {
-        "conditions": {"drug": ("drug",)},
-        "conditions_reps": {"drug": "drug"},
+        "categorical_conditions": {"drug": ("drug",)},
+        "categorical_reps": {"drug": "drug"},
         "groups": ("cell_line",),
         "groups_reps": {"cell_line": "cell_line"},
     }
@@ -30,7 +30,7 @@ def _make_manager(**overrides) -> DataManager:
 
 def _make_manager_with_continuous(**overrides) -> DataManager:
     """As :func:`_make_manager`, plus a continuous condition covariate (``X_repr``) from obsm."""
-    return _make_manager(conditions_covariates=["X_repr"], **overrides)
+    return _make_manager(continuous_conditions=["X_repr"], **overrides)
 
 
 class TestDistributionData:

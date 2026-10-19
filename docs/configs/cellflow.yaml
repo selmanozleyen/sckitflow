@@ -12,9 +12,9 @@ data:
     type: data_manager
     version: 1
     sample_rep: X_pca
-    conditions:
+    categorical_conditions:
       drug: [drug1, drug2]          # a combination is a set of drugs
-    conditions_reps:
+    categorical_reps:
       drug: drug                    # adata.uns["drug"][name] -> embedding
     control_values_dict:
       drug: control

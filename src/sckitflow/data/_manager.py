@@ -162,9 +162,9 @@ class DataManager:
 
         self._state_data_schema = StateDataSchema(sample_rep=config.sample_rep)
         self._condition_data_schema = ConditionDataSchema(
-            conditions=config.conditions,
-            conditions_reps=config.conditions_reps,
-            conditions_covariates=config.conditions_covariates,
+            categorical_conditions=config.categorical_conditions,
+            categorical_reps=config.categorical_reps,
+            continuous_conditions=config.continuous_conditions,
         )
         self._coupling_data_schema = CouplingDataSchema(
             rep_lin=config.rep_lin,
@@ -354,7 +354,7 @@ class DataManager:
     def _is_control(self, uniq: pd.DataFrame, control_values_dict: dict[str, str] | None) -> np.ndarray:
         """Which rows of ``uniq`` are controls, per the control value of every condition level."""
         cvd = control_values_dict if control_values_dict is not None else self._control_values_dict
-        conditions = self._condition_data_schema.conditions
+        conditions = self._condition_data_schema.categorical_conditions
         checks = [(col, str(val)) for level, val in (cvd or {}).items() for col in conditions[level]]
         if not checks:
             return np.zeros(len(uniq), dtype=bool)
@@ -726,15 +726,15 @@ class DataManagerConfig(Component):
     `.obsm` attribute of annotated data objects. Otherwise, the representation will fall back to
     `.X`."""
 
-    conditions: dict[str, tuple[str, ...]] | None = None
+    categorical_conditions: dict[str, tuple[str, ...]] | None = None
     """Mapping from each condition level to the corresponding columns, used to initialize the
     conditioning data schema."""
 
-    conditions_reps: dict[str, str] | None = None
+    categorical_reps: dict[str, str] | None = None
     """Mapping from each condition level to the corresponding representation, used to initialize the
     conditioning data schema."""
 
-    conditions_covariates: tuple[str, ...] | None = None
+    continuous_conditions: tuple[str, ...] | None = None
     """Collection of continuous condition covariates, used to initialize the conditioning data
     schema."""
 

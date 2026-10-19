@@ -17,9 +17,9 @@ class ConditionDataSchema(StrictDataSchema):
 
     def __init__(
         self,
-        conditions: dict[str, Collection[str]] | None = None,
-        conditions_reps: dict[str, str] | None = None,
-        conditions_covariates: Collection[str] | None = None,
+        categorical_conditions: dict[str, Collection[str]] | None = None,
+        categorical_reps: dict[str, str] | None = None,
+        continuous_conditions: Collection[str] | None = None,
     ) -> None:
         """Initializes the condition data schema.
 
@@ -47,7 +47,7 @@ class ConditionDataSchema(StrictDataSchema):
             condition over two conditioning axes (i.e.: drug perturbations and genetic knockout).
             Each of these axes will be associated to a set of columns, defining the combinatorial nature
             of the conditioning over them. In the following example, we will specify the condition levels/axes
-            by setting :param: `conditions`.
+            by setting :param: `categorical_conditions`.
 
             ### Condition Levels
 
@@ -61,14 +61,14 @@ class ConditionDataSchema(StrictDataSchema):
                 - KO A
                 - KO B
 
-            Note that, while the choice of the name of the keys to pass as :param: `conditions` and :param: `conditions_reps`
+            Note that, while the choice of the name of the keys to pass as :param: `categorical_conditions` and :param: `categorical_reps`
             is arbitrary (as long as the two dictionaries share the same set of keys), the values of both arguments need
             to appear in the input `AnnData`.
 
             In particular, the values of :param:`conditions`, should be given by sequences of string identifier
             of columns in `adata.obs`` for each conditioning level.
 
-            On the other hand, the values of :param:`conditions_reps` should be given by a single string identifier,
+            On the other hand, the values of :param:`categorical_reps` should be given by a single string identifier,
             specifying the key in `adata.uns` containing the representation for each level.
 
             .. code-block:: python
@@ -83,11 +83,11 @@ class ConditionDataSchema(StrictDataSchema):
                 ... obsm: 'drugA_time', 'drugA_dose', 'drugB_time', 'drugB_dose', 'koA_time', 'koA_dose', \
                 ...     'koB_time', 'koB_dose', 'paired_condition', 'X_repr', 'target_variable', 'X_src', 'X_tgt'
                 >>> condition_schema = schemas.ConditionDataSchema(
-                ...     conditions={
+                ...     categorical_conditions={
                 ...         "drug_perturbation":["drugA", "drugB"],
                 ...         "genetic_ko":["koA", "koB"],
                 ...     },
-                ...     conditions_reps={
+                ...     categorical_reps={
                 ...         "drug_perturbation": "drug",
                 ...         "genetic_ko": "ko",
                 ...     }
@@ -118,20 +118,20 @@ class ConditionDataSchema(StrictDataSchema):
             ## Practical Examples.
             We will continue from the example above and use the data stored in the `"paired_condition"` key of `adata.obsm`
             as dense condition covariates.
-            In order to model this type of conditioning is necessary to add the :param: `conditions_covariates` argument
+            In order to model this type of conditioning is necessary to add the :param: `continuous_conditions` argument
             at initialization, specifying the sequence of key identifier to be used as condition.
 
             .. code-block:: python
                 >>> condition_schema = schemas.ConditionDataSchema(
-                ...     conditions={
+                ...     categorical_conditions={
                 ...         "drug_perturbation":["drugA", "drugB"],
                 ...         "genetic_ko":["koA", "koB"],
                 ...     },
-                ...     conditions_reps={
+                ...     categorical_reps={
                 ...         "drug_perturbation": "drug",
                 ...         "genetic_ko": "ko",
                 ...     },
-                ...     conditions_covariates=["paired_condition"],
+                ...     continuous_conditions=["paired_condition"],
                 ... )
                 >>> condition_data = condition_schema.get_data(adata)
                 >>> type(condition_data)
@@ -143,34 +143,34 @@ class ConditionDataSchema(StrictDataSchema):
 
             .. code-block:: python
                 >>> condition_schema = schemas.ConditionDataSchema(
-                ...     conditions_covariates=["paired_condition"],
+                ...     continuous_conditions=["paired_condition"],
                 ... )
                 >>> condition_data = condition_schema.get_data(adata)
                 >>> type(condition_data)
                 ... sckitflow.data._structures.MixedTypeData
 
-        :param conditions: Mapping from each condition level to the corresponding columns, as described in
+        :param categorical_conditions: Mapping from each condition level to the corresponding columns, as described in
             the dedicated section above. Defaults to `None`.
-        :type conditions: class: `dict[str, Collection[str]] | None`
+        :type categorical_conditions: class: `dict[str, Collection[str]] | None`
 
-        :param conditions_reps: Mapping from each condition level to the corresponding representation, as described in
+        :param categorical_reps: Mapping from each condition level to the corresponding representation, as described in
             the dedicated section above. Defaults to `None`.
-        :type conditions_reps: class: `dict[str, str] | None`
+        :type categorical_reps: class: `dict[str, str] | None`
 
-        :param conditions_covariates: Sequence of continuous condition covariates, as described in the
+        :param continuous_conditions: Sequence of continuous condition covariates, as described in the
             dedicated section above. Defaulst to `None`.
-        :type conditions_covariates: class: `Collection[str] | None`
+        :type continuous_conditions: class: `Collection[str] | None`
         """
-        self._conditions = {} if conditions is None else conditions
-        self._conditions_reps = {} if conditions_reps is None else conditions_reps
-        self._conditions_covariates = () if conditions_covariates is None else conditions_covariates
+        self._categorical_conditions = {} if categorical_conditions is None else categorical_conditions
+        self._categorical_reps = {} if categorical_reps is None else categorical_reps
+        self._continuous_conditions = () if continuous_conditions is None else continuous_conditions
         super().__init__()
 
     def _verify_args(self) -> None:
-        """Verifies that :attr:`self.conditions` and :attr:`self.condition_reps` share the same keys."""
+        """Verifies that :attr:`self.categorical_conditions` and :attr:`self.condition_reps` share the same keys."""
         check_sequence_query_against_reference(
-            self.conditions_reps.keys(),
-            self.conditions.keys(),
+            self.categorical_reps.keys(),
+            self.categorical_conditions.keys(),
             allow_missing_from_query=False,
             allow_missing_from_reference=False,
         )
@@ -181,8 +181,8 @@ class ConditionDataSchema(StrictDataSchema):
         :param adata: The input data.
         :type adata: class: `AnnData`
         """
-        for condition_realm, condition_rep in self._conditions_reps.items():
-            condition_cols = self._conditions[condition_realm]
+        for condition_realm, condition_rep in self._categorical_reps.items():
+            condition_cols = self._categorical_conditions[condition_realm]
             for col in condition_cols:
                 self._check_key_found_in_adata_field(adata, col, "obs")
             self._check_key_found_in_adata_field(adata, condition_rep, "uns")
@@ -193,7 +193,7 @@ class ConditionDataSchema(StrictDataSchema):
         :param adata: The input data.
         :type adata: class: `AnnData`
         """
-        for covariate in self._conditions_covariates:
+        for covariate in self._continuous_conditions:
             self._check_key_found_in_adata_field(adata, covariate, "obsm")
 
     def _get_covariates_df(self, adata: AnnData) -> dict[str, pd.DataFrame]:
@@ -212,7 +212,7 @@ class ConditionDataSchema(StrictDataSchema):
         """
         return {
             condition_level: adata.uns[condition_repr]
-            for condition_level, condition_repr in self._conditions_reps.items()
+            for condition_level, condition_repr in self._categorical_reps.items()
         }
 
     def _get_categorical_covariates(self, adata: AnnData) -> CategoricalData | None:
@@ -243,7 +243,7 @@ class ConditionDataSchema(StrictDataSchema):
         if not self.has_continuous_covariates:
             return None
         return BatchMixin(
-            {covariate_name: adata.obsm[covariate_name] for covariate_name in self._conditions_covariates}
+            {covariate_name: adata.obsm[covariate_name] for covariate_name in self._continuous_conditions}
         )
 
     def _verify_schema(self, adata: AnnData) -> None:
@@ -270,13 +270,13 @@ class ConditionDataSchema(StrictDataSchema):
     @property
     def all_condition_cols(self) -> tuple[str]:
         """Identifiers for the condition columns of all leves returned as a tuple."""
-        return tuple(cat for condition in self._conditions.values() for cat in condition)
+        return tuple(cat for condition in self._categorical_conditions.values() for cat in condition)
 
     @property
     def condition_col_to_level(self) -> dict[str, str]:
         """Dictionary mapping each columns to the condition level it is associated with."""
         col2level = {}
-        for condition, condition_cols in self._conditions.items():
+        for condition, condition_cols in self._categorical_conditions.items():
             for cat in condition_cols:
                 col2level[cat] = condition
         return col2level
@@ -287,44 +287,44 @@ class ConditionDataSchema(StrictDataSchema):
 
         This will be false whenever continuous condition covariates are provided.
         """
-        return len(self._conditions_covariates) == 0
+        return len(self._continuous_conditions) == 0
 
     @property
-    def conditions(self) -> dict[str, Collection[str]]:
+    def categorical_conditions(self) -> dict[str, Collection[str]]:
         """Exposes to `conditions` parameter set at initialization."""
-        return self._conditions
+        return self._categorical_conditions
 
     @property
-    def conditions_reps(self) -> dict[str, str]:
-        """Exposes to `conditions_reps` parameter set at initialization."""
-        return self._conditions_reps
+    def categorical_reps(self) -> dict[str, str]:
+        """Exposes to `categorical_reps` parameter set at initialization."""
+        return self._categorical_reps
 
     @property
-    def conditions_covariates(self) -> Collection[str]:
-        """Exposes to `conditions_covariates` parameter set at initialization."""
-        return self._conditions_covariates
+    def continuous_conditions(self) -> Collection[str]:
+        """Exposes to `continuous_conditions` parameter set at initialization."""
+        return self._continuous_conditions
 
     @property
     def has_categorical_covariates(self) -> bool:
         """Whether the condition schema includes categorical covariates.
 
-        This will be `True` whenever :param: `conditions` is set at initializtion
+        This will be `True` whenever :param: `categorical_conditions` is set at initializtion
         """
-        return len(self._conditions) > 0
+        return len(self._categorical_conditions) > 0
 
     @property
     def has_continuous_covariates(self) -> bool:
         """Whether the condition schema includes categorical covariates.
 
-        This will be `True` whenever :param: `conditions_covariates` is set at initializtion
+        This will be `True` whenever :param: `continuous_conditions` is set at initializtion
         """
-        return len(self._conditions_covariates) > 0
+        return len(self._continuous_conditions) > 0
 
     @property
     def categorical_reps_map(self) -> dict[str, str]:
         """Dictionary mapping each categorical column to the corresponding realm for their representation."""
         reps_map = {}
-        for realm, cov_list in self.conditions.items():
+        for realm, cov_list in self.categorical_conditions.items():
             for cov in cov_list:
                 reps_map[cov] = realm
         return reps_map

@@ -33,7 +33,7 @@ class FlowDataModule(pl.LightningDataModule):
 
     .. code-block:: python
 
-        dm = DataManagerConfig(conditions=..., groups=..., split_by="split").build()
+        dm = DataManagerConfig(categorical_conditions=..., groups=..., split_by="split").build()
         dmod = FlowDataModule.from_adata(adata, dm)
         module = MLPVelocity(dmod.data_dims.state_dim)
         plan = TrainingPlan(CFMTraining(module=module), torch.optim.Adam(module.parameters()))

@@ -48,9 +48,9 @@ def loader_adata() -> AnnData:
 
 def _dm(**overrides) -> DataManager:
     base = {
-        "conditions": {"drug": ("drugA",)},
-        "conditions_reps": {"drug": "drug"},
-        "conditions_covariates": ["Xcond"],
+        "categorical_conditions": {"drug": ("drugA",)},
+        "categorical_reps": {"drug": "drug"},
+        "continuous_conditions": ["Xcond"],
         "groups": ("source_split",),
         "groups_reps": {"source_split": "source_split"},
         "control_values_dict": {"drug": "control"},

@@ -16,7 +16,7 @@ class DataPreprocessor:
     def __init__(
         self,
         *,
-        conditions_covariates: Collection[str] | None = None,
+        continuous_conditions: Collection[str] | None = None,
         state_transform: BaseTransform | None = None,
         state_encoder_context: ExternalModelContext | None = None,
         state_decoder_context: ExternalModelContext | None = None,
@@ -29,7 +29,7 @@ class DataPreprocessor:
 
         :param condition_covariates: Sequence of string identifiers for continuous condition covariates.
             Defaults to `None`.
-        :type conditions_covariates: class: `Collection[str] | None`
+        :type continuous_conditions: class: `Collection[str] | None`
 
         :param state_transform: The transformation to be applied to the state data.
             Defaults to `None`.
@@ -66,7 +66,7 @@ class DataPreprocessor:
             decoder_context=state_decoder_context,
         )
         self._cond_preproc_dict = self._init_cond_preproc_dict(
-            conditions_covariates=conditions_covariates,
+            continuous_conditions=continuous_conditions,
             condition_covariates_transform_dict=condition_covariates_transform_dict,
             condition_covariates_encoder_context_dict=condition_covariates_encoder_context_dict,
             condition_covariates_decoder_context_dict=condition_covariates_decoder_context_dict,
@@ -74,14 +74,14 @@ class DataPreprocessor:
 
     def _init_cond_preproc_dict(
         self,
-        conditions_covariates: Collection[str] | None = None,
+        continuous_conditions: Collection[str] | None = None,
         condition_covariates_transform_dict: dict[str, BaseTransform] | None = None,
         condition_covariates_encoder_context_dict: dict[str, ExternalModelContext] | None = None,
         condition_covariates_decoder_context_dict: dict[str, ExternalModelContext] | None = None,
     ) -> dict[str, ConditionPreprocessing]:
         # ---- Early return when no continuous covariates are present ----
         # empty dictionary if no condition covariate is present
-        if conditions_covariates is None:
+        if continuous_conditions is None:
             return {}
 
         # ---- Prepare dictionaries ----
@@ -97,18 +97,18 @@ class DataPreprocessor:
 
         # ---- Check that the keys are correct ----
         # transforms dictionary
-        check_sequence_query_against_reference(condition_covariates_transform_dict.keys(), conditions_covariates)
+        check_sequence_query_against_reference(condition_covariates_transform_dict.keys(), continuous_conditions)
         # encoder contexts
-        check_sequence_query_against_reference(condition_covariates_encoder_context_dict.keys(), conditions_covariates)
+        check_sequence_query_against_reference(condition_covariates_encoder_context_dict.keys(), continuous_conditions)
         # decoder contexts
-        check_sequence_query_against_reference(condition_covariates_decoder_context_dict.keys(), conditions_covariates)
+        check_sequence_query_against_reference(condition_covariates_decoder_context_dict.keys(), continuous_conditions)
 
         # ---- Initialize dictionary of preprocessing modules ----
         # initialize preprocessing for each covariate
         preproc_dict = {}
 
         # loop over condition covariates
-        for cov in conditions_covariates:
+        for cov in continuous_conditions:
             # ---- Retrieve preprocessing setting for current covariate ----
             cov_transform = condition_covariates_transform_dict.get(cov, None)
             cov_encoder_ctx = condition_covariates_encoder_context_dict.get(cov, None)

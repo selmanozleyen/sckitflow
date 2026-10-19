@@ -65,11 +65,11 @@ def verify_repr_shape(
 def verify_repr(
     data: CategoricalData,
     uns_keys_to_nunique_prefix_and_dim: dict[str, tuple[int, str, int]],
-    conditions_reps: dict[str, str] | None = None,
+    categorical_reps: dict[str, str] | None = None,
     groups_encoding: dict[str, TargetCovariatesEncodingId] | None = None,
 ) -> None:
-    if conditions_reps is not None:
-        for condition, value in conditions_reps.items():
+    if categorical_reps is not None:
+        for condition, value in categorical_reps.items():
             assert value in data.repr_dict
             verify_repr_shape(data, condition, uns_keys_to_nunique_prefix_and_dim)
     if groups_encoding is not None:
@@ -88,12 +88,12 @@ def verify_categorical_data(
     data: CategoricalData,
     expected_df_cols: Collection[str],
     uns_keys_to_nunique_prefix_and_dim: dict[str, tuple[int, str, int]],
-    conditions_reps: dict[str, str] | None = None,
+    categorical_reps: dict[str, str] | None = None,
     groups_encoding: dict[str, TargetCovariatesEncodingId] | None = None,
 ) -> None:
     assert set(data.ann_df.columns) == set(expected_df_cols)
     verify_repr(
-        data, uns_keys_to_nunique_prefix_and_dim, conditions_reps=conditions_reps, groups_encoding=groups_encoding
+        data, uns_keys_to_nunique_prefix_and_dim, categorical_reps=categorical_reps, groups_encoding=groups_encoding
     )
 
 

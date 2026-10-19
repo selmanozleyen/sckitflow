@@ -172,6 +172,17 @@ def paired(dims):
     return _datamodule(adata, **GROUPS, control_values_dict={"drug": "control"}), adata
 
 
+def test_predict_adata_unconditional():
+    """No groups or conditions: one group of every cell, generated from noise, one row per sample."""
+    adata = AnnData(np.random.default_rng(0).standard_normal((20, 2)).astype(np.float32))
+    dmod = FlowDataModule.from_adata(adata, DataManagerConfig().build(), batch_size=8)
+    inference = ODEInference(
+        _module(), ODEInferenceConfig(generate_from_noise=True, n_samples=10, n_steps=2), dims=dmod.data_dims
+    )
+    pred = predict_adata(dmod, inference, adata)
+    assert pred.n_obs == 10 and pred.n_vars == 2
+
+
 def test_predict_adata_schema(paired, dims):
     dmod, adata = paired
     pred = predict_adata(dmod, _inference(_module(), dims), adata)

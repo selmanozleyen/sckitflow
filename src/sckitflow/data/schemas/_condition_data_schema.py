@@ -1,10 +1,11 @@
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from typing import Any
 
 import pandas as pd
 from anndata import AnnData
 
 from sckitflow._utils import check_sequence_query_against_reference
-from sckitflow.data._mixins import BatchMixin, MappedArray
+from sckitflow.data._mixins import BatchMixin
 from sckitflow.data.containers._categorical import CategoricalData
 from sckitflow.data.containers._mixed_type import MixedTypeData
 from sckitflow.data.schemas._base_schema import StrictDataSchema
@@ -196,42 +197,27 @@ class ConditionDataSchema(StrictDataSchema):
         for covariate in self._continuous_conditions:
             self._check_key_found_in_adata_field(adata, covariate, "obsm")
 
-    def _get_covariates_df(self, adata: AnnData) -> dict[str, pd.DataFrame]:
-        """Extracts the columns for all the condition level from the `.obs` attribute of the input `AnnData`
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        return adata.obs.loc[:, self.all_condition_cols]
-
-    def _get_repr_dict(self, adata: AnnData) -> dict[str, MappedArray]:
-        """Retrieves the representations for all condition levels from the input `AnnData`.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        return {
-            condition_level: adata.uns[condition_repr]
-            for condition_level, condition_repr in self._categorical_reps.items()
-        }
-
     def _get_categorical_covariates(self, adata: AnnData) -> CategoricalData | None:
         """Retrieves the categorical condition covariates from the input `AnnData`.
 
-        Categorical covariates are in this case represented as a lookup table
-        using the :class:`pandas.DataFrame` initialized with `self._get_covariates_df`
-        as keys  for each observation to look up in the representatoin dictonary
-        extracted with `self._get_repr_dict`.
-
         :param adata: The input data.
         :type adata: class: `AnnData`
         """
+        return self.categorical_data(adata.obs, adata.uns)
+
+    def categorical_data(self, obs: pd.DataFrame, uns: Mapping[str, Any]) -> CategoricalData | None:
+        """The categorical condition covariates of ``obs`` rows, looked up in the ``uns`` tables.
+
+        :param obs: Rows carrying the condition columns, e.g. one group's values.
+        :param uns: The ``.uns`` the representation tables are read from.
+        """
         if not self.has_categorical_covariates:
             return None
-        covariates_df = self._get_covariates_df(adata)
-        repr_dict = self._get_repr_dict(adata)
+        repr_dict = {level: uns[rep] for level, rep in self._categorical_reps.items()}
         return CategoricalData.from_pandas(
-            covariates_df, repr_dict=repr_dict, categorical_reps_map=self.categorical_reps_map
+            obs.loc[:, list(self.all_condition_cols)],
+            repr_dict=repr_dict,
+            categorical_reps_map=self.categorical_reps_map,
         )
 
     def _get_continuous_covariates(self, adata: AnnData) -> BatchMixin | None:

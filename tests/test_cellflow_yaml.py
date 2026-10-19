@@ -9,10 +9,12 @@ import torch
 import yaml
 from anndata import AnnData
 
-from sckitflow import RunConfig, load_run, predict_adata, save_run
+from sckitflow import Model, ModelConfig, predict_adata
 from sckitflow.core.methods import MatchedTrainingMethod
+from sckitflow.data import FlowDataModule
 from sckitflow.data.sim import get_dummy_adata
 from sckitflow.data.splitters import CombinationSplitterConfig
+from sckitflow.trainer import TrainingPlan
 
 CELLFLOW = Path(__file__).parents[1] / "docs" / "configs" / "cellflow.yaml"
 
@@ -41,15 +43,17 @@ def adata() -> AnnData:
     return splitter.build(rng=np.random.default_rng(0)).split(adata)
 
 
-def _spec() -> RunConfig:
-    spec = RunConfig.from_spec(yaml.safe_load(CELLFLOW.read_text()))
-    # a smaller run of the same model
-    return spec.model_copy(update={"data": spec.data.model_copy(update={"batch_size": 32, "n_train_steps": 3})})
+def _spec() -> ModelConfig:
+    return ModelConfig.from_spec(yaml.safe_load(CELLFLOW.read_text()))
 
 
 def test_cellflow_yaml_trains_saves_and_predicts(tmp_path, adata: AnnData):
-    spec = _spec()
-    datamodule, plan = spec.build(adata)
+    model = _spec().build(adata)
+    # the experiment's side, set by a pipeline: a smaller run of the same model
+    datamodule = FlowDataModule(model.manager, model.dims, adata, batch_size=32, n_train_steps=3)
+    plan = TrainingPlan(
+        model.training_method, torch.optim.Adam(model.module.parameters(), lr=1e-4), val_names=datamodule.val_names
+    )
     assert isinstance(plan.training_method, MatchedTrainingMethod)
     before = {k: v.clone() for k, v in plan.module.state_dict().items()}
     matcher, calls = plan.training_method.matcher, []
@@ -62,9 +66,9 @@ def test_cellflow_yaml_trains_saves_and_predicts(tmp_path, adata: AnnData):
     assert len(calls) == 3  # every step is OT-matched
     assert any(not v.equal(before[k]) for k, v in plan.module.state_dict().items())
 
-    save_run(tmp_path, spec, plan.module)
-    datamodule, loaded = load_run(tmp_path, adata)
-    for k, v in plan.module.state_dict().items():
+    model.save_pretrained(tmp_path)
+    loaded = Model.from_pretrained(tmp_path, adata)
+    for k, v in model.module.state_dict().items():
         assert loaded.module.state_dict()[k].equal(v)
 
     assert loaded.inference_method is not None
@@ -78,4 +82,4 @@ def test_input_dim_comes_from_the_data():
     module = yaml.safe_load(CELLFLOW.read_text())["module"]
     module["condition_encoder_input_layers"]["drug"]["input_dim"] = 3
     with pytest.raises(ValueError, match="comes from the data"):
-        RunConfig.from_spec({**yaml.safe_load(CELLFLOW.read_text()), "module": module})
+        ModelConfig.from_spec({**yaml.safe_load(CELLFLOW.read_text()), "module": module})

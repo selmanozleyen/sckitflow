@@ -342,11 +342,12 @@ class DataManager:
         :param adata: The annotated data object(s) which to extract the dimensionalities from.
         :type adata: class: `AnnData | Sequence[AnnData]`
         """
-        dims = [self._dims_of(a) for a in as_adatas(adata)]
+        adatas = as_adatas(adata)
+        dims = [self._dims_of(a) for a in adatas]
         for i, other in enumerate(dims[1:], start=1):
             if not other.feature_names.equals(dims[0].feature_names) or _plain(other) != _plain(dims[0]):
                 raise ValueError(f"AnnData {i} disagrees with AnnData 0 on its dimensions or feature names.")
-        self._check_same_uns(as_adatas(adata))
+        self._check_same_uns(adatas)
         return dims[0]
 
     def _dims_of(self, adata: AnnData) -> DataDimensions:

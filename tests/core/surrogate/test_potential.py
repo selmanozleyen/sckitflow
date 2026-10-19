@@ -574,32 +574,23 @@ class TestPairLeaf:
         )
         assert sorted(pairs) == [(0, 10), (0, 11), (1, 10), (1, 11)]
 
-    def test_all_covariates_optimized_with_more_target_than_source_rows(self):
-        step = {"source_state": torch.randn(2, 4), "target_group_data": {"g": torch.ones(5, 2)}}
+    def test_all_covariates_optimized_pairs_each_source_row(self):
+        step = {"source_state": torch.randn(2, 4), "target_group_data": {"g": torch.ones(1, 2)}}
         paired, conds = _pair_leaf(step, {"opt": torch.zeros(3, 1)})
         assert paired["source_state"].shape == (2, 3, 4)
-        assert paired["target_group_data"]["g"].shape == (2, 3, 2)
+        assert paired["target_group_data"]["g"].shape == (1, 2)  # one row for the leaf, broadcast by the model
         assert conds["opt"].shape == (2, 3, 1)
 
-    def test_groups_only_generation_from_noise_joins_each_condition(self):
-        step = {"target_group_data": {"g": torch.ones(5, 2)}}
+    def test_groups_only_generation_from_noise_has_one_row_per_condition(self):
+        step = {"target_group_data": {"g": torch.ones(1, 2)}}
         paired, conds = _pair_leaf(step, {"opt": torch.zeros(3, 1)})
-        assert paired["target_group_data"]["g"].shape == (3, 2)
-        assert conds["opt"].shape == (3, 1)
-
-    def test_empty_group_rows_raise(self):
-        with pytest.raises(ValueError, match="has no rows"):
-            _pair_leaf({"target_group_data": {"g": torch.ones(0, 2)}}, {"opt": torch.zeros(3, 1)})
+        assert paired["target_group_data"]["g"].shape == (1, 2)
+        assert conds["opt"].shape == (3, 1) and paired["n_obs"] == 3
 
     def test_other_keys_pass_through(self):
         step = {"source_state": torch.randn(2, 4), "target_condition_data": {}, "extra": "kept"}
         paired, _ = _pair_leaf(step, {"opt": torch.zeros(3, 1)})
         assert paired["extra"] == "kept"
-
-    def test_varying_group_rows_without_target_conditions_raise(self):
-        step = {"target_group_data": {"g": torch.arange(5.0).reshape(5, 1)}}
-        with pytest.raises(ValueError, match="varies within a leaf"):
-            _pair_leaf(step, {"opt": torch.zeros(3, 1)})
 
     def test_condition_covariates_disagreeing_on_rows_raise(self):
         step = {"target_condition_data": {"a": torch.zeros(2, 1), "b": torch.zeros(3, 1)}}

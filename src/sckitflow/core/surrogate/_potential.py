@@ -14,31 +14,20 @@ from sckitflow.data._utils import AnnDataLike
 __all__ = ["SurrogatePotential"]
 
 
-def _one_group_row(groups: Any) -> dict[str, torch.Tensor]:
-    """The single row standing for a leaf's group data, which is constant within a leaf."""
-    rows = get_tensor_dict_from_data(groups)
-    for key, value in rows.items():
-        if value.shape[0] == 0:
-            raise ValueError(f"Target group data {key!r} has no rows.")
-        if not torch.equal(value, value[:1].expand_as(value)):
-            raise ValueError(f"Target group data {key!r} varies within a leaf; it cannot stand for one row.")
-    return {k: v[:1] for k, v in rows.items()}
-
-
 def _pair_leaf(
     step_data: StepData,
     cond_dict: dict[str, torch.Tensor],
 ) -> tuple[StepData, dict[str, torch.Tensor]]:
     r"""Lays a leaf out against the condition dictionary for one prediction.
 
-    A leaf has ``S`` source rows (when a source state is present) and ``T`` target rows. The target rows
-    only vary when the leaf carries condition covariates that are not optimized; otherwise they hold the
-    leaf's group data, which is constant within a leaf, so a single row stands for all of them.
+    A leaf has ``S`` source rows (when a source state is present) and ``T`` target rows (when it carries
+    per-observation conditions that are not optimized). Its group data describes the whole leaf, one row,
+    and broadcasts wherever it is used.
 
-    When neither varies, the $N$ conditions are the batch and the group row joins each of them, the
-    layout prediction reads for generation from noise. Otherwise the ``P`` pairs are the Cartesian
-    product of the varying source and target rows, laid out as $(P, N, \dots)$. ``ODEInference`` reads
-    that layout only with a source and ``generate_from_noise=False``, where ``P`` acts as its sample axis.
+    With neither, the $N$ conditions are the batch, the layout prediction reads for generation from noise.
+    Otherwise the ``P`` pairs are the Cartesian product of the source and target rows, laid out as
+    $(P, N, \dots)$. ``ODEInference`` reads that layout only with a source and ``generate_from_noise=False``,
+    where ``P`` acts as its sample axis.
 
     Target fields prediction does not read (states, couplings, responses) are dropped, since the
     conditions replace the target side. Nothing is moved: the leaf and the conditions are on one device.
@@ -57,15 +46,11 @@ def _pair_leaf(
         T = next(iter(counts.values()))
     n = next(iter(cond_dict.values())).shape[0]
     groups = step_data.get("target_group_data")
-    if groups is not None and T is None:
-        groups = _one_group_row(groups)
     kept: StepData = {key: (None if key.startswith("target_") else value) for key, value in step_data.items()}
 
     if S is None and T is None:
         conds = dict(cond_dict)
-        if groups is not None:
-            groups = {k: v.expand(n, *v.shape[1:]) for k, v in groups.items()}
-        return {**kept, "target_condition_data": conds, "target_group_data": groups}, conds
+        return {**kept, "target_condition_data": conds, "target_group_data": groups, "n_obs": n}, conds
 
     s = 1 if S is None else S
     t = 1 if T is None else T
@@ -89,8 +74,9 @@ def _pair_leaf(
     paired: StepData = {
         **kept,
         **{key: lay_out_container(value, src_idx) for key, value in step_data.items() if key.startswith("source_")},
-        "target_group_data": lay_out_container(groups, tgt_idx),
+        "target_group_data": groups,
         "target_condition_data": {**{k: lay_out(v, tgt_idx) for k, v in extra.items()}, **conds},
+        "n_obs": n,
     }
     return paired, conds
 

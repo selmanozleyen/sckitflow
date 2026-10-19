@@ -1,12 +1,12 @@
-import abc
 from typing import Any
 
 import torch
 
 from sckitflow._random import generators
 from sckitflow.core._data_utils import get_tensor_dict_from_data
-from sckitflow.core._types import PredictionData, StepData
+from sckitflow.core._types import StepData
 from sckitflow.core.methods._base import SupportsInference, _placement_of
+from sckitflow.core.surrogate._config import Potential, Readout
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._utils import AnnDataLike
@@ -121,23 +121,15 @@ def _verify_continuous_conditions_dims(
             raise ValueError(f"Shape mismatch for condition key {cond_key} -- got {query_dim} but expected {ref_dim}.")
 
 
-class SurrogatePotential(abc.ABC, torch.nn.Module):
-    """Abstract class for surrogate potentials.
+class SurrogatePotential(torch.nn.Module):
+    """A differentiable potential of continuous condition covariates, through a trained inference method.
 
-    Instances must implement the `get_response` and `compute_raw_potential` methods, satisfying
-    the contract specified by the method signature. A surrogate potential is defined
-    in terms of an inference module, a target response and a context data module.
-    As input for the `forward` method, it will take a dictionary of continuous condition covariates.
-
-    A surrogate potential is averaged over the groups of its context data, read once per device straight
-    onto the inference module's device.
-
-    It follows the sequence of three steps:
-    1. Query the inference module with the input condition dictionary (`inferer.predict`).
-    2. Extract the response tensor from the prediction (`get_response`).
-    3. Evaluate the raw potential on the masked response (`compute_raw_potential`).
-
-    In addition, it also allows to mask custom dimensions out from the evaluation of the potential.
+    For a dictionary of conditions it
+    1. predicts each group of the context data under those conditions (``inferer.predict``),
+    2. reads one response per condition from the prediction (``readout``), and
+    3. scores the (masked) responses against the target ``ystar`` (``potential``),
+    averaged over the groups. The context is read once per device, onto the inference module's device.
+    ``MeanSamplesReadoutConfig`` / ``SquaredErrorPotentialConfig`` build the common readout and potential.
     """
 
     def __init__(
@@ -147,6 +139,8 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
         datamodule: FlowDataModule,
         adata: AnnDataLike,
         *,
+        readout: Readout,
+        potential: Potential,
         max_per_group: int | None = None,
         require_target_state: bool = True,
         mask: torch.Tensor | None = None,
@@ -158,6 +152,10 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
         :param ystar: A `torch.Tensor` holding the target response for the potential evaluation.
         :param datamodule: The `FlowDataModule` whose schema reads ``adata``.
         :param adata: The context data the potential is averaged over, one prediction per group.
+        :param readout: A prediction -> ``(N, D)``: one response per condition, averaged over the axes before the
+            conditions' (the leaf's pairs and the inferer's samples). Average before the potential: a nonlinear
+            potential does not commute with the mean.
+        :param potential: ``(y, ystar)``, the masked responses ``(N, D')`` and target ``(D',)`` -> ``(N,)``.
         :param max_per_group: Per-group cap on the context observations; ``None`` reads them all.
         :param require_target_state: Whether ``adata`` carries a target state to read.
         :param mask: A boolean mask of shape (D,) selecting the response dimensions to evaluate the potential on.
@@ -192,35 +190,9 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
         self._eval_kwargs = {"max_per_group": max_per_group, "require_target_state": require_target_state}
         self._leaves: dict[str, list] = {}  # per device: the context's leaves, read once
         self._inferer = inferer
+        self._readout = readout
+        self._potential = potential
         self._seed = seed
-
-    @abc.abstractmethod
-    def get_response(self, pred_data: PredictionData) -> torch.Tensor:
-        """Extracts the response tensor from the prediction data.
-
-        :param pred_data: The raw output of ``inferer.predict``. When the leaf has source or target rows,
-            its samples carry leading cell axes (the ``P`` leaf pairs, and any samples the inferer draws)
-            before the ``N`` condition axis.
-        :returns: A tensor of shape ``(N, D)``: the readout averaged over those cell axes, i.e. the
-            Monte Carlo mean response of each condition. ``N`` matches the leading dimension of every
-            condition tensor in ``cond_dict`` and ``D`` equals ``len(ystar)``. Average the readout before
-            the potential, not the potential over cells, since a nonlinear potential does not commute
-            with the mean.
-            Masking with ``self.mask`` along the last axis yields ``(N, D')``,
-            which is what ``compute_raw_potential`` receives.
-        """
-
-    @abc.abstractmethod
-    def compute_raw_potential(self, y: torch.Tensor, ystar: torch.Tensor) -> torch.Tensor:
-        """Evaluates the raw potential.
-
-        :param y: Masked predictions, shape ``(N, D')``, where ``N`` is the
-            number of optimization samples in the condition dictionary and
-            ``D'`` is the number of unmasked response dimensions.
-        :param ystar: Masked target response, shape ``(D',)``. Broadcasts
-            against ``y``.
-        :returns: Per-sample potential, shape ``(N,)``.
-        """
 
     def forward(self, cond_dict: dict[str, torch.Tensor]) -> torch.Tensor:
         """The potential of each condition, averaged over the leaves of the context data module.
@@ -262,13 +234,13 @@ class SurrogatePotential(abc.ABC, torch.nn.Module):
                 # population 0 keeps the single-population stream, so `forward` draws what it always drew
                 generator, _ = generators(self._seed, i, *((population,) if population else ()), device=device)
                 paired_step_data, _ = _pair_leaf(step_data, cond_dict)
-                y = self.get_response(self.inferer.predict(paired_step_data, generator=generator))
+                y = self._readout(self.inferer.predict(paired_step_data, generator=generator))
                 if y.shape[-1] != self.ystar.shape[-1]:
                     raise ValueError(
-                        f"get_response returned a tensor whose last dim is {y.shape[-1]}, "
+                        f"The readout returned a tensor whose last dim is {y.shape[-1]}, "
                         f"but the target response has dim {self.ystar.shape[-1]}."
                     )
-                pot = self.compute_raw_potential(y[..., self._mask], self.ystar[self._mask])
+                pot = self._potential(y[..., self._mask], self.ystar[self._mask])
                 if pot.shape != (n,):
                     raise ValueError(
                         f"Potential value for leaf {leaf} has the wrong shape -- got {pot.shape}, but expected {(n,)}."

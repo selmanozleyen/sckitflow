@@ -9,7 +9,7 @@ import torch
 import yaml
 from anndata import AnnData
 
-from sckitflow import RunConfig, load_run, predict_adata, save_run
+from sckitflow import Run, RunConfig, predict_adata
 from sckitflow.core.methods import MatchedTrainingMethod
 from sckitflow.data.sim import get_dummy_adata
 
@@ -41,7 +41,8 @@ def _spec() -> RunConfig:
 
 def test_cellflow_yaml_trains_saves_and_predicts(tmp_path, adata: AnnData):
     spec = _spec()
-    datamodule, plan = spec.build(adata)
+    run = spec.build(adata)
+    datamodule, plan = run.datamodule, run.plan
     assert isinstance(plan.training_method, MatchedTrainingMethod)
     before = {k: v.clone() for k, v in plan.module.state_dict().items()}
     matcher, calls = plan.training_method.matcher, []
@@ -54,8 +55,8 @@ def test_cellflow_yaml_trains_saves_and_predicts(tmp_path, adata: AnnData):
     assert len(calls) == 3  # every step is OT-matched
     assert any(not v.equal(before[k]) for k, v in plan.module.state_dict().items())
 
-    save_run(tmp_path, spec, plan.module)
-    datamodule, loaded = load_run(tmp_path, adata)
+    run.save_pretrained(tmp_path)
+    datamodule, loaded, _ = Run.from_pretrained(tmp_path, adata)
     for k, v in plan.module.state_dict().items():
         assert loaded.module.state_dict()[k].equal(v)
 

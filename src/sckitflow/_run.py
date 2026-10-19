@@ -12,10 +12,10 @@ With a ``module`` config the spec is the whole model; without one the module is 
 .. code-block:: python
 
     spec = RunConfig(data=FlowDataModuleConfig(...), training=CFMTrainingConfig(), module=MLPVelocityConfig())
-    datamodule, plan = spec.build(adata)
-    save_run("run", spec, plan.module)
+    run = spec.build(adata)
+    run.save_pretrained("run")
 
-    dmod, plan = load_run("run", adata)
+    run = Run.from_pretrained("run", adata)
 """
 
 from __future__ import annotations
@@ -40,14 +40,49 @@ if TYPE_CHECKING:
 
     from sckitflow.data._datamodule import FlowDataModule
 
-__all__ = ["Run", "RunConfig", "save_run", "load_run"]
+__all__ = ["Run", "RunConfig"]
 
 
 class Run(NamedTuple):
-    """A built run: its data module and its plan."""
+    """A built run: its data module, its plan and the spec that built them."""
 
     datamodule: FlowDataModule
     plan: TrainingPlan
+    spec: RunConfig
+
+    def save_pretrained(self, path: str | Path, *, overwrite: bool = False) -> None:
+        """Writes the spec and the module's weights to the folder ``path``.
+
+        :raises FileExistsError: If ``path`` holds a run and ``overwrite`` is `False`.
+        :raises scfit.registry.PortabilityError: If the spec holds a live object, before anything is written.
+        """
+        save_pretrained(path, self.spec, {"module": self.plan.module.state_dict()}, overwrite=overwrite)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        path_or_repo_id: str | Path,
+        adata: AnnData,
+        module: torch.nn.Module | None = None,
+        *,
+        optimizer: torch.optim.Optimizer | None = None,
+        revision: str | None = None,
+    ) -> Run:
+        """Rebuilds a run from a folder or a Hub repo id: the data module, and a plan over ``module``.
+
+        :param adata: The data to attach; the schema comes from the saved spec, not from this.
+        :param module: A freshly built module of the right shape; ``None`` builds it from the spec's ``module``.
+        :param optimizer: Overrides the spec's ``optimizer``.
+        :param revision: The Hub revision to load, for a repo id.
+        """
+        spec, states = load_pretrained(path_or_repo_id, revision=revision)
+        if not isinstance(spec, RunConfig):
+            raise TypeError(f"{path_or_repo_id} holds a {type(spec).__name__}, not a run.")
+        if "module" not in states:
+            raise ValueError(f"{path_or_repo_id} holds no module weights (no module/model.safetensors).")
+        run = spec.build(adata, module, optimizer=optimizer)
+        run.plan.module.load_state_dict(states["module"])
+        return run
 
 
 @component("run", builds=Run)
@@ -100,38 +135,4 @@ class RunConfig(Component):
             val_names=datamodule.val_names,
             seed=self.method_seed,
         )
-        return Run(datamodule, plan)
-
-
-def save_run(path: str | Path, spec: RunConfig, module: torch.nn.Module, *, allow_overwrite: bool = False) -> None:
-    """Writes ``spec`` and the weights of ``module`` to the folder ``path``.
-
-    :raises FileExistsError: If ``path`` holds a run and `allow_overwrite` is `False`.
-    :raises scfit.registry.PortabilityError: If the spec holds a live object, before anything is written.
-    """
-    save_pretrained(path, spec, {"module": module.state_dict()}, overwrite=allow_overwrite)
-
-
-def load_run(
-    path_or_repo_id: str | Path,
-    adata: AnnData,
-    module: torch.nn.Module | None = None,
-    *,
-    optimizer: torch.optim.Optimizer | None = None,
-    revision: str | None = None,
-) -> Run:
-    """Rebuilds a run from a folder or a Hub repo id: the data module, and a plan over ``module``.
-
-    :param adata: The data to attach; the schema comes from the saved spec, not from this.
-    :param module: A freshly built module of the right shape; ``None`` builds it from the spec's ``module``.
-    :param optimizer: Overrides the spec's ``optimizer``.
-    :param revision: The Hub revision to load, for a repo id.
-    """
-    spec, states = load_pretrained(path_or_repo_id, revision=revision)
-    if not isinstance(spec, RunConfig):
-        raise TypeError(f"{path_or_repo_id} holds a {type(spec).__name__}, not a run.")
-    if "module" not in states:
-        raise ValueError(f"{path_or_repo_id} holds no module weights (no module/model.safetensors).")
-    run = spec.build(adata, module, optimizer=optimizer)
-    run.plan.module.load_state_dict(states["module"])
-    return run
+        return Run(datamodule, plan, self)

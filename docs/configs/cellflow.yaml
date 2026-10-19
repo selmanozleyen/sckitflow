@@ -1,5 +1,5 @@
 # CellFlow: OT-matched conditional flow matching from control to perturbed cells.
-# Load with `RunConfig.from_spec(yaml.safe_load(...))`, then `datamodule, plan = spec.build(adata)`.
+# Load with `RunConfig.from_spec(yaml.safe_load(...))`, then `run = spec.build(adata)`.
 type: run
 
 data:

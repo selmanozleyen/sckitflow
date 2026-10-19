@@ -6,16 +6,11 @@ import torch
 from sckitflow._types import LayersDict, NestedLayersDict
 from sckitflow._utils import check_sequence_query_against_reference
 from sckitflow.core._types import MappedTensor
+from sckitflow.core._utils import make_concatenation_possible
 from sckitflow.core.nn._modules import FunctionalModule
 from sckitflow.core.nn._utils import init_module_from_dict
 
 __all__ = ["SetEncoder", "TokenAttentionPooling", "SeedAttentionPooling"]
-
-
-def _broadcast_batch(tensors: list[torch.Tensor]) -> list[torch.Tensor]:
-    """``tensors`` expanded (as views) to one shared leading shape; only their last axis may differ."""
-    lead = torch.broadcast_shapes(*(t.shape[:-1] for t in tensors))
-    return [t.expand(*lead, t.shape[-1]) for t in tensors]
 
 
 class _AttentionPooling(torch.nn.Module):
@@ -283,21 +278,21 @@ class SetEncoder(torch.nn.Module):
 
         # continuous covariates
         if len(encoded_continuous) > 0:
-            continuous_covariates = torch.concatenate(_broadcast_batch(list(encoded_continuous.values())), dim=-1)
+            continuous_covariates = torch.concatenate(tuple(encoded_continuous.values()), dim=-1)
         else:
             continuous_covariates = None
 
-        # get joint representation
-        to_concat = []
-        if pooled_covariates is not None:
-            to_concat.append(pooled_covariates)
-        if continuous_covariates is not None:
-            to_concat.append(continuous_covariates)
-        if len(to_concat) == 0:
+        # get joint representation; pooled covariates are one row per group, continuous ones one per observation
+        if pooled_covariates is None and continuous_covariates is None:
             msg = "No condition covariate found."
             raise ValueError(msg)
-        # A group's categorical covariates have a batch axis of 1, continuous ones one row per observation.
-        latent_cond = torch.concatenate(_broadcast_batch(to_concat), dim=-1)
+        if pooled_covariates is None:
+            latent_cond = continuous_covariates
+        elif continuous_covariates is None:
+            latent_cond = pooled_covariates
+        else:
+            pooled_covariates = make_concatenation_possible(pooled_covariates, continuous_covariates, -1)
+            latent_cond = torch.concatenate((pooled_covariates, continuous_covariates), dim=-1)
 
         return self._condition_encoder["output_layer"](latent_cond)
 

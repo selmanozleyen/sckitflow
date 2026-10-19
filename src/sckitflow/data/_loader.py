@@ -9,7 +9,7 @@ materializes only the selected observations). No Python-side masking or copying 
   held in memory by scfit;
 * **continuous** covariates ride as *aligned reps* (per-obs, straight from ``obsm``);
 * **categorical** condition/group encodings are computed per group at batch time (cached), keyed off the
-  group the batch belongs to, then tiled to the batch.
+  group the batch belongs to, as one row ``(1, c, d)``.
 
 :class:`Loader` samples a stochastic per-batch schedule for training (one group per ``__next__``).
 :class:`EvalLoader` walks every group once, deterministically, for prediction -- yielding ``(StepData,
@@ -122,11 +122,7 @@ def _leaf_encoding(array: np.ndarray) -> np.ndarray:
 
 
 def _group_row(encoding: torch.Tensor) -> torch.Tensor:
-    """One group's encoding ``(c, d)`` -> ``(1, c, d)``: one row, broadcast to every observation of the batch.
-
-    A batch is one group, so its categorical encodings are the same for every observation; the leading axis
-    of 1 says so instead of repeating them. The ``c`` axis is what :class:`SetEncoder` pools (``dim=-2``).
-    """
+    """One group's encoding ``(c, d)`` -> ``(1, c, d)``; ``c`` is the axis :class:`SetEncoder` pools."""
     if encoding.ndim == 1:  # a flat (d,) rep carries no set axis of its own
         encoding = encoding.unsqueeze(0)
     elif encoding.ndim != 2:
@@ -293,7 +289,7 @@ class _StepDataBridge:
         return step_data
 
     def _encode_group_cached(self, gid: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        """The group's ``(condition, group)`` categorical encodings, ``(1, c, d)`` -- computed once per group, then cached.
+        """The group's ``(condition, group)`` categorical encodings, ``(1, c, d)``, cached per group.
 
         Cached already conformed to ``dtype``/``device``; every batch of the group reuses the same tensors.
         """
@@ -325,7 +321,7 @@ class _StepDataBridge:
         return entry, cond_keys, group_keys
 
     def _batch_size(self, batch: dict, target_state: Any, n_rows: int) -> int:
-        """Rows to tile the conditioning to: what the primary delivered, else the caller's known ``n_rows``.
+        """Rows the batch has, which the source is aligned to: what the primary delivered, else ``n_rows``.
 
         Measuring the delivered tensor is authoritative -- it already accounts for the sampler's
         ``drop_last`` and for a group shorter than its cap. Only a metadata-only pass (``reps=()``) reads
@@ -375,7 +371,7 @@ class _StepDataBridge:
     def _step_data_from_batch(self, batch: dict, gid: int, *, has_state: bool, n_rows: int) -> StepData:
         """Assemble one scfit batch (+ its group id) into a ``StepData``.
 
-        The categorical condition/group encoding is cached per group and tiled to the batch; continuous
+        The categorical condition/group encoding is cached per group, one row ``(1, c, d)``; continuous
         covariates are the per-obs aligned reps already in the batch, and the source is row-aligned to
         the same count. ``has_state=False`` omits the target state (metadata-only prediction), and
         ``n_rows`` is the caller's row count for that case -- see :meth:`_batch_size`.
@@ -386,8 +382,8 @@ class _StepDataBridge:
         source_state = self._align_source(source_state, batch_size)
 
         cond_enc, group_enc = self._encode_group_cached(gid)
-        condition: dict[str, Any] = dict(cond_enc)  # (1, c, d): the same for every observation of the batch
-        group: dict[str, Any] = dict(group_enc)
+        condition: dict[str, Any] = dict(cond_enc)  # copied: continuous covariates are added below
+        group: dict[str, Any] = group_enc
         # continuous covariates: per-obs aligned reps (present only when the stream carries them)
         for loc, key in self._cond_cont_locs.items():
             if loc in batch[_PRIMARY]:

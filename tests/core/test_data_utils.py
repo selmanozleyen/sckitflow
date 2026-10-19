@@ -160,84 +160,28 @@ class TestUnalignedFields:
 
 # -------------------- prepare_latent_train --------------------
 class TestPrepareLatentTrain:
+    def _latent(self, source, dims, *, generate_from_noise):
+        return prepare_latent_train(
+            source,
+            _sampler,
+            dims,
+            batch_size=8,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            generate_from_noise=generate_from_noise,
+            generator=_gen(),
+        )
+
     def test_source_present_returns_it_unchanged(self, dims):
-        """Paired, not generating: the source *is* the latent."""
-        source = torch.randn(8, dims.state_dim)
-        out = prepare_latent_train(
-            source,
-            {},
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=False,
-            generator=_gen(),
-        )
-        assert out is source
+        """Paired, not generating: the source *is* the latent, whatever its width (that belongs to it)."""
+        source = torch.randn(8, 99)
+        assert self._latent(source, dims, generate_from_noise=False) is source
 
-    def test_source_present_with_noise_draws_from_source_rows(self, dims):
-        """Paired, generating: batch size from `source.shape[0]`, width from `dims.state_dim`."""
-        source = torch.randn(8, dims.state_dim)
-        out = prepare_latent_train(
-            source,
-            {},
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=True,
-            generator=_gen(),
-        )
-        assert out.shape == (8, dims.state_dim)
-
-    def test_source_absent_uses_conditioning_rows(self, dims):
-        """Unpaired: batch size from the first conditioning tensor."""
-        out = prepare_latent_train(
-            None,
-            _cond(5),
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=True,
-            generator=_gen(),
-        )
-        assert out.shape == (5, dims.state_dim)
-
-    def test_neither_source_nor_conditioning_raises(self, dims):
-        """A training batch always has a batch; a missing one is a loader bug, not a shape one."""
-        with pytest.raises(ValueError, match="cannot size the training latent"):
-            prepare_latent_train(
-                None,
-                {},
-                _sampler,
-                dims,
-                device=torch.device("cpu"),
-                dtype=torch.float32,
-                generate_from_noise=True,
-                generator=_gen(),
-            )
-
-    def test_width_ignores_the_source_shape(self, dims):
-        """A source with the wrong last dim is still returned unchanged when paired, not generating.
-
-        The width belongs to `dims`; the source is authoritative for `B` and its
-        own `D`, which is why it short-circuits. This test pins that `dims` is
-        *not* consulted for the width in the paired case -- if the source is
-        accepted as-is, the module and the source are on the same page.
-        """
-        source = torch.randn(8, 99)  # wrong width on purpose
-        out = prepare_latent_train(
-            source,
-            {},
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=False,
-            generator=_gen(),
-        )
-        assert out is source  # unchanged; `dims.state_dim` is 4, source is 99, no error
+    @pytest.mark.parametrize("paired", [True, False])
+    def test_noise_is_batch_size_by_state_dim(self, dims, paired):
+        """Generating from noise: `(batch_size, dims.state_dim)`, paired or not."""
+        source = torch.randn(8, dims.state_dim) if paired else None
+        assert self._latent(source, dims, generate_from_noise=True).shape == (8, dims.state_dim)
 
 
 # -------------------- prepare_latent_inference --------------------

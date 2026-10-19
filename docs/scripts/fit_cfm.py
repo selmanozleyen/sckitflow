@@ -218,6 +218,7 @@ def main(config: DictConfig) -> float:
     # Applying transformations to the data. First, we need to infer the
     # parameters from the training data, then we have to transform all of the
     # data using such parameters.
+    # TODO: Consider how to make the transformations persistent.
     if config.transform.name == "identity":
         transform_cfg = IdentityTransformConfig()
     elif config.transform.name == "pca":

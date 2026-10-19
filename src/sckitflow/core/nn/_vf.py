@@ -99,6 +99,7 @@ class MLPVelocity(BaseVelocityField):
         condition_encoder_pooling_proj_dim: int | None = None,
         condition_encoder_pooling_proj_bias: bool = True,
         condition_encoder_covariates_not_pooled: Collection[str] | None = None,
+        condition_encoder_continuous_covariates: Collection[str] | None = None,
         condition_encoder_output_layers_kwargs: LayersDict | None = None,
         source_encoder_mlp_kwargs: LayersDict | None = None,
         source_encoder_output_dim: int | None = None,
@@ -218,6 +219,10 @@ class MLPVelocity(BaseVelocityField):
             defaults to `None`.
         :type condition_encoder_covariates_not_pooled: class: `Collection[str] | None`
 
+        :param condition_encoder_continuous_covariates: Collection of string identifiers for the continuous
+            covariates, which come without a set axis, defaults to `None`.
+        :type condition_encoder_continuous_covariates: class: `Collection[str] | None`
+
         :param condition_encoder_output_layers_kwargs: Dictionary containing the configurations for the output layer.
             Defaults to `None`.
         :type condition_encoder_output_layers_kwargs: class: `LayersDict | None`
@@ -264,6 +269,7 @@ class MLPVelocity(BaseVelocityField):
         self._condition_encoder_pooling_proj_dim = condition_encoder_pooling_proj_dim
         self._condition_encoder_pooling_proj_bias = condition_encoder_pooling_proj_bias
         self._condition_encoder_covariates_not_pooled = condition_encoder_covariates_not_pooled
+        self._condition_encoder_continuous_covariates = condition_encoder_continuous_covariates
         self._condition_encoder_output_layers_kwargs = condition_encoder_output_layers_kwargs
         self._source_encoder_mlp_kwargs = source_encoder_mlp_kwargs
         self._source_encoder_output_dim = (
@@ -462,6 +468,7 @@ class MLPVelocity(BaseVelocityField):
             pooling_proj_dim=self._condition_encoder_pooling_proj_dim,
             pooling_proj_bias=self._condition_encoder_pooling_proj_bias,
             covariates_not_pooled=self._condition_encoder_covariates_not_pooled,
+            continuous_covariates=self._condition_encoder_continuous_covariates,
             output_layers_kwargs=self._condition_encoder_output_layers_kwargs,
         )
 

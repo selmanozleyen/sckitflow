@@ -103,16 +103,22 @@ class TestSetEncoder:
             assert proj_layers[cov].in_features == input_layers[cov]["output_dim"]
             assert proj_layers[cov].out_features == pooling_proj_dim
 
-    def test_not_pooled_continuous_covariate(self) -> None:
-        """A continuous covariate streams as `[B, D]`, without a set axis, and is used as is."""
+    @pytest.mark.parametrize("not_pooled", [["condition0"], ["condition1"], []])
+    @pytest.mark.parametrize("batch", [(batch_size,), (2, batch_size)], ids=["B", "N-B"])
+    def test_continuous_covariate_without_set_axis(self, not_pooled: list[str], batch: tuple[int, ...]) -> None:
+        """A continuous covariate streams as `[..., D]` and joins either side, under any batch axes."""
         encoder = SetEncoder(
-            input_layers=input_layers_double_condition, output_dim=output_dim, covariates_not_pooled=["condition0"]
+            input_layers=input_layers_double_condition,
+            output_dim=output_dim,
+            covariates_not_pooled=not_pooled,
+            continuous_covariates=["condition0"],
         )
+        n_cat = 1 if "condition1" in not_pooled else n_combs
         condition_dict = {
-            "condition0": torch.randn(batch_size, condition0_input_dim),
-            "condition1": torch.randn(batch_size, n_combs, condition1_input_dim),
+            "condition0": torch.randn(*batch, condition0_input_dim),
+            "condition1": torch.randn(*batch, n_cat, condition1_input_dim),
         }
-        assert encoder(condition_dict).shape == (batch_size, output_dim)
+        assert encoder(condition_dict).shape == (*batch, output_dim)
 
     def test_not_pooled_needs_one_entry(self) -> None:
         """A not-pooled covariate with several entries would have to drop or reorder them, so it is refused."""

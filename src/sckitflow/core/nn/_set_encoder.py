@@ -100,6 +100,7 @@ class SetEncoder(torch.nn.Module):
         pooling_proj_dim: int | None = None,
         pooling_proj_bias: bool = True,
         covariates_not_pooled: Collection[str] | None = None,
+        continuous_covariates: Collection[str] | None = None,
         output_layers_kwargs: LayersDict | None = None,
     ) -> None:
         """Initializes the set encoder.
@@ -133,6 +134,10 @@ class SetEncoder(torch.nn.Module):
             For ordered slots such as a first and a second drug, give each slot its own condition level.
         :type covariates_not_pooled: class: `Collection[str] | None`
 
+        :param continuous_covariates: Collection of string identifiers for the continuous covariates, defaults to
+            `None`. These come as `[..., D]`, without the set axis `[..., n, D]` the categorical ones carry.
+        :type continuous_covariates: class: `Collection[str] | None`
+
         :param output_layers_kwargs: Dictionary containing the configurations for the output layer.
             Defaults to `None`.
         :type output_layers_kwargs: class: `LayersDict | None`
@@ -144,6 +149,7 @@ class SetEncoder(torch.nn.Module):
         self._pooling_kwargs = {} if pooling_kwargs is None else pooling_kwargs
         self._pooling_proj_bias = pooling_proj_bias
         self._covariates_not_pooled = [] if covariates_not_pooled is None else covariates_not_pooled
+        self._continuous_covariates = [] if continuous_covariates is None else continuous_covariates
         self._output_layers_kwargs = {} if output_layers_kwargs is None else output_layers_kwargs
         self._pooling_proj_dim = pooling_proj_dim if pooling_proj_dim else self._min_pooled_dims
 
@@ -256,19 +262,19 @@ class SetEncoder(torch.nn.Module):
             # get covariate latent representation
             cov_enc = self._condition_encoder["input_layers"][covariate_id]
             z_cov = cov_enc(covariate_data)
+            # the set axis sits at -2, after any batch axes; a continuous covariate is a set of one
+            if covariate_id in self._continuous_covariates:
+                z_cov = z_cov.unsqueeze(-2)
 
             # update dictionaries
             if covariate_id in self._covariates_not_pooled:
-                # categorical covariates carry a set axis `[B, n, D]`; continuous ones are `[B, D]` already
-                if z_cov.ndim == 3:
-                    if z_cov.shape[-2] != 1:
-                        msg = (
-                            f"Covariate {covariate_id!r} is not pooled, so it must hold one entry per observation; "
-                            f"found {z_cov.shape[-2]}. Pool it, or split its columns into one condition level each."
-                        )
-                        raise ValueError(msg)
-                    z_cov = z_cov.squeeze(-2)
-                encoded_covariates_not_pooled[covariate_id] = z_cov
+                if z_cov.shape[-2] != 1:
+                    msg = (
+                        f"Covariate {covariate_id!r} is not pooled, so it must hold one entry per observation; "
+                        f"found {z_cov.shape[-2]}. Pool it, or split its columns into one condition level each."
+                    )
+                    raise ValueError(msg)
+                encoded_covariates_not_pooled[covariate_id] = z_cov.squeeze(-2)
 
             else:
                 # get shared projection layer

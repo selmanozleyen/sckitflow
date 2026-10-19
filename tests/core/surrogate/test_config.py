@@ -25,3 +25,11 @@ def test_squared_error_sums_over_response_dimensions():
 def test_specs_round_trip_through_their_family():
     assert ReadoutConfig.from_spec(MeanSamplesReadoutConfig().to_spec()) == MeanSamplesReadoutConfig()
     assert PotentialConfig.from_spec(SquaredErrorPotentialConfig().to_spec()) == SquaredErrorPotentialConfig()
+
+
+def test_built_potentials_pickle():
+    """Module-level functions bound with `partial`, so a surrogate holding them can be pickled."""
+    import pickle
+
+    for built in (MeanSamplesReadoutConfig().build(), SquaredErrorPotentialConfig().build()):
+        assert pickle.loads(pickle.dumps(built)).func is built.func

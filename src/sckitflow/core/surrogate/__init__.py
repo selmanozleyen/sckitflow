@@ -3,6 +3,8 @@ from sckitflow.core.surrogate._config import (
     PotentialConfig,
     ReadoutConfig,
     SquaredErrorPotentialConfig,
+    mean_samples,
+    squared_error,
 )
 from sckitflow.core.surrogate._potential import SurrogatePotential
 
@@ -12,4 +14,6 @@ __all__ = [
     "PotentialConfig",
     "MeanSamplesReadoutConfig",
     "SquaredErrorPotentialConfig",
+    "mean_samples",
+    "squared_error",
 ]

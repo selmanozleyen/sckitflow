@@ -22,6 +22,7 @@ from sckitflow.core._types import PredictionData, StepData, concatenate_predicti
 from sckitflow.core.methods._base import SupportsInference
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
+from sckitflow.data._utils import AnnDataLike
 
 __all__ = ["prediction_record", "predictions_to_adata", "predict_adata"]
 
@@ -38,7 +39,11 @@ def _predict_empty(data_dims: DataDimensions, return_raw: bool) -> AnnData | tup
 def _pred_obs_from_leaf(group_cols: tuple[str, ...], leaf: tuple, pred_obj: PredictionData) -> pd.DataFrame:
     """Rebuild a group's obs rows from its ``leaf`` (the ``group_by`` value tuple), one per predicted observation."""
     n_pred_obs = pred_obj.X.shape[0] if getattr(pred_obj, "X", None) is not None else 1
-    return pd.DataFrame({col: np.repeat(val, n_pred_obs) for col, val in zip(group_cols, leaf, strict=True)})
+    # the index sizes the frame, so an unconditional run (no group columns) still gets one row per observation
+    return pd.DataFrame(
+        {col: np.repeat(val, n_pred_obs) for col, val in zip(group_cols, leaf, strict=True)},
+        index=pd.RangeIndex(n_pred_obs),
+    )
 
 
 def _get_pred_traj(pred_obj: PredictionData) -> np.ndarray | None:
@@ -206,14 +211,13 @@ def predictions_to_adata(
 def predict_adata(
     datamodule: FlowDataModule,
     inference_method: SupportsInference,
-    adata: AnnData,
+    adata: AnnDataLike,
     *,
     return_raw: bool = False,
     max_per_group: int | None = None,
     require_target_state: bool = True,
     control_values_dict: dict[str, str] | None = None,
     matched_keys: Mapping[tuple, tuple] | None = None,
-    control_adata: AnnData | None = None,
     predict_kwargs: dict[str, Any] | None = None,
     seed: int = 0,
 ) -> AnnData | tuple[AnnData, PredictionData]:
@@ -223,28 +227,28 @@ def predict_adata(
     machinery, and our eval loader cannot shard, so multi-device prediction would
     silently duplicate rows. For a prediction writer or multi-device, drive
     `~sckitflow.trainer.TrainingPlan.predict_step` through a `lightning.Trainer`
-    instead.
+    instead, passing ``dataloaders=datamodule.dm.get_eval_loader(adata, ...)``.
 
-    :param datamodule: Supplies the schema and the per-group eval loader.
+    :param datamodule: Supplies the schema and the streamed dtype.
     :param inference_method: The method whose ``predict`` is called per group.
-    :param adata: The input adata carrying the metadata to predict over.
+    :param adata: The input adata carrying the metadata to predict over, or several read as one dataset.
     :param return_raw: If ``True``, also return the concatenated `PredictionData`.
     :param max_per_group: Per-group cap on observations.
     :param require_target_state: Whether ``adata`` must carry a target state representation.
     :param control_values_dict: Mapping from each condition level to its control value.
     :param matched_keys: ``{source group key: target group key}`` pairs for fixed matching.
-    :param control_adata: Optional separate control (source) pool.
     :param predict_kwargs: Forwarded to the inference method's ``predict``.
     :param seed: Each group's noise comes from generators derived from it and the group's position.
     """
-    loader = datamodule.set_predict_data(
+    loader = datamodule.dm.get_eval_loader(
         adata,
+        to=None,
+        dtype=datamodule.dtype,
         max_per_group=max_per_group,
         require_target_state=require_target_state,
         control_values_dict=control_values_dict,
         matched_keys=matched_keys,
-        control_adata=control_adata,
-    ).predict_dataloader()
+    )
     predict_kwargs = {} if predict_kwargs is None else predict_kwargs
 
     was_training = inference_method.module.training

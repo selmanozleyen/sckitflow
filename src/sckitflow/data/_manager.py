@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, Unpack
 
@@ -7,6 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 from anndata import AnnData
+from scfit.data import obs_columns
 from scfit.registry import Component, component
 
 if TYPE_CHECKING:
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 from sckitflow._types import TargetCovariatesEncodingId
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._group_encoders import GroupEncoderConfig, GroupEncoderId
-from sckitflow.data._utils import with_derived_obs
+from sckitflow.data._utils import AnnDataLike, as_adatas, with_derived_obs_stacked
 from sckitflow.data.containers._categorical import CategoricalData
 from sckitflow.data.containers._coupling import CouplingData
 from sckitflow.data.containers._distribution import DistributionData
@@ -30,9 +32,14 @@ from sckitflow.data.schemas import (
     ResponseDataSchema,
     StateDataSchema,
 )
-from sckitflow.data.splitters import Splitter
 
 __all__ = ["DataManagerConfig", "LoaderKwargs", "DataManager"]
+
+
+def _plain(dims: DataDimensions) -> dict[str, Any]:
+    """``dims`` without its feature names, which compare as an index rather than with ``==``."""
+    return {k: v for k, v in vars(dims).items() if k != "feature_names"}
+
 
 # The split column a `Splitter` writes by default -- only used to catch an adata that carries a split the
 # schema never declared (see `DataManager._resolve_split`).
@@ -53,8 +60,7 @@ class _Selection(NamedTuple):
     matching -- and ``extras[i]`` the ``extra_cols`` values (e.g. the split) that prefix it on the primary.
     """
 
-    adata: AnnData
-    control_adata: AnnData | None
+    adatas: list[AnnData]
     pair_key: str | None
     extras: list[tuple]
     keys: list[tuple]
@@ -68,7 +74,7 @@ class LoaderKwargs(TypedDict, total=False):
     Declared here rather than beside :class:`~sckitflow.data._loader.Loader` so that typing a call site
     does not import the scfit/annbatch stack (~2s) that the loader module pulls in.
 
-    Everything describing *which* observations a loader streams (``primary_weights``, ``control_adata``,
+    Everything describing *which* observations a loader streams (``primary_weights``,
     ``control_weights``) is derived by :meth:`DataManager.get_dataloaders` and so is deliberately absent:
     these are the knobs that survive being passed through.
     """
@@ -111,54 +117,40 @@ class DataManager:
     Its job is to answer, from configuration alone, three questions a batch cannot answer for itself --
     **what** each observation's state and covariates are (``sample_rep``, ``conditions``, ``groups``, the
     ``*_covs``), **which observations flow into which** (``control_values_dict``, or ``matched_keys`` for fixed
-    pairs), and **which observations are held out** (``splitter`` or ``split_by``). The loaders then read only what
+    pairs), and **which observations are held out** (the ``split_by`` column). The loaders then read only what
     the schema declared.
 
     Two boundaries follow from that, and both are enforced rather than documented-and-hoped:
 
     **One owner per question.** Anything the schema declares is declared once, here, not re-passed per call:
-    :meth:`get_dataloaders` takes no ``split_by``, and the split has exactly one source -- a ``splitter``
-    this class applies itself, or a ``split_by`` column it requires to be present. Passing both raises, a
-    declared column that is missing raises, and an *undeclared* ``"split"`` column raises rather than
+    :meth:`get_dataloaders` takes no ``split_by``, and the split has exactly one source -- a ``split_by``
+    column it requires to be present. The split itself is an experiment's decision, made before the data
+    reaches a run (e.g. by a :mod:`~sckitflow.data.splitters` splitter writing the column). A declared column
+    that is missing raises, and an *undeclared* ``"split"`` column raises rather than
     quietly training on held-out observations. Only inference-time overrides are per call
     (:meth:`get_eval_loader`'s ``control_values_dict`` / ``matched_keys``), because predicting over
     different controls than were registered is the point of them.
 
-    **Derived columns never touch the caller's object.** The split label and the ``matched_keys`` pair id
-    are sckitflow's own bookkeeping, but they have to live in ``.obs`` because that is where scfit reads
-    grouping from. They are written to a shallow copy that shares ``X`` / ``obsm`` / ``uns``
+    **Derived columns never touch the caller's object.** The ``matched_keys`` pair id is sckitflow's own
+    bookkeeping, but they have to live in ``.obs`` because that is where scfit reads
+    grouping from. It is written to a shallow copy that shares ``X`` / ``obsm`` / ``uns``
     (:func:`~sckitflow.data._utils.with_derived_obs`), so nothing is duplicated and the caller's AnnData
     gains no columns it did not ask for -- which also keeps a *view* from being silently materialized.
 
     Built from a :class:`DataManagerConfig`; see it for the individual options.
     """
 
-    def __init__(self, config: DataManagerConfig | None = None, *, splitter: Splitter[Any] | None = None) -> None:
+    def __init__(self, config: DataManagerConfig | None = None) -> None:
         """Initializes the object.
 
         :param config: The schema; ``None`` declares nothing beyond ``.X`` as the state.
-        :param splitter: Derives the train/test labels itself, so building loaders never depends on a
-            preprocessing step having written the column. It is applied to a shallow copy (see
-            `data._utils.with_derived_obs`), so the caller's AnnData is left alone. Mutually exclusive
-            with ``config.split_by``.
         """
         self.config = config = DataManagerConfig() if config is None else config
         self._control_values_dict = config.control_values_dict
         self._matched_keys = dict(config.matched_pairs) if config.matched_pairs else None
         self._condition_state_key = config.condition_state_key
 
-        # One owner for the split: either sckitflow derives it (`splitter`) or the data already carries it
-        # (`split_by`). Accepting both would mean two answers to "which observations are held out", decided by
-        # whichever the loader consulted -- exactly the ambiguity this schema exists to remove.
-        self._splitter = splitter
         self._split_by = config.split_by
-        if self._splitter is not None and self._split_by is not None:
-            raise ValueError(
-                f"pass either `splitter` (sckitflow derives the split) or `split_by` (an existing .obs "
-                f"column), not both; got splitter={type(self._splitter).__name__} and "
-                f"split_by={self._split_by!r}. The splitter writes {self._splitter.split_key!r}, so "
-                "`split_by` is redundant with it."
-            )
 
         self._state_data_schema = StateDataSchema(sample_rep=config.sample_rep)
         self._condition_data_schema = ConditionDataSchema(
@@ -326,30 +318,71 @@ class DataManager:
 
     def get_data_dimensionalities(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
     ) -> DataDimensions:
         """Registers the data dimensionalities from the input data according to the current schema.
 
-        :param adata: The annotated data object which to extract the dimensionalities from.
-        :type adata: class: `AnnData`
+        Several AnnData are read as one dataset (see :meth:`_parts`) and must agree on every dimension and on
+        their feature names.
+
+        :param adata: The annotated data object(s) which to extract the dimensionalities from.
+        :type adata: class: `AnnData | Sequence[AnnData]`
         """
+        dims = [self._dims_of(a) for a in self._parts(adata)]
+        for i, other in enumerate(dims[1:], start=1):
+            if not other.feature_names.equals(dims[0].feature_names) or _plain(other) != _plain(dims[0]):
+                raise ValueError(f"AnnData {i} disagrees with AnnData 0 on its dimensions or feature names.")
+        return dims[0]
+
+    def _dims_of(self, adata: AnnData) -> DataDimensions:
         data: DistributionData = self._get_distribution_data(adata)
         n_features = data.state_data.X.shape[1]
-        feature_names = self._get_feature_names(adata, n_features)
-        return self._get_data_dimensionalities(data, feature_names)
+        return self._get_data_dimensionalities(data, self._get_feature_names(adata, n_features))
 
-    def get_feature_names(self, adata: AnnData) -> pd.Index:
+    def _parts(self, adata: AnnDataLike) -> list[AnnData]:
+        """``adata`` as a list read as one dataset, each part carrying the merged ``.uns`` tables the schema reads.
+
+        A table may live in any of the parts: its entries are merged across them, so a part holding only
+        controls need not repeat the condition tables. An entry in several parts must be the same in each, and
+        every value the schema looks up must have an entry. The parts are shallow copies; the caller's AnnData
+        are untouched.
+        """
+        adatas = as_adatas(adata)
+        cond = self._condition_data_schema.categorical_conditions
+        cols_of = {rep: list(cond[level]) for level, rep in (self.config.categorical_reps or {}).items()}
+        for col, rep in (self.config.groups_reps or {}).items():
+            cols_of.setdefault(rep, []).append(col)
+        tables: dict[str, dict] = {}
+        for key, cols in cols_of.items():
+            table, owner = {}, {}
+            for i, part in enumerate(adatas):
+                for name, vector in part.uns.get(key, {}).items():
+                    if name in table and not np.array_equal(table[name], vector):
+                        raise ValueError(f".uns[{key!r}][{name!r}] differs between AnnData {owner[name]} and {i}.")
+                    table.setdefault(name, vector)
+                    owner.setdefault(name, i)
+            if not table:
+                raise KeyError(f"no AnnData has .uns[{key!r}], which the schema reads.")
+            used = pd.unique(obs_columns(adatas, cols).to_numpy().ravel())
+            if missing := sorted(str(v) for v in used if v not in table):
+                raise KeyError(f".uns[{key!r}] has no entry for {missing}.")
+            tables[key] = table
+        if not tables:
+            return adatas
+        parts = []
+        for part in adatas:
+            local = copy.copy(part)
+            local.uns = {**part.uns, **tables}
+            parts.append(local)
+        return parts
+
+    def get_feature_names(self, adata: AnnDataLike) -> pd.Index:
         """Registers the feature names from the input data according to the current schema.
 
-        :param adata: The annotated data object which to extract the feature names from.
-        :type adata: class: `AnnData`
+        :param adata: The annotated data object(s) which to extract the feature names from.
+        :type adata: class: `AnnData | Sequence[AnnData]`
         """
-        n_features = self._get_state_data(adata).X.shape[1]
-        return self._get_feature_names(adata, n_features)
-
-    def _combos(self, adata: AnnData) -> list[tuple]:
-        """The unique ``group_cols`` combinations present in ``adata.obs``."""
-        return [tuple(row) for row in adata.obs.loc[:, list(self.group_cols)].drop_duplicates().to_numpy()]
+        return self.get_data_dimensionalities(adata).feature_names
 
     def _is_control(self, uniq: pd.DataFrame, control_values_dict: dict[str, str] | None) -> np.ndarray:
         """Which rows of ``uniq`` are controls, per the control value of every condition level."""
@@ -378,13 +411,13 @@ class DataManager:
                 ids[key] = str(i)
         return ids
 
-    def _pair_column(self, adata: AnnData, ids: dict[tuple, str]) -> pd.Categorical:
+    def _pair_column(self, obs: pd.DataFrame, ids: dict[tuple, str]) -> pd.Categorical:
         """Per-obs pair id: its group's id, or ``""`` for a group in no pair (never matched, never streamed).
 
         Factorizes the group columns once (O(N) at C level) and looks the id up per *group*, so the per-obs
         mapping never runs python per row.
         """
-        codes, uniques = pd.factorize(pd.MultiIndex.from_frame(adata.obs.loc[:, list(self.group_cols)]))
+        codes, uniques = pd.factorize(pd.MultiIndex.from_frame(obs.loc[:, list(self.group_cols)]))
         lut = np.array([ids.get(tuple(key), "") for key in uniques], dtype=object)
         return pd.Categorical(lut[codes])
 
@@ -401,9 +434,8 @@ class DataManager:
 
     def _selection(
         self,
-        adata: AnnData,
+        adatas: list[AnnData],
         *,
-        control_adata: AnnData | None = None,
         extra_cols: Collection[str] = (),
         control_values_dict: dict[str, str] | None = None,
         matched_keys: Mapping[tuple, tuple] | None = None,
@@ -416,7 +448,8 @@ class DataManager:
         caller's AnnData is never touched -- which becomes both the trailing element of every weight key and
         the column the control link matches on.
         """
-        uniq = adata.obs.loc[:, [*extra_cols, *self.group_cols]].drop_duplicates()
+        obs = obs_columns(adatas, [*extra_cols, *self.group_cols])
+        uniq = obs.drop_duplicates()
         combos = [tuple(row) for row in uniq.loc[:, list(self.group_cols)].to_numpy()]
         extras = [tuple(row) for row in uniq.loc[:, list(extra_cols)].to_numpy()]
 
@@ -424,23 +457,18 @@ class DataManager:
         if not matched_keys:
             is_source = self._is_control(uniq, control_values_dict)
             # Without named pairs, every non-control combination is a target.
-            return _Selection(adata, control_adata, None, extras, combos, is_source, ~is_source)
+            return _Selection(adatas, None, extras, combos, is_source, ~is_source)
 
         ids = self._pair_ids(matched_keys)
         sources = {tuple(key) for key in matched_keys}
         targets = {tuple(key) for key in matched_keys.values()}
-        # Sources live in the control pool when there is one, in `adata` otherwise. An unknown key is a hard
-        # error: streaming nothing for it is how a typo becomes a training run.
+        # An unknown key is a hard error: streaming nothing for it is how a typo becomes a training run.
         self._assert_keys_present(targets, combos, "target")
-        pool = self._combos(control_adata) if control_adata is not None else combos
-        self._assert_keys_present(sources, pool, "source")
+        self._assert_keys_present(sources, combos, "source")
 
-        adata = with_derived_obs(adata, {_PAIR_KEY: self._pair_column(adata, ids)})
-        if control_adata is not None:
-            control_adata = with_derived_obs(control_adata, {_PAIR_KEY: self._pair_column(control_adata, ids)})
+        adatas = with_derived_obs_stacked(adatas, {_PAIR_KEY: self._pair_column(obs, ids)})
         return _Selection(
-            adata,
-            control_adata,
+            adatas,
             _PAIR_KEY,
             extras,
             [(*combo, ids.get(combo, "")) for combo in combos],
@@ -448,53 +476,44 @@ class DataManager:
             np.array([combo in targets for combo in combos], dtype=bool),
         )
 
-    def _resolve_split(self, adata: AnnData) -> tuple[AnnData, str | None]:
-        """The adata to stream and the column to split it by, per the schema's one declared owner.
+    def _resolve_split(self, adatas: list[AnnData]) -> tuple[list[AnnData], str | None]:
+        """The adata to stream and the column to split it by.
 
-        A ``splitter`` is applied here rather than expected to have been run: the split is part of the schema,
-        so building loaders cannot depend on whether some upstream preprocessing wrote the column. It lands on
-        a shallow copy, so the caller's AnnData never gains a column it did not ask for. A declared
-        ``split_by`` is only checked -- missing is an error, since silently training on everything is the one
-        outcome nobody wants.
+        A declared ``split_by`` is only checked -- missing is an error, since silently training on everything
+        is the one outcome nobody wants.
         """
-        if self._splitter is not None:
-            return self._splitter.split(adata, copy=True), self._splitter.split_key
         if self._split_by is not None:
-            if self._split_by not in adata.obs.columns:
-                raise KeyError(
-                    f"split_by={self._split_by!r} was declared on this DataManager but is not in adata.obs "
-                    f"(columns: {list(adata.obs.columns)}). Run the splitter that produces it, or build the "
-                    "DataManager with `splitter=` so sckitflow derives it."
-                )
-            return adata, self._split_by
+            for i, adata in enumerate(adatas):
+                if self._split_by not in adata.obs.columns:
+                    raise KeyError(
+                        f"split_by={self._split_by!r} was declared on this DataManager but is not in the .obs of "
+                        f"AnnData {i} (columns: {list(adata.obs.columns)}). Run the splitter that produces it first."
+                    )
+            return adatas, self._split_by
         # Neither declared: one loader over everything. Guard the previous default (`split_by="split"`), so
         # data that carries a split cannot be trained on wholesale just because the schema forgot to say so.
-        if _DEFAULT_SPLIT_KEY in adata.obs.columns:
+        if any(_DEFAULT_SPLIT_KEY in adata.obs.columns for adata in adatas):
             raise ValueError(
-                f"adata.obs has a {_DEFAULT_SPLIT_KEY!r} column but this DataManager declares neither "
-                "`split_by` nor `splitter`, so every observation -- held-out ones included -- would train. "
+                f"adata.obs has a {_DEFAULT_SPLIT_KEY!r} column but this DataManager declares no "
+                "`split_by`, so every observation -- held-out ones included -- would train. "
                 f"Declare `split_by={_DEFAULT_SPLIT_KEY!r}` to use it, or drop the column to train on all."
             )
-        return adata, None
+        return adatas, None
 
     def get_dataloaders(
         self,
-        adata: AnnData,
-        *,
-        control_adata: AnnData | None = None,
+        adata: AnnDataLike,
         **loader_kwargs: Unpack[LoaderKwargs],
     ) -> dict[str, Loader]:
         """Build one streaming data loader per split value, as declared by the schema.
 
-        Which observations are held out is the schema's business, not this call's: the ``splitter`` given to
-        :class:`DataManager` is applied here, or the declared ``split_by`` column is read (and required). With
-        neither, everything trains under a single ``"train"`` loader.
+        Which observations are held out is the schema's business, not this call's: the declared ``split_by``
+        column is read (and required). Without one, everything trains under a single ``"train"`` loader.
 
         Selection is by scfit weights over scfit's own leaf factorization -- no subset copying. The whole
         ``adata`` is streamed; each split's primary weights pick out that split's perturbed groups
-        (controls get weight 0). Controls are shared across splits: pass ``control_adata`` (a separate
-        pool -- faster to load, and the cross-dataset case), or, when omitted, they are drawn from
-        ``adata`` itself by weight.
+        (controls get weight 0). Controls are shared across splits and drawn from ``adata`` itself by weight;
+        the loader holds just them in memory.
 
         The split column is part of the primary's ``group_by``, so a leaf is ``(split, *group_cols)`` and a
         split's weights exclude observations rather than whole groups. That matters when a group spans splits (a
@@ -504,11 +523,8 @@ class DataManager:
         Which group is a target and which its source comes from the schema's ``control_values_dict``, or from
         its ``matched_keys`` for fixed pairs (see :meth:`_selection`).
 
-        :param adata: The annotated data object to stream.
-        :type adata: class: `AnnData`
-
-        :param control_adata: Optional separate control (source) pool, shared by every split.
-        :type control_adata: class: `AnnData | None`
+        :param adata: The annotated data object to stream, or several read as one dataset.
+        :type adata: class: `AnnData | Sequence[AnnData]`
 
         :param loader_kwargs: Forwarded to each :class:`Loader`. See :class:`LoaderKwargs` for the
             accepted options.
@@ -525,12 +541,12 @@ class DataManager:
                 )
         from sckitflow.data._loader import Loader
 
-        adata, split_by = self._resolve_split(adata)
+        adatas, split_by = self._resolve_split(self._parts(adata))
 
         if split_by is None:
             # No split at all: one loader over every perturbed group, keyed "train". With no schema to
             # group on there is nothing to weight either -- `None` streams the whole adata uniformly.
-            sel = self._selection(adata, control_adata=control_adata)
+            sel = self._selection(adatas)
             if self.group_cols:
                 weights = {key: 1.0 for key, tgt in zip(sel.keys, sel.is_target, strict=True) if tgt}
                 controls = {key: 1.0 for key, src in zip(sel.keys, sel.is_source, strict=True) if src}
@@ -538,17 +554,16 @@ class DataManager:
                 weights, controls = None, None
             return {
                 "train": Loader(
-                    sel.adata,
+                    sel.adatas,
                     **self._training_loader_schema,
                     primary_weights=weights,
-                    control_adata=sel.control_adata,
-                    control_weights=None if sel.control_adata is not None else controls,
+                    control_weights=controls,
                     pair_key=sel.pair_key,
                     **loader_kwargs,
                 )
             }
 
-        sel = self._selection(adata, control_adata=control_adata, extra_cols=(split_by,))
+        sel = self._selection(adatas, extra_cols=(split_by,))
 
         # Controls are shared across splits, so their weights carry no split (the control link does not group
         # on it). The primary's do, one leaf per (split, group).
@@ -560,14 +575,11 @@ class DataManager:
 
         return {
             split_value: Loader(
-                sel.adata,
+                sel.adatas,
                 **self._training_loader_schema,
                 split_by=split_by,
                 primary_weights=weights,
-                control_adata=sel.control_adata,
-                control_weights=(
-                    None if sel.control_adata is not None else (dict.fromkeys(control_weights, 1.0) or None)
-                ),
+                control_weights=dict.fromkeys(control_weights, 1.0) or None,
                 pair_key=sel.pair_key,
                 **loader_kwargs,
             )
@@ -576,11 +588,10 @@ class DataManager:
 
     def get_eval_loader(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         max_per_group: int | None = None,
         require_target_state: bool = True,
-        control_adata: AnnData | None = None,
         control_values_dict: dict[str, str] | None = None,
         matched_keys: Mapping[tuple, tuple] | None = None,
         subsample: str = "head",
@@ -598,8 +609,8 @@ class DataManager:
         group is predicted unpaired, with no source. Selection is by scfit weights over the whole ``adata``
         -- no subset copying.
 
-        :param adata: The annotated data object to predict over.
-        :type adata: class: `AnnData`
+        :param adata: The annotated data object to predict over, or several read as one dataset.
+        :type adata: class: `AnnData | Sequence[AnnData]`
 
         :param max_per_group: Per-group cap on observations: ``None`` = all, ``N`` = at most N, ``1`` =
             predict-once-per-condition (dedup). Defaults to ``None``.
@@ -608,9 +619,6 @@ class DataManager:
         :param require_target_state: Whether a target state representation is read from ``adata``. Set to
             ``False`` for metadata-only prediction (``StepData["target_state"]`` is ``None``). Defaults to ``True``.
         :type require_target_state: class: `bool`
-
-        :param control_adata: Optional separate control (source) pool, matched on the group columns.
-        :type control_adata: class: `AnnData | None`
 
         :param control_values_dict: Overrides the instance's control values for this call. Defaults to
             ``None`` (use the instance's); ``{}`` predicts unpaired.
@@ -634,8 +642,7 @@ class DataManager:
         from sckitflow.data._loader import EvalLoader
 
         sel = self._selection(
-            adata,
-            control_adata=control_adata,
+            self._parts(adata),
             control_values_dict=control_values_dict,
             matched_keys=matched_keys,
         )
@@ -647,10 +654,9 @@ class DataManager:
             # Unconditional schema: one implicit group, nothing to select or pair against.
             primary_weights, control_weights = None, None
         return EvalLoader(
-            sel.adata,
+            sel.adatas,
             **self._loader_schema,
             primary_weights=primary_weights,
-            control_adata=sel.control_adata,
             control_weights=control_weights,
             pair_key=sel.pair_key,
             require_target_state=require_target_state,
@@ -671,11 +677,6 @@ class DataManager:
     def control_values_dict(self) -> dict[str, str] | None:
         """Exposes the homonymous attribute set at initialization."""
         return self._control_values_dict
-
-    @property
-    def splitter(self) -> Splitter[Any] | None:
-        """The splitter given at construction, if any."""
-        return self._splitter
 
     @property
     def matched_keys(self) -> dict[tuple, tuple] | None:
@@ -717,8 +718,7 @@ class DataManager:
 class DataManagerConfig(Component):
     """The schema :class:`DataManager` is built from; portable, so it travels inside a run's spec.
 
-    The splitter is not a field: it has its own seed, so it is built beside this config and passed to
-    :meth:`build`.
+    What it expects of the ``AnnData``, and how controls are held, is described in ``docs/data_format.md``.
     """
 
     sample_rep: str | None = None
@@ -751,9 +751,9 @@ class DataManagerConfig(Component):
     target are rejected. Pairs rather than a mapping, because JSON cannot key on tuples."""
 
     split_by: str | None = None
-    """An existing `.obs` column holding the split labels, for data that was split elsewhere. Its presence is
-    checked when loaders are built. Mutually exclusive with a `splitter`. ``None`` with no splitter means
-    there is no split and every non-control group trains."""
+    """The `.obs` column holding the split labels, written before the data reaches a run (e.g. by a
+    :mod:`~sckitflow.data.splitters` splitter). Its presence is checked when loaders are built. ``None``
+    means there is no split and every non-control group trains."""
 
     condition_state_key: str | None = None
     """The key for the continuous condition covariates to be viewed as state when
@@ -805,6 +805,6 @@ class DataManagerConfig(Component):
     `rep_lin`. Defaults to `True` (a shared linear term, optionally fused with per-side
     quadratics)."""
 
-    def build(self, *, splitter: Splitter[Any] | None = None) -> DataManager:
-        """The data manager, applying ``splitter`` to the data it streams."""
-        return DataManager(self, splitter=splitter)
+    def build(self) -> DataManager:
+        """The data manager."""
+        return DataManager(self)

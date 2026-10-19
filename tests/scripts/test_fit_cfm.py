@@ -572,7 +572,6 @@ def combine(
 def _compose(*, target_adata_path, tmp_path, overrides, config_name="fit_cfm"):
     ephemeral = [
         f"paths.target_adata={target_adata_path}",
-        "paths.control_adata=null",
         f"save.run_dir={tmp_path / 'run'}",
         f"callbacks.model_checkpoint.dirpath={tmp_path / 'ckpt'}",
         f"loggers.wandb.save_dir={tmp_path / 'wandb'}",

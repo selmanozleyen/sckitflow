@@ -147,9 +147,7 @@ class TestLoaderIterationContract:
         assert sum(1 for _ in loader) == 3
 
     def test_schema_without_covariates_streams_one_implicit_group(self, loader_adata):
-        """An unconditional schema still streams: every cell lands in one synthesized group."""
-        from sckitflow.data._loader import _ALL_CELLS
-
+        """An unconditional schema still streams: every cell is in the one group ``()``."""
         ad = loader_adata
         before = list(ad.obs.columns)
         loader = Loader(ad, **DataManager()._loader_schema, batch_size=8)
@@ -158,8 +156,8 @@ class TestLoaderIterationContract:
         assert sd["target_state"].shape == (8, ad.n_vars)
         assert sd["source_state"] is None  # nothing to pair against
         assert sd["target_condition_data"] is None and sd["target_group_data"] is None
-        assert loader.group_cols == (_ALL_CELLS,)  # one group covering every cell
-        assert list(ad.obs.columns) == before  # ...synthesized on a shallow copy, not the caller's obs
+        assert loader.group_cols == () and loader._leaves == [()]  # one group covering every cell
+        assert list(ad.obs.columns) == before  # the caller's obs gains no column
 
 
 class TestSourceAlignment:

@@ -25,7 +25,7 @@ dependencies = [
   "cloudpickle>=3",
   "numpy>=1.26",
   "pandas>=2",
-  "scfit>=0.0.8",      # annbatch-native streaming data layer and the component registry
+  "scfit>=0.0.11",     # annbatch-native streaming data layer, the component registry and Hub save/load
   "scikit-learn>=1.4",
   "scipy>=1.12",
   "tqdm>=4.66",
@@ -65,7 +65,7 @@ optional-dependencies.doc = [
 ]
 # GPU-resident streaming: scfit/annbatch can keep the read window on-device via cupy (Linux/CUDA only).
 optional-dependencies.gpu = [
-  "scfit[cuda12]>=0.0.8",
+  "scfit[cuda12]>=0.0.11",
 ]
 # Imported lazily inside `sckitflow.trainer._callbacks.WandBLogger`.
 optional-dependencies.logging = [
@@ -96,9 +96,8 @@ optional-dependencies.test = [
   "sckitflow[logging,torch]", # TestWandBLogger imports omegaconf for real (wandb itself is mocked)
 ]
 optional-dependencies.torch = [
-  "lightning>=2.2",      # the training loop, optimizer stepping and logging
+  "lightning>=2.2",     # the training loop, optimizer stepping and logging
   "pot>=0.9",
-  "scfit[torch]>=0.0.8", # the loaders stream with `to=None` and map the native arrays onto torch
   "torch>=2.2",
   "torchdiffeq>=0.2.4",
   "torchmetrics>=1.4",

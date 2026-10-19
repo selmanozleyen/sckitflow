@@ -110,6 +110,11 @@ class StepData(TypedDict, total=False):
     Built from one scfit batch by the data loaders. Every field is optional; the
     source side stays ``None`` in the unpaired ("generate from noise") setting. Use
     :func:`new_step_data` to build an instance with every field defaulting to ``None``.
+
+    A batch is one group. ``target_group_data`` holds what describes it -- the encodings of its group columns
+    and categorical conditions -- as one row ``(1, c, d)`` that broadcasts to every observation. Every other
+    tensor has one row per observation, ``n_obs`` of them; ``target_condition_data`` holds the continuous
+    conditions.
     """
 
     target_state: torch.Tensor | None
@@ -125,6 +130,7 @@ class StepData(TypedDict, total=False):
     source_coupling_quad: torch.Tensor | None
     source_condition_data: BaseData | dict[str, torch.Tensor] | None
     source_group_data: BaseData | dict[str, torch.Tensor] | None
+    n_obs: int | None
 
 
 def new_step_data(**fields: Unpack[StepData]) -> StepData:
@@ -145,6 +151,7 @@ def new_step_data(**fields: Unpack[StepData]) -> StepData:
         "source_coupling_quad": None,
         "source_condition_data": None,
         "source_group_data": None,
+        "n_obs": None,
     }
     data.update(fields)  # type: ignore[typeddict-item]
     return data

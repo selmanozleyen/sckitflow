@@ -1,7 +1,7 @@
 """Unit tests for :class:`sckitflow.data._loader.Loader`.
 
 Covers the scfit-batch -> ``StepData`` bridge: weight-based group selection, the label-gid ->
-cached categorical encoding (tiled to the batch), continuous covariates riding as per-cell reps,
+cached categorical encoding (one row per group), continuous covariates riding as per-cell reps,
 and the finite/cycling iteration contract the trainer relies on.
 """
 
@@ -71,23 +71,19 @@ def _loader(ad, dm, **overrides) -> Loader:
 
 
 class TestLoaderStepDataMapping:
-    def test_weights_select_group_and_label_gid_tiles_encoding(self, loader_adata):
-        """primary_weights pick the group; its categorical encoding is looked up by gid and tiled."""
+    def test_weights_select_group_and_label_gid_encoding(self, loader_adata):
+        """primary_weights pick the group; its categorical encoding is looked up by gid, one row for the batch."""
         ad = loader_adata
         loader = _loader(ad, _dm())
         batches = list(loader)
         assert batches, "loader must yield at least one batch"
         for sd in batches:
-            b = sd["target_state"].shape[0]
             grp = sd["target_group_data"]["source_split"]
-            drug = sd["target_condition_data"]["drug"]
-            # (b, c, d): `c` is the columns mapped to the realm -- 1 here -- and is the axis the
-            # `SetEncoder` pools over, so it survives tiling rather than being consumed by the batch.
-            assert grp.shape == (b, 1, LINE_DIM)
-            assert drug.shape == (b, 1, DRUG_DIM)
-            # tiled: label-gid -> one cached encoding -> broadcast to every row
-            assert torch.allclose(grp, grp[0].expand_as(grp))
-            assert torch.allclose(drug, drug[0].expand_as(drug))
+            drug = sd["target_group_data"]["drug"]  # categorical conditions describe the group too
+            # (1, c, d): one row, broadcast to every observation of the batch. `c` is the columns mapped to the
+            # realm -- 1 here -- and is the axis the `SetEncoder` pools over.
+            assert grp.shape == (1, 1, LINE_DIM)
+            assert drug.shape == (1, 1, DRUG_DIM)
             # and that single encoding is exactly the *selected* group's uns rep (weights => (s0, d0))
             # `[0]` picks a row, `.ravel()` flattens the single-column set axis to compare the values
             np.testing.assert_allclose(grp[0].numpy().ravel(), ad.uns["source_split"]["s0"].ravel(), rtol=1e-6)
@@ -249,20 +245,12 @@ class TestLeafEncoding:
             with pytest.raises(ValueError, match=r"rank 1 or 3"):
                 _leaf_encoding(np.zeros(bad))
 
-    def test_tile_refuses_an_undropped_cell_axis(self):
-        """Rank 3 into `_tile` means `_leaf_encoding` was skipped; the encoder would pool the wrong axis."""
-        from sckitflow.data._loader import _tile
+    def test_group_row_refuses_an_undropped_cell_axis(self):
+        """Rank 3 into `_group_row` means `_leaf_encoding` was skipped; the encoder would pool the wrong axis."""
+        from sckitflow.data._loader import _group_row
 
         with pytest.raises(ValueError, match=r"rank 1 or 2"):
-            _tile(torch.zeros(1, 2, 3), 8)
-
-    @pytest.mark.parametrize("batch_size", [0, -1])
-    def test_tile_refuses_a_non_positive_batch(self, batch_size):
-        """`expand(-1, ...)` is torch's "keep this dim" sentinel, so a negative would silently give 1."""
-        from sckitflow.data._loader import _tile
-
-        with pytest.raises(ValueError, match=r"batch_size must be at least 1"):
-            _tile(torch.zeros(2, 3), batch_size)
+            _group_row(torch.zeros(1, 2, 3))
 
     def test_multiple_rows_raise_instead_of_silently_truncating(self):
         from sckitflow.data._loader import _leaf_encoding
@@ -271,17 +259,16 @@ class TestLeafEncoding:
             _leaf_encoding(np.zeros((2, 3)))
 
     @pytest.mark.parametrize("pooling_mode", ["mean", "sum"])
-    def test_a_tiled_encoding_feeds_the_set_encoder_for_any_realm_width(self, pooling_mode):
+    def test_a_group_row_feeds_the_set_encoder_for_any_realm_width(self, pooling_mode):
         """The loader -> `SetEncoder` shape contract, which nothing else covers end to end.
 
-        Model tests use a dummy method that never builds a `SetEncoder`, so a `_tile` that consumed the
-        set axis went unnoticed: for `c == 1` it emitted `(b, d)`, and the encoder's `mean(dim=-2)` then
-        reduced over the *batch*, returning `(d,)` instead of `(b, out)` -- silently, with no error.
+        A group's encoding is `(1, c, d)`; pooling reduces `c` (`dim=-2`), so the set axis must survive and the
+        batch axis stay 1. Losing `c` would make the pooling reduce the wrong axis, silently.
         """
         from sckitflow.core.nn._set_encoder import SetEncoder
-        from sckitflow.data._loader import _leaf_encoding, _tile
+        from sckitflow.data._loader import _group_row, _leaf_encoding
 
-        batch, dim, out_dim = 16, 3, 8
+        dim, out_dim = 3, 8
         encoder = SetEncoder(
             input_layers={"drug": {"input_dim": dim, "output_dim": out_dim}},
             output_dim=out_dim,
@@ -294,15 +281,15 @@ class TestLeafEncoding:
         for n_cols in (1, 2, 3):
             # the shape `CategoricalData.extract_reps` emits for a realm of `n_cols` columns
             rep = np.zeros((1, n_cols, dim), dtype=np.float32)
-            tiled = _tile(torch.as_tensor(_leaf_encoding(rep)), batch)
-            assert tuple(tiled.shape) == (batch, n_cols, dim), f"set axis lost for c={n_cols}"
-            assert tuple(encoder({"drug": tiled}).shape) == (batch, out_dim), f"batch lost for c={n_cols}"
+            row = _group_row(torch.as_tensor(_leaf_encoding(rep)))
+            assert tuple(row.shape) == (1, n_cols, dim), f"set axis lost for c={n_cols}"
+            assert tuple(encoder({"drug": row}).shape) == (1, out_dim), f"batch axis lost for c={n_cols}"
 
-    def test_a_real_single_column_encoding_tiles_to_the_batch(self):
-        """The shape actually produced by the encoders survives `_leaf_encoding` -> `_tile` intact."""
+    def test_a_real_single_column_encoding_is_one_group_row(self):
+        """The shape actually produced by the encoders survives `_leaf_encoding` -> `_group_row` intact."""
         import pandas as pd
 
-        from sckitflow.data._loader import _leaf_encoding, _tile
+        from sckitflow.data._loader import _group_row, _leaf_encoding
         from sckitflow.data._utils import get_one_hot_encoder
         from sckitflow.data.containers._categorical import CategoricalData
 
@@ -314,7 +301,7 @@ class TestLeafEncoding:
         )
         (rep,) = cd.extract_reps().mapping.values()
         assert np.asarray(rep).shape == (1, 1, 3), "encoder contract changed"
-        assert tuple(_tile(torch.as_tensor(_leaf_encoding(rep)), 7).shape) == (7, 1, 3)
+        assert tuple(_group_row(torch.as_tensor(_leaf_encoding(rep))).shape) == (1, 1, 3)
 
 
 class TestLoaderDtypeAndDevice:
@@ -329,7 +316,7 @@ class TestLoaderDtypeAndDevice:
         assert sd["target_state"].dtype is torch.float32
         assert sd["source_state"].dtype is torch.float32
         assert sd["target_condition_data"]["Xcond"].dtype is torch.float32
-        # the tiled per-group encodings go through the same conform step
+        # the per-group encodings go through the same conform step
         assert sd["target_group_data"]["source_split"].dtype is torch.float32
 
     def test_no_dtype_leaves_the_streamed_tensors_untouched(self, loader_adata):

@@ -332,7 +332,7 @@ class TestGetEvalLoader:
             sizes.append(n)
             assert step_data["source_state"].shape[0] == n
             for field in ("target_condition_data", "target_group_data"):
-                assert all(v.shape[0] == n for v in (step_data[field] or {}).values())
+                assert all(v.shape[0] == 1 for v in (step_data[field] or {}).values())  # one row per group
         assert sizes and max(sizes) > 1, "groups must be bigger than their 1-cell control pool to be a real test"
 
     @pytest.mark.parametrize("cap", [1, 2, None])
@@ -346,7 +346,17 @@ class TestGetEvalLoader:
             assert step_data["target_state"] is None
             expected = counts[leaf] if cap is None else min(counts[leaf], cap)
             assert step_data["source_state"].shape[0] == expected
-            assert all(v.shape[0] == expected for v in step_data["target_group_data"].values())
+            assert all(v.shape[0] == 1 for v in step_data["target_group_data"].values())  # one row per group
+
+    def test_metadata_only_unpaired_batches_carry_their_row_count(self, adata_small: AnnData):
+        """No state and no source: `n_obs` is the only row count, and per-observation responses match it."""
+        ad = adata_small.copy()
+        ad.obsm["resp"] = np.zeros((ad.n_obs, 2), dtype=np.float32)
+        el = _make_manager(target_continuous_covs=("resp",)).get_eval_loader(ad, require_target_state=False)
+        counts = {group: len(rows) for group, rows in ad.obs.groupby(["cell_line", "drug"], observed=True)}
+        for step_data, leaf in el:
+            assert step_data["source_state"] is None and step_data["target_state"] is None
+            assert step_data["n_obs"] == counts[leaf] == step_data["target_response_data"]["resp"].shape[0]
 
     def test_control_values_override_makes_it_paired(self, adata_small: AnnData):
         dm = _make_manager()  # instance is unpaired
@@ -643,7 +653,7 @@ class TestSeveralAnnData:
         parts[1 - holder].uns = {}
         dm = _make_manager(control_values_dict={"drug": "control"})
         assert dm.get_data_dimensionalities(parts).state_dim == dm.get_data_dimensionalities(adata_small).state_dim
-        assert next(iter(dm.get_dataloaders(parts, batch_size=8)["train"]))["target_condition_data"]["drug"] is not None
+        assert next(iter(dm.get_dataloaders(parts, batch_size=8)["train"]))["target_group_data"]["drug"] is not None
         assert parts[1 - holder].uns == {}  # the caller's AnnData gain no tables
 
     def test_an_entry_differing_between_parts_is_refused(self, adata_small: AnnData):

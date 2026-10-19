@@ -1,4 +1,5 @@
 from collections.abc import Collection, Mapping
+from typing import Any
 
 import pandas as pd
 from anndata import AnnData
@@ -90,36 +91,22 @@ class GroupsDataSchema(StrictDataSchema):
         self._verify_groups(adata)
         self._verify_groups_reps(adata)
 
-    def _get_covs_df(
-        self,
-        adata: AnnData,
-    ) -> pd.DataFrame:
-        """Retrieves the covariates data frame.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        return adata.obs.loc[:, self._groups]
-
-    def _get_covs_repr_dict(
-        self,
-        adata: AnnData,
-    ) -> dict[str, MappedArray]:
-        """Retrieves the annotation dictionary for each column.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        return {col: adata.uns[rep] for col, rep in self._groups_reps.items()}
-
     def _get_data(self, adata: AnnData) -> CategoricalData:
         """Enforces the schema on the input :class: `AnnData`.
 
         :param adata: The input data.
         :type adata: class: `AnnData`
         """
-        covs_df_dict: pd.DataFrame = self._get_covs_df(adata)
-        repr_dict: dict[str, MappedArray] = self._get_covs_repr_dict(adata)
+        return self.categorical_data(adata.obs, adata.uns)
+
+    def categorical_data(self, obs: pd.DataFrame, uns: Mapping[str, Any]) -> CategoricalData:
+        """The group covariates of ``obs`` rows, looked up in the ``uns`` tables or encoded.
+
+        :param obs: Rows carrying the group columns, e.g. one group's values.
+        :param uns: The ``.uns`` the representation tables are read from.
+        """
+        covs_df_dict: pd.DataFrame = obs.loc[:, list(self._groups)]
+        repr_dict: dict[str, MappedArray] = {col: uns[rep] for col, rep in self._groups_reps.items()}
         # Each encoder fits its own transformer from the column values at fit time.
         encoders_dict: Mapping[str, TargetCovariatesEncoderCls] = {
             col: enc.build(GroupEncoderContext(covs_df_dict.loc[:, col].values))

@@ -19,7 +19,6 @@ __all__ = [
     "AnnDataLike",
     "as_adatas",
     "with_derived_obs_stacked",
-    "row_of",
 ]
 
 AnnDataLike = AnnData | Sequence[AnnData]
@@ -42,15 +41,6 @@ def with_derived_obs_stacked(adatas: Sequence[AnnData], cols: Mapping[str, Any])
         out.append(with_derived_obs(adata, {name: values[start:stop] for name, values in cols.items()}))
         start = stop
     return out
-
-
-def row_of(adatas: Sequence[AnnData], row: int) -> AnnData:
-    """The one-observation view at stacked position ``row``."""
-    for adata in adatas:
-        if row < adata.n_obs:
-            return adata[row : row + 1]
-        row -= adata.n_obs
-    raise IndexError("row past the last observation.")
 
 
 def with_derived_obs(adata: AnnData, cols: Mapping[str, Any]) -> AnnData:

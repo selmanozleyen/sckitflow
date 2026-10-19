@@ -30,7 +30,7 @@ from scfit.data import EvalLoader as ScfitEvalLoader
 from scfit.data import Loader as ScfitLoader
 from scfit.data import SamplerParams, Stream, obs_columns
 
-from sckitflow.data._utils import AnnDataLike, as_adatas, row_of, with_derived_obs
+from sckitflow.data._utils import AnnDataLike, as_adatas, with_derived_obs
 
 
 @runtime_checkable
@@ -227,13 +227,13 @@ class _StepDataBridge:
         self._coupling_schema = coupling_schema
         self._source_coupling_locs, self._target_coupling_locs = _get_coupling_locs(self._coupling_schema)
 
-        # One O(N) drop_duplicates gives the group combos + a representative row per group (no per-obs logic).
-        # The categorical -> encoding is deferred to batch time (cached), keyed by the group's id.
-        uniq = obs_columns(adatas, self._group_cols).drop_duplicates()  # stacked rows, positional index
+        # One O(N) drop_duplicates gives the group combos (no per-obs logic). Encoding a group needs only its values
+        # and the `.uns` tables, so it is deferred to batch time (cached), keyed by the group's id.
+        uniq = obs_columns(adatas, self._group_cols).drop_duplicates()
         self._leaves: list[tuple] = list(map(tuple, uniq.to_numpy()))
         self._leaf_to_gid: dict[tuple, int] = {leaf: i for i, leaf in enumerate(self._leaves)}
-        self._rep_idx: list[int] = uniq.index.to_numpy().tolist()  # stacked positions
         self._adatas = adatas
+        self._uns = adatas[0].uns  # the tables groups are encoded from; the same in every AnnData
         self._encode_cache: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     @cached_property
@@ -304,7 +304,7 @@ class _StepDataBridge:
         Cached already conformed to ``dtype``/``device``, so the per-batch tile is a device-local expand.
         """
         if gid not in self._encode_cache:
-            entry, cond_keys, group_keys = self._encode_group(row_of(self._adatas, int(self._rep_idx[gid])))
+            entry, cond_keys, group_keys = self._encode_group(self._leaves[gid])
             conformed = {k: self._conform(_as_tensor(v), streamed=False) for k, v in entry.items()}
             self._encode_cache[gid] = (
                 {k: conformed[k] for k in cond_keys},
@@ -312,17 +312,18 @@ class _StepDataBridge:
             )
         return self._encode_cache[gid]
 
-    def _encode_group(self, cell: AnnData) -> tuple[dict[str, np.ndarray], list, list]:
-        """Encode one representative group cell to ``{key: vector}`` plus the condition/group key lists."""
+    def _encode_group(self, leaf: tuple) -> tuple[dict[str, np.ndarray], list, list]:
+        """Encode one group's values to ``{key: vector}`` plus the condition/group key lists."""
         entry: dict[str, np.ndarray] = {}
         cond_keys: list[str] = []
         group_keys: list[str] = []
-        condition_data = self._cond_schema.get_data(cell)
-        if condition_data is not None and condition_data.categorical_covariates is not None:
-            reps = condition_data.categorical_covariates.extract_reps().mapping
+        values = pd.DataFrame([leaf], columns=list(self._group_cols))
+        condition_data = self._cond_schema.categorical_data(values, self._uns)
+        if condition_data is not None:
+            reps = condition_data.extract_reps().mapping
             entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
             cond_keys = list(reps)
-        groups_data = self._groups_schema.get_data(cell)
+        groups_data = self._groups_schema.categorical_data(values, self._uns)
         if groups_data is not None:
             reps = groups_data.extract_reps().mapping
             entry.update({k: _leaf_encoding(v) for k, v in reps.items()})

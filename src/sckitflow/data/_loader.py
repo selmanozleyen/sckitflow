@@ -30,7 +30,7 @@ from scfit.data import EvalLoader as ScfitEvalLoader
 from scfit.data import Loader as ScfitLoader
 from scfit.data import SamplerParams, Stream, obs_columns
 
-from sckitflow.data._utils import AnnDataLike, as_adatas, with_derived_obs
+from sckitflow.data._utils import AnnDataLike, as_adatas
 
 
 @runtime_checkable
@@ -71,9 +71,6 @@ _STEP_DATA_KEYS = (
 
 _PRIMARY = "primary"
 _CONTROL = "control"
-
-# The implicit single group used when the schema declares no groups or conditions at all.
-_ALL_CELLS = "_sckitflow_all_cells"
 
 # Coupling terms
 _TARGET_LIN_TERM = "target_coupling_lin"
@@ -214,11 +211,6 @@ class _StepDataBridge:
         # before a leaf is used as a group identity (see `_strip`).
         self._pair_cols: tuple[str, ...] = (pair_key,) if pair_key is not None else ()
         adatas = as_adatas(adata)
-        if not self._group_cols:
-            # Unconditional schema (no groups, no conditions): scfit must still group on something, so stream
-            # one implicit group holding every observation, on shallow copies of the caller's AnnData.
-            adatas = [with_derived_obs(a, {_ALL_CELLS: pd.Categorical(np.full(a.n_obs, "all"))}) for a in adatas]
-            self._group_cols = (_ALL_CELLS,)
         # Continuous covariates ride as aligned reps: {rep loc -> StepData dict key}.
         self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.continuous_conditions}
         self._resp_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in response_covs}
@@ -228,9 +220,10 @@ class _StepDataBridge:
         self._source_coupling_locs, self._target_coupling_locs = _get_coupling_locs(self._coupling_schema)
 
         # One O(N) drop_duplicates gives the group combos (no per-obs logic). Encoding a group needs only its values
-        # and the `.uns` tables, so it is deferred to batch time (cached), keyed by the group's id.
+        # and the `.uns` tables, so it is deferred to batch time (cached), keyed by the group's id. An unconditional
+        # schema (no groups, no conditions) has one group of every cell, ``()``, which scfit streams as is.
         uniq = obs_columns(adatas, self._group_cols).drop_duplicates()
-        self._leaves: list[tuple] = list(map(tuple, uniq.to_numpy()))
+        self._leaves: list[tuple] = list(map(tuple, uniq.to_numpy())) if self._group_cols else [()]
         self._leaf_to_gid: dict[tuple, int] = {leaf: i for i, leaf in enumerate(self._leaves)}
         self._adatas = adatas
         self._uns = adatas[0].uns  # the tables groups are encoded from; the same in every AnnData
@@ -248,6 +241,8 @@ class _StepDataBridge:
         appearance, so the counts zip straight onto the leaves (``strict`` makes a divergence loud).
         """
         sub = obs_columns(self._adatas, self._group_cols)
+        if not self._group_cols:
+            return {(): len(sub)}
         sizes = sub.groupby(list(self._group_cols), observed=True, sort=False).size()
         return {leaf: int(n) for leaf, n in zip(self._leaves, sizes.to_numpy(), strict=True)}
 

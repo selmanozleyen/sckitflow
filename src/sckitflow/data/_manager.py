@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, Unpack
 
@@ -336,18 +337,16 @@ class DataManager:
     ) -> DataDimensions:
         """Registers the data dimensionalities from the input data according to the current schema.
 
-        Several AnnData must agree on every dimension, on their feature names, and on the ``.uns`` tables the
-        schema reads: they are read as one dataset.
+        Several AnnData are read as one dataset (see :meth:`_parts`) and must agree on every dimension and on
+        their feature names.
 
         :param adata: The annotated data object(s) which to extract the dimensionalities from.
         :type adata: class: `AnnData | Sequence[AnnData]`
         """
-        adatas = as_adatas(adata)
-        dims = [self._dims_of(a) for a in adatas]
+        dims = [self._dims_of(a) for a in self._parts(adata)]
         for i, other in enumerate(dims[1:], start=1):
             if not other.feature_names.equals(dims[0].feature_names) or _plain(other) != _plain(dims[0]):
                 raise ValueError(f"AnnData {i} disagrees with AnnData 0 on its dimensions or feature names.")
-        self._check_same_uns(adatas)
         return dims[0]
 
     def _dims_of(self, adata: AnnData) -> DataDimensions:
@@ -355,15 +354,42 @@ class DataManager:
         n_features = data.state_data.X.shape[1]
         return self._get_data_dimensionalities(data, self._get_feature_names(adata, n_features))
 
-    def _check_same_uns(self, adatas: list[AnnData]) -> None:
-        """Every ``.uns`` table the schema reads must be the same in every AnnData."""
-        keys = {*(self.config.categorical_reps or {}).values(), *(self.config.groups_reps or {}).values()}
-        for key in sorted(keys):
-            first = adatas[0].uns[key]
-            for i, adata in enumerate(adatas[1:], start=1):
-                table = adata.uns[key]
-                if table.keys() != first.keys() or any(not np.array_equal(table[k], first[k]) for k in first):
-                    raise ValueError(f".uns[{key!r}] of AnnData {i} differs from AnnData 0's.")
+    def _parts(self, adata: AnnDataLike) -> list[AnnData]:
+        """``adata`` as a list read as one dataset, each part carrying the merged ``.uns`` tables the schema reads.
+
+        A table may live in any of the parts: its entries are merged across them, so a part holding only
+        controls need not repeat the condition tables. An entry in several parts must be the same in each, and
+        every value the schema looks up must have an entry. The parts are shallow copies; the caller's AnnData
+        are untouched.
+        """
+        adatas = as_adatas(adata)
+        cond = self._condition_data_schema.categorical_conditions
+        cols_of = {rep: list(cond[level]) for level, rep in (self.config.categorical_reps or {}).items()}
+        for col, rep in (self.config.groups_reps or {}).items():
+            cols_of.setdefault(rep, []).append(col)
+        tables: dict[str, dict] = {}
+        for key, cols in cols_of.items():
+            table, owner = {}, {}
+            for i, part in enumerate(adatas):
+                for name, vector in part.uns.get(key, {}).items():
+                    if name in table and not np.array_equal(table[name], vector):
+                        raise ValueError(f".uns[{key!r}][{name!r}] differs between AnnData {owner[name]} and {i}.")
+                    table.setdefault(name, vector)
+                    owner.setdefault(name, i)
+            if not table:
+                raise KeyError(f"no AnnData has .uns[{key!r}], which the schema reads.")
+            used = pd.unique(obs_columns(adatas, cols).to_numpy().ravel())
+            if missing := sorted(str(v) for v in used if v not in table):
+                raise KeyError(f".uns[{key!r}] has no entry for {missing}.")
+            tables[key] = table
+        if not tables:
+            return adatas
+        parts = []
+        for part in adatas:
+            local = copy.copy(part)
+            local.uns = {**part.uns, **tables}
+            parts.append(local)
+        return parts
 
     def get_feature_names(self, adata: AnnDataLike) -> pd.Index:
         """Registers the feature names from the input data according to the current schema.
@@ -539,7 +565,7 @@ class DataManager:
                 )
         from sckitflow.data._loader import Loader
 
-        adatas, split_by = self._resolve_split(as_adatas(adata))
+        adatas, split_by = self._resolve_split(self._parts(adata))
 
         if split_by is None:
             # No split at all: one loader over every perturbed group, keyed "train". With no schema to
@@ -640,7 +666,7 @@ class DataManager:
         from sckitflow.data._loader import EvalLoader
 
         sel = self._selection(
-            as_adatas(adata),
+            self._parts(adata),
             control_values_dict=control_values_dict,
             matched_keys=matched_keys,
         )

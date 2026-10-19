@@ -5,9 +5,18 @@ import pandas as pd
 import pytest
 import torch
 
+from sckitflow._samplers import (
+    IsotropicGaussianNoiseSamplerConfig,
+    SamplerConfig,
+    UniformTimeSamplerConfig,
+)
 from sckitflow.core._data_utils import prepare_latent_train
 from sckitflow.core.methods.training._cfm import CFMTraining, CFMTrainingConfig
-from sckitflow.core.probability_paths import BaseProbabilityPath, LinearGaussianProbabilityPath
+from sckitflow.core.probability_paths import (
+    BaseProbabilityPath,
+    LinearGaussianProbabilityPathConfig,
+)
+from sckitflow.core.probability_paths._config import ProbabilityPathConfig
 from sckitflow.data._dims import DataDimensions
 
 MODULE = "sckitflow.core.methods.training._cfm"
@@ -36,11 +45,43 @@ class LinearModule(torch.nn.Module):
         return self.linear(x)
 
 
-def dummy_probability_path():
+def dummy_probability_path() -> MagicMock:
+    """A live ``BaseProbabilityPath``-shaped mock with fixed compute_xt/ut."""
     path = MagicMock(spec=BaseProbabilityPath)
     path.compute_xt.side_effect = lambda t, x0, x1, *, generator: torch.zeros_like(x0)
     path.compute_ut.side_effect = lambda t, xt, x0, x1: torch.ones_like(x0)
     return path
+
+
+def _to_path_config(mock: MagicMock) -> ProbabilityPathConfig:
+    """Wrap a live path mock in a config whose ``build()`` returns it.
+
+    Subclasses a *concrete* path config (``LinearGaussianProbabilityPathConfig``)
+    rather than the family base ``ProbabilityPathConfig``: the base runs a model
+    validator that rejects non-member subclasses ("family base; give a spec with
+    a 'type', or a member").  Subclassing the concrete member passes that check
+    while still letting us override ``build()``.
+    """
+
+    class _MockPathConfig(LinearGaussianProbabilityPathConfig):
+        def build(self):
+            return mock
+
+    return _MockPathConfig(sigma=1.0)
+
+
+def _to_sampler_config(fn, *, concrete_cls):
+    """Wrap a raw sampler callable in a config whose ``build()`` returns it.
+
+    Like ``_to_path_config``, subclass the concrete sampler config so the
+    ``SamplerConfig`` family validator accepts it.
+    """
+
+    class _CallableSamplerConfig(concrete_cls):
+        def build(self):
+            return fn
+
+    return _CallableSamplerConfig()
 
 
 def dummy_time_sampler(shape, *, generator, device=None, dtype=None):
@@ -83,8 +124,36 @@ def dummy_module():
 
 @pytest.fixture
 def make_cfm(dummy_module, dims):
-    def _make(module=None, **overrides):
-        kwargs = {"probability_path": dummy_probability_path(), "time_sampler": dummy_time_sampler}
+    """Build a ``CFMTraining`` whose path and samplers are always configs.
+
+    Accepts live path mocks or raw sampler callables from the tests and wraps
+    them into configs, so the config stays config-only at every construction
+    site.
+    """
+
+    def _make(module=None, probability_path=None, time_sampler=None, noise_sampler=None, **overrides):
+        # Path: live mock or config or missing -> config
+        if probability_path is None:
+            probability_path = LinearGaussianProbabilityPathConfig(sigma=1.0)
+        elif not isinstance(probability_path, ProbabilityPathConfig):
+            probability_path = _to_path_config(probability_path)
+
+        # Time sampler: raw callable or config or default
+        if time_sampler is None:
+            time_sampler = UniformTimeSamplerConfig()
+        elif not isinstance(time_sampler, SamplerConfig):
+            time_sampler = _to_sampler_config(time_sampler, concrete_cls=UniformTimeSamplerConfig)
+
+        # Noise sampler: same, but optional
+        if noise_sampler is not None and not isinstance(noise_sampler, SamplerConfig):
+            noise_sampler = _to_sampler_config(noise_sampler, concrete_cls=IsotropicGaussianNoiseSamplerConfig)
+
+        kwargs = {
+            "probability_path": probability_path,
+            "time_sampler": time_sampler,
+        }
+        if noise_sampler is not None:
+            kwargs["noise_sampler"] = noise_sampler
         kwargs.update(overrides)
         return CFMTraining(
             dummy_module if module is None else module,
@@ -153,7 +222,7 @@ def test_compute_loss_handles_none_source(make_cfm, dummy_module):
         "target_condition_data": {"c1": torch.randn(2, 3, generator=gen())},
         "target_group_data": {},
     }
-    cfm = make_cfm(noise_sampler=dummy_noise_sampler, generate_from_noise=True)
+    cfm = make_cfm(generate_from_noise=True)
     loss, _ = cfm.compute_loss(step_data, generator=gen(), rng=rng())
     assert torch.isfinite(loss)
     assert dummy_module.last_call["source"] is None
@@ -194,7 +263,10 @@ def test_loss_matches_mse_between_predicted_and_target_velocity(step_data, dims)
     path.compute_ut.side_effect = lambda t, xt, x0, x1: 2 * torch.ones_like(x0)
     cfm = CFMTraining(
         OnesModule(),
-        CFMTrainingConfig(probability_path=path, time_sampler=dummy_time_sampler),
+        CFMTrainingConfig(
+            probability_path=_to_path_config(path),
+            time_sampler=UniformTimeSamplerConfig(),
+        ),
         dims=dims,
     )
     loss, _ = cfm.compute_loss(step_data, generator=gen(), rng=rng())
@@ -203,7 +275,7 @@ def test_loss_matches_mse_between_predicted_and_target_velocity(step_data, dims)
 
 # -------------------- prepare_latent_train wiring --------------------
 def test_prepare_latent_train_called_with_dims_placement_and_flags(make_cfm, step_data, dims, dummy_module):
-    cfm = make_cfm(noise_sampler=dummy_noise_sampler, generate_from_noise=True)
+    cfm = make_cfm(generate_from_noise=True)
     g = gen()
     with patch(f"{MODULE}.prepare_latent_train") as mock_prep:
         mock_prep.return_value = torch.zeros(2, dims.state_dim)
@@ -239,7 +311,8 @@ def test_compute_loss_depends_only_on_generator(step_data, dims, generate_from_n
     cfm = CFMTraining(
         LinearModule(),
         CFMTrainingConfig(
-            probability_path=LinearGaussianProbabilityPath(sigma=0.1), generate_from_noise=generate_from_noise
+            probability_path=LinearGaussianProbabilityPathConfig(sigma=0.1),
+            generate_from_noise=generate_from_noise,
         ),
         dims=dims,
     )
@@ -278,7 +351,7 @@ def test_train_latent_uses_dims_state_dim():
     latent = prepare_latent_train(
         source,
         {},
-        dummy_noise_sampler,
+        IsotropicGaussianNoiseSamplerConfig().build(),
         wide,
         device=torch.device("cpu"),
         dtype=torch.float32,

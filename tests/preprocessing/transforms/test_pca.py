@@ -1,8 +1,25 @@
+"""Tests for :mod:`sckitflow.preprocessing.transforms._pca`.
+
+Covers three layers of the PCA transform:
+
+* the runtime ``PCATransform`` API on plain numpy arrays (original tests,
+  unchanged),
+* the portable ``PCATransformConfig`` (``build`` / ``build_and_fit`` /
+  round-trip through ``to_spec`` / ``from_spec`` — the object that ends up in
+  ``RunConfig``), and
+* the AnnData adapter on ``BaseTransform`` (``fit_adata`` /
+  ``transform_adata`` / ``fit_transform_adata``).
+"""
+
 import numpy as np
 import pytest
 import scanpy as sc
+from anndata import AnnData
+from pydantic import ValidationError
 
-from sckitflow.preprocessing.transforms import PCATransform
+from sckitflow.preprocessing.transforms import PCATransform, PCATransformConfig
+
+# --------------------------- numpy runtime API ---------------------------- #
 
 
 class TestPCATransform:
@@ -133,33 +150,136 @@ class TestPCATransform:
         # Compare
         assert np.allclose(X_pca, X_ppca_transformed, atol=1e-6)
 
-    # def test_multiple_states(self):
-    #     """Test fitting multiple times creates independent states."""
-    #     rng = np.random.default_rng(42)
-    #     X1 = rng.standard_normal((50, 20))
-    #     X2 = rng.standard_normal((50, 20)) + 10  # Different distribution
 
-    #     pca = PCATransform(n_components=5)
+# --------------------------- config: portable API ------------------------- #
 
-    #     # Fit on dataset 1
-    #     params1 = pca.fit(X1)
-    #     mean1 = params1.params.mean.copy()
 
-    #     # Fit on dataset 2
-    #     params2 = pca.fit(X2)
-    #     mean2 = params2.params.mean.copy()
+class TestPCATransformConfig:
+    """Tests for the portable, serializable :class:`PCATransformConfig`."""
 
-    #     # Means should be different
-    #     assert not np.allclose(mean1, mean2)
+    def test_build_returns_fresh_unfitted_transform(self):
+        cfg = PCATransformConfig(n_components=5)
+        transform = cfg.build()
 
-    #     # Can use either params
-    #     X_test = rng.standard_normal((10, 20))
-    #     X_transformed1 = pca.transform(X_test, params=params1)
-    #     X_transformed2 = pca.transform(X_test, params=params2)
+        assert isinstance(transform, PCATransform)
+        assert not transform.is_fitted
+        assert transform.n_components == 5
 
-    #     assert X_transformed1.shape == (10, 5)
-    #     assert X_transformed2.shape == (10, 5)
-    #     assert not np.allclose(X_transformed1, X_transformed2)
+    def test_build_matches_constructor_numerically(self):
+        """``build()`` must produce a transform that behaves like the constructor."""
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((40, 15))
+
+        via_config = PCATransformConfig(n_components=5).build().fit_transform(X)
+        via_ctor = PCATransform(n_components=5).fit_transform(X)
+
+        np.testing.assert_allclose(via_config, via_ctor, atol=1e-12)
+
+    def test_n_components_none_keeps_all_features(self):
+        """``n_components=None`` is the default — keep every component."""
+        rng = np.random.default_rng(1)
+        X = rng.standard_normal((30, 8))
+
+        transform = PCATransformConfig().build().fit(X)
+        assert transform.params.n_components == 8
+
+    def test_config_round_trips(self):
+        cfg = PCATransformConfig(n_components=10)
+        rebuilt = PCATransformConfig.from_spec(cfg.to_spec())
+        assert rebuilt == cfg
+
+    def test_config_round_trips_with_none(self):
+        cfg = PCATransformConfig(n_components=None)
+        rebuilt = PCATransformConfig.from_spec(cfg.to_spec())
+        assert rebuilt.n_components is None
+
+    def test_config_is_registered(self):
+        """The registry name is the ``type`` discriminator in the spec."""
+        assert PCATransformConfig().to_spec().get("type") == "transform.pca"
+
+    def test_config_rejects_non_integer_n_components(self):
+        with pytest.raises(ValidationError):
+            PCATransformConfig(n_components=3.5)  # type: ignore[arg-type]
+
+
+# --------------------------- AnnData adapter ------------------------------ #
+
+
+class TestPCATransformAnnData:
+    """Tests for the ``*_adata`` adapters on :class:`BaseTransform`."""
+
+    @pytest.fixture
+    def adata(self) -> AnnData:
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((50, 20))
+        ad = AnnData(X.copy())
+        ad.layers["counts"] = X.copy()
+        return ad
+
+    def test_fit_adata_reads_x(self, adata: AnnData):
+        transform = PCATransformConfig(n_components=5).build()
+        transform.fit_adata(adata)
+
+        assert transform.is_fitted
+        assert transform.params.n_features == adata.n_vars
+
+    def test_fit_adata_reads_layer(self, adata: AnnData):
+        transform = PCATransformConfig(n_components=5).build()
+        transform.fit_adata(adata, layer="counts")
+
+        # Should match a fit on the raw layer values.
+        expected = PCATransform(n_components=5).fit(adata.layers["counts"])
+        np.testing.assert_allclose(transform.params.mean, expected.params.mean)
+
+    def test_transform_adata_writes_to_out_obsm(self, adata: AnnData):
+        transform = PCATransformConfig(n_components=5).build_and_fit(adata)
+        original_X = adata.X.copy()
+
+        transform.transform_adata(adata, out_obsm="X_pca", inplace=True)
+
+        assert "X_pca" in adata.obsm
+        assert adata.obsm["X_pca"].shape == (adata.n_obs, 5)
+        # Source X untouched — the output went to obsm.
+        np.testing.assert_array_equal(adata.X, original_X)
+
+    def test_transform_adata_layer_to_obsm(self, adata: AnnData):
+        transform = PCATransformConfig(n_components=5).build_and_fit(adata, layer="counts")
+        transform.transform_adata(adata, layer="counts", out_obsm="X_pca", inplace=True)
+
+        assert adata.obsm["X_pca"].shape == (adata.n_obs, 5)
+        np.testing.assert_array_equal(adata.layers["counts"], adata.X)
+
+    def test_transform_adata_inplace_false_returns_copy(self, adata: AnnData):
+        original_X = adata.X.copy()
+        transform = PCATransformConfig(n_components=5).build_and_fit(adata)
+
+        out = transform.transform_adata(adata, out_obsm="X_pca", inplace=False)
+
+        assert out is not adata
+        assert "X_pca" in out.obsm
+        assert "X_pca" not in adata.obsm
+        np.testing.assert_array_equal(adata.X, original_X)
+
+    def test_build_and_fit_returns_fitted_transform(self, adata: AnnData):
+        transform = PCATransformConfig(n_components=5).build_and_fit(adata)
+
+        assert isinstance(transform, PCATransform)
+        assert transform.is_fitted
+        assert transform.params.n_components == 5
+
+    def test_fit_transform_adata_matches_two_step(self, adata: AnnData):
+        """``fit_transform_adata`` == ``fit_adata`` + ``transform_adata``."""
+        stepwise = PCATransformConfig(n_components=5).build()
+        stepwise.fit_adata(adata)
+        stepwise.transform_adata(adata, out_obsm="stepwise", inplace=True)
+
+        one_shot = PCATransformConfig(n_components=5).build()
+        one_shot.fit_transform_adata(adata, out_obsm="one_shot", inplace=True)
+
+        np.testing.assert_allclose(adata.obsm["stepwise"], adata.obsm["one_shot"], atol=1e-10)
+
+
+# --------------------------- parameter access ----------------------------- #
 
 
 class TestParameterAccess:
@@ -177,8 +297,3 @@ class TestParameterAccess:
         assert pca.params.explained_variance is not None
         assert pca.params.n_components == 5
         assert pca.params.n_features == 20
-
-
-if __name__ == "__main__":
-    # Run tests with pytest
-    pytest.main([__file__, "-v"])

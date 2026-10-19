@@ -12,7 +12,7 @@ from sckitflow.core._data_utils import (
     prepare_latent_inference,
 )
 from sckitflow.core._types import PredictionData, StepData
-from sckitflow.core.methods._base import AbstractFlowMethod, AbstractFlowMethodConfig, InferenceMethodConfig
+from sckitflow.core.methods._base import AbstractFlowMethod, FlowMethodConfig, InferenceMethodConfig
 from sckitflow.core.methods.inference._utils import aggregate_predictions
 from sckitflow.core.solvers import ODESolver
 from sckitflow.data._dims import DataDimensions
@@ -136,7 +136,7 @@ class ODEInference(AbstractFlowMethod):
 
 
 @component("inference_method.ode", builds=ODEInference)
-class ODEInferenceConfig(AbstractFlowMethodConfig, InferenceMethodConfig):
+class ODEInferenceConfig(FlowMethodConfig, InferenceMethodConfig):
     """ODE inference over a trained velocity field: the flow settings plus the solver's."""
 
     solver_kwargs: dict[str, Any] = {}

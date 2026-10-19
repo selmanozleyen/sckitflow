@@ -1,12 +1,13 @@
 """Saving and loading a run as its spec plus weights.
 
-A run is a :class:`RunConfig`, the data schema, the methods and the three seeds, plus the learned
+A run is a :class:`RunConfig`, the data schema, the methods and the two seeds, plus the learned
 parameters, saved in the Hugging Face Hub layout of :mod:`scfit.pretrained`: ``config.json`` holds
 ``RunConfig.to_spec()`` and ``module/model.safetensors`` the module's ``state_dict``. Nothing is pickled.
 Share a saved run with ``huggingface_hub.HfApi().upload_folder(repo_id=..., folder_path=path)`` and load it
 back by its repo id. A run reads back under the package versions that saved it.
 
-The run's seeds live on the spec and nowhere else, one per consumer of randomness.
+The run's seeds live on the spec and nowhere else, one per consumer of randomness. The split is not
+part of a run: it is an experiment's decision, written to the data's ``split_by`` column beforehand.
 With a ``module`` config the spec is the whole model; without one the module is supplied on load:
 
 .. code-block:: python
@@ -31,7 +32,6 @@ from scfit.registry import Component, component
 from sckitflow.core.methods._base import InferenceMethodConfig, TrainingMethodConfig
 from sckitflow.core.nn._config import ModuleConfig
 from sckitflow.data._config import FlowDataModuleConfig
-from sckitflow.data.splitters._base import SplitterConfig
 from sckitflow.trainer._optim import OptimizerConfig
 from sckitflow.trainer._plan import TrainingPlan
 
@@ -92,12 +92,8 @@ class RunConfig(Component):
     data: FlowDataModuleConfig
     training: TrainingMethodConfig
     inference: InferenceMethodConfig | None = None
-    splitter: SplitterConfig | None = None
-    """Derives the split. ``None`` reads it from ``data.split_by`` instead."""
     loader_seed: int = 0
     """Seeds the loaders' sampling schedule."""
-    splitter_seed: int = 0
-    """Seeds the split, so retraining with another ``loader_seed`` keeps it."""
     method_seed: int = 0
     """Seeds every time, noise and coupling draw of training, validation and prediction."""
     module: ModuleConfig | None = None
@@ -117,10 +113,7 @@ class RunConfig(Component):
         :param module: Overrides ``self.module``; required when it is ``None``.
         :param optimizer: Overrides ``self.optimizer``.
         """
-        splitter = (
-            self.splitter.build(rng=np.random.default_rng(self.splitter_seed)) if self.splitter is not None else None
-        )
-        datamodule = self.data.build(adata, rng=np.random.default_rng(self.loader_seed), splitter=splitter)
+        datamodule = self.data.build(adata, rng=np.random.default_rng(self.loader_seed))
         dims = datamodule.data_dims
         if module is None:
             if self.module is None:

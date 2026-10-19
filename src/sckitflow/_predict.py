@@ -213,7 +213,6 @@ def predict_adata(
     require_target_state: bool = True,
     control_values_dict: dict[str, str] | None = None,
     matched_keys: Mapping[tuple, tuple] | None = None,
-    control_adata: AnnData | None = None,
     predict_kwargs: dict[str, Any] | None = None,
     seed: int = 0,
 ) -> AnnData | tuple[AnnData, PredictionData]:
@@ -223,9 +222,9 @@ def predict_adata(
     machinery, and our eval loader cannot shard, so multi-device prediction would
     silently duplicate rows. For a prediction writer or multi-device, drive
     `~sckitflow.trainer.TrainingPlan.predict_step` through a `lightning.Trainer`
-    instead.
+    instead, passing ``dataloaders=datamodule.dm.get_eval_loader(adata, ...)``.
 
-    :param datamodule: Supplies the schema and the per-group eval loader.
+    :param datamodule: Supplies the schema and the streamed dtype.
     :param inference_method: The method whose ``predict`` is called per group.
     :param adata: The input adata carrying the metadata to predict over.
     :param return_raw: If ``True``, also return the concatenated `PredictionData`.
@@ -233,18 +232,18 @@ def predict_adata(
     :param require_target_state: Whether ``adata`` must carry a target state representation.
     :param control_values_dict: Mapping from each condition level to its control value.
     :param matched_keys: ``{source group key: target group key}`` pairs for fixed matching.
-    :param control_adata: Optional separate control (source) pool.
     :param predict_kwargs: Forwarded to the inference method's ``predict``.
     :param seed: Each group's noise comes from generators derived from it and the group's position.
     """
-    loader = datamodule.set_predict_data(
+    loader = datamodule.dm.get_eval_loader(
         adata,
+        to=None,
+        dtype=datamodule.dtype,
         max_per_group=max_per_group,
         require_target_state=require_target_state,
         control_values_dict=control_values_dict,
         matched_keys=matched_keys,
-        control_adata=control_adata,
-    ).predict_dataloader()
+    )
     predict_kwargs = {} if predict_kwargs is None else predict_kwargs
 
     was_training = inference_method.module.training

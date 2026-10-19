@@ -10,7 +10,6 @@ from sckitflow.data.containers._coupling import CouplingData
 from sckitflow.data.containers._distribution import DistributionData
 from sckitflow.data.containers._mixed_type import MixedTypeData
 from sckitflow.data.containers._state import StateData
-from sckitflow.data.splitters import CombinationSplitterConfig
 
 
 def _make_manager(**overrides) -> DataManager:
@@ -22,10 +21,9 @@ def _make_manager(**overrides) -> DataManager:
         "groups_reps": {"cell_line": "cell_line"},
     }
     defaults.update(overrides)
-    splitter = defaults.pop("splitter", None)
     if (pairs := defaults.pop("matched_keys", None)) is not None:
         defaults["matched_pairs"] = tuple(pairs.items())
-    return DataManager(DataManagerConfig(**defaults), splitter=splitter)
+    return DataManager(DataManagerConfig(**defaults))
 
 
 def _make_manager_with_continuous(**overrides) -> DataManager:
@@ -213,37 +211,12 @@ class TestGetDataloaders:
 
 
 class TestSplitOwnership:
-    """The split is declared on the schema -- by a splitter or a column -- and checked, never assumed."""
-
-    def test_splitter_and_split_by_together_are_rejected(self):
-        with pytest.raises(ValueError, match="not both"):
-            _make_manager(
-                split_by="split",
-                splitter=CombinationSplitterConfig(
-                    group_keys=["cell_line", "drug"], always_train_keys=["cell_line"]
-                ).build(rng=np.random.default_rng(0)),
-            )
-
-    def test_a_splitter_derives_the_split_without_touching_the_caller(self, adata_small: AnnData):
-        """The schema owns the split, so no preprocessing step has to have written the column first."""
-        dm = _make_manager(
-            control_values_dict={"drug": "control"},
-            splitter=CombinationSplitterConfig(
-                group_keys=["cell_line", "drug"],
-                always_train_keys=["cell_line"],
-                control_key="drug",
-                test_fraction=0.5,
-            ).build(rng=np.random.default_rng(0)),
-        )
-        loaders = dm.get_dataloaders(adata_small, batch_size=8)
-
-        assert set(loaders) == {"train", "test"}
-        assert "split" not in adata_small.obs.columns  # derived on a shallow copy, not the caller's object
+    """The split is a declared column, checked, never assumed."""
 
     def test_an_undeclared_split_column_is_refused(self, adata_small: AnnData):
         """Silently training on held-out cells is the one outcome the previous `split_by="split"` default hid."""
         ad = _with_split(adata_small)
-        with pytest.raises(ValueError, match="declares neither"):
+        with pytest.raises(ValueError, match="declares no"):
             _make_manager().get_dataloaders(ad, batch_size=8)
 
     def test_no_split_declared_and_none_present_trains_on_everything(self, adata_small: AnnData):
@@ -263,23 +236,13 @@ def _buffer(series: pd.Series) -> np.ndarray:
 class TestStreamingLeavesTheCallersDataAlone:
     """The invariant behind `with_derived_obs`: streaming derives obs columns without copying or mutating.
 
-    Each case exercises one derived column -- the split label, the ``matched_keys`` pair id, the implicit
-    all-cells group -- since each is a separate place sckitflow could have written to the caller's object.
+    Each case exercises one derived column -- the ``matched_keys`` pair id, the implicit all-cells group -- since each is a separate place sckitflow could have written to the caller's object.
     Nothing at runtime enforces this (``X`` and ``obsm`` are the caller's own arrays, and on a pandas
     without copy-on-write so are the obs columns), so it is pinned here instead.
     """
 
     def _managers(self):
         return {
-            "splitter": _make_manager(
-                control_values_dict={"drug": "control"},
-                splitter=CombinationSplitterConfig(
-                    group_keys=["cell_line", "drug"],
-                    always_train_keys=["cell_line"],
-                    control_key="drug",
-                    test_fraction=0.5,
-                ).build(rng=np.random.default_rng(0)),
-            ),
             "matched_keys": _make_manager(matched_keys={("HeLa", "aspirin"): ("HeLa", "ibuprofen")}),
             "unconditional": DataManager(),  # no group columns -> the implicit all-cells group
         }
@@ -293,7 +256,7 @@ class TestStreamingLeavesTheCallersDataAlone:
         for col in adata.obs.columns:
             assert np.shares_memory(_buffer(adata.obs[col]), _buffer(streamed.obs[col])), f"obs[{col!r}] was copied"
 
-    @pytest.mark.parametrize("case", ["splitter", "matched_keys", "unconditional"])
+    @pytest.mark.parametrize("case", ["matched_keys", "unconditional"])
     def test_training_derives_obs_without_copying_or_mutating(self, adata_small: AnnData, case):
         adata_small.obsm["X_repr"] = np.zeros((adata_small.n_obs, 3), dtype=np.float32)
         before = list(adata_small.obs.columns)
@@ -314,24 +277,6 @@ class TestStreamingLeavesTheCallersDataAlone:
         next(iter(el))
         self._assert_shares_everything(el._adata, adata_small)
         assert list(adata_small.obs.columns) == before
-
-
-class TestControlPool:
-    """A separate control pool is streamed as the source whether or not the schema declares pairing."""
-
-    def test_a_paired_schema_streams_the_pool(self, adata_small: AnnData):
-        dm = _make_manager(control_values_dict={"drug": "control"})
-        step_data, _ = next(iter(dm.get_eval_loader(adata_small, control_adata=adata_small)))
-        assert step_data["source_state"] is not None
-
-    def test_an_unpaired_schema_streams_the_pool_too(self, adata_small: AnnData):
-        """Pairing follows the data: a pool given at call time is a source, not something to discard."""
-        step_data, _ = next(iter(_make_manager().get_eval_loader(adata_small, control_adata=adata_small)))
-        assert step_data["source_state"] is not None
-
-    def test_training_loaders_stream_the_pool_without_a_declared_pairing(self, adata_small: AnnData):
-        loaders = _make_manager().get_dataloaders(adata_small, control_adata=adata_small, batch_size=8)
-        assert next(iter(loaders["train"]))["source_state"] is not None
 
 
 class TestGetEvalLoader:

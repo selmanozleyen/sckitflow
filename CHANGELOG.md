@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning][].
 ### Changed
 
 - `save_run` / `load_run` are replaced by `Run.save_pretrained` / `Run.from_pretrained`, in the Hugging Face Hub layout of `scfit.pretrained` (`config.json` plus `module/model.safetensors`); `from_pretrained` also takes a Hub repo id. A `Run` now carries its `spec`. Specs carry no `version`. Runs and checkpoints saved before this no longer load: a run reads back under the package versions that saved it
+- `FlowDataModule` holds its `adata` for its whole life: `attach`, `set_predict_data`, `predict_dataloader` and its `control_adata` are removed. `load_from_checkpoint(path, adata)` builds it with the data, and `predict_adata` builds its eval loader per call.
+- The split is no longer part of a run: `RunConfig.splitter` / `splitter_seed` and `DataManager(splitter=...)` are removed. Write the split column beforehand (a `sckitflow.data.splitters` splitter does) and declare it with `split_by`.
+- `control_adata` is removed everywhere (`DataManager.get_dataloaders` / `get_eval_loader`, the loaders, `predict_adata`). Controls are drawn from the streamed data by the schema, and the loader holds just them in memory.
 
 ### Added
 

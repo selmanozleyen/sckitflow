@@ -5,8 +5,8 @@ expressed as scfit **weights** over scfit's own leaf factorization (weight 0 == 
 materializes only the selected observations). No Python-side masking or copying of subsets.
 
 * the **primary** stream is the target/perturbed population -- controls get weight 0;
-* the **control** link is the source population -- a separate ``control_adata`` (fast to load, and the
-  cross-dataset case), or, when none is given, the *same* adata weighted so only controls are nonzero;
+* the **control** link is the source population -- the *same* adata weighted so only controls are nonzero,
+  held in memory by scfit;
 * **continuous** covariates ride as *aligned reps* (per-obs, straight from ``obsm``);
 * **categorical** condition/group encodings are computed per group at batch time (cached), keyed off the
   group the batch belongs to, then tiled to the batch.
@@ -418,11 +418,10 @@ class _StepDataBridge:
 
     def _control_link(
         self,
-        control_adata: AnnData | None,
         control_weights: dict[tuple, float] | None,
         *,
         in_memory: bool = False,
-    ) -> tuple[AnnData | None, Stream | None]:
+    ) -> Stream | None:
         # Under fixed matching the pair column *is* the match: one id shared by a target group and the source
         # group it flows from, which is the only thing scfit's value-equality matching can key on. Otherwise a
         # target is matched to whatever shares its group columns.
@@ -430,17 +429,8 @@ class _StepDataBridge:
         # The control stream carries the pair column so `match_on` can reach it; without one it groups on the
         # full group columns (what its weights' keys are).
         group_by = [*self._group_cols, *self._pair_cols]
-        if control_adata is not None:
-            return control_adata, Stream(
-                _CONTROL,
-                # A separate pool groups on just what it is matched by, plus the pair column when fixed.
-                group_by=group_by if self._pair_cols else list(match_cols or self._group_cols),
-                reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
-                match_on=list(match_cols),
-                in_memory=in_memory,
-            )
         if control_weights:
-            return None, Stream(
+            return Stream(
                 _PRIMARY,  # same source as the primary; weights pick out the controls
                 group_by=group_by,
                 reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
@@ -448,7 +438,7 @@ class _StepDataBridge:
                 match_on=list(match_cols),
                 in_memory=in_memory,
             )
-        return None, None
+        return None
 
     @property
     def group_cols(self) -> tuple[str, ...]:
@@ -504,12 +494,8 @@ class Loader(_StepDataBridge):
         tuples are ``(split, *group_cols)`` when ``split_by`` is set, ``group_cols`` otherwise.
     :type primary_weights: class: `dict | None`
 
-    :param control_adata: A separate matched control (source) pool -- faster to load and the
-        cross-dataset case. Takes precedence over ``control_weights``.
-    :type control_adata: class: `AnnData | None`
-
-    :param control_weights: scfit ``{group tuple: weight}`` selecting controls out of ``adata`` itself,
-        used only when ``control_adata`` is ``None``. ``None`` (and no ``control_adata``) => unpaired.
+    :param control_weights: scfit ``{group tuple: weight}`` selecting controls out of ``adata`` itself.
+        ``None`` => unpaired.
     :type control_weights: class: `dict | None`
 
     :param pair_key: An ``.obs`` column whose value a target group shares with the source group it flows
@@ -547,7 +533,6 @@ class Loader(_StepDataBridge):
         response_covs: Collection[str] = (),
         split_by: str | None = None,
         primary_weights: dict[tuple, float] | None = None,
-        control_adata: AnnData | None = None,
         control_weights: dict[tuple, float] | None = None,
         pair_key: str | None = None,
         to: str | None = None,
@@ -605,11 +590,9 @@ class Loader(_StepDataBridge):
 
         # Control link -- `in_memory` materializes just the selected control observations, a small pool re-drawn
         # every batch. The control stream never groups on the split: controls are shared across splits.
-        control_source, control_stream = self._control_link(control_adata, control_weights, in_memory=True)
+        control_stream = self._control_link(control_weights, in_memory=True)
         if control_stream is not None:
             links[_CONTROL] = control_stream
-            if control_source is not None:
-                sources[_CONTROL] = control_source
 
         # Make the scfit loader finite (one epoch by default) so a plain pass terminates and is
         # re-iterable; the caller (e.g. the trainer) sets the training length via `set_n_iters`.
@@ -705,7 +688,6 @@ class EvalLoader(_StepDataBridge):
         sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         primary_weights: dict[tuple, float] | None = None,
-        control_adata: AnnData | None = None,
         control_weights: dict[tuple, float] | None = None,
         pair_key: str | None = None,
         require_target_state: bool = True,
@@ -747,11 +729,9 @@ class EvalLoader(_StepDataBridge):
         links: dict[str, Stream] = {}
 
         # Control link (source), matched on the group columns -- controls always carry a state to flow from.
-        control_source, control_stream = self._control_link(control_adata, control_weights)
+        control_stream = self._control_link(control_weights)
         if control_stream is not None:
             links[_CONTROL] = control_stream
-            if control_source is not None:
-                sources[_CONTROL] = control_source
 
         self._loader = ScfitEvalLoader(
             sources, primary=primary, links=links, to=to, max_per_group=max_per_group, subsample=subsample, seed=seed

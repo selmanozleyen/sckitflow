@@ -87,6 +87,13 @@ the config is the single source of truth:
 - **Avoid `**kwargs` in a signature**, since they swallow misspelled keys. Name the parameters, or type them
   as `**kwargs: Unpack[SomeTypedDict]`. Untyped `**kwargs` is for forwarding to code you don't control.
 
+### Explicit conditions
+
+- Test what you mean: `x is None`, `len(x) == 0`, `x == 0`. Don't rely on truthiness (`if x:`, `x or default`),
+  which lumps `None`, empty containers, `0` and `False` together and is ambiguous for tensors and arrays.
+- Write `1 if s is None else s`, not `s or 1`.
+- TODO: apply this repo-wide; new code follows it already.
+
 [pre-commit]: https://pre-commit.com/
 [pre-commit.ci]: https://pre-commit.ci/
 [ruff-editors]: https://docs.astral.sh/ruff/integrations/

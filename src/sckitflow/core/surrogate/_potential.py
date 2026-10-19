@@ -51,7 +51,7 @@ def _pair_leaf(
     source = step_data.get("source_state")
     S = None if source is None else source.shape[0]
     T = None
-    if extra:
+    if len(extra) > 0:
         counts = {k: v.shape[0] for k, v in extra.items()}
         if len(set(counts.values())) > 1:
             raise ValueError(f"Condition covariates disagree on their rows within a leaf: {counts}.")
@@ -68,7 +68,8 @@ def _pair_leaf(
             groups = {k: v.to(device).expand(n, *v.shape[1:]) for k, v in groups.items()}
         return {**kept, "target_condition_data": conds, "target_group_data": groups}, conds
 
-    s, t = S or 1, T or 1
+    s = 1 if S is None else S
+    t = 1 if T is None else T
     src_idx = torch.arange(s, device=device).repeat_interleave(t)
     tgt_idx = torch.arange(t, device=device).repeat(s)
     n_pairs = s * t

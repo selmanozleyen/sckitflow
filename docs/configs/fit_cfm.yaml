@@ -74,7 +74,7 @@ noise_sampler:
 #   *_label           string labels written into the split column
 # -----------------------------------------------------------------------------
 splitter:
-  split_key: "split_key"
+  split_key: "split"
   group_keys: ["batch"]
   always_train_keys: ["control"]
   control_key: "condition"
@@ -93,22 +93,23 @@ splitter:
 #   conditions_covariates  per-condition extra covariate columns
 #   control_values_dict    {obs_col: value} pairs identifying control cells
 #   matched_pairs          pair source/target samples (true) or not (false)
-#   split_by               obs columns for group-aware splits
+#   split_by               obs column for group-aware splits — must match
+#                          `splitter.split_key`
 #   condition_state_key    obs column naming the cell-state condition
 #   target_categorical_covs_dict  categorical covariates on the target side
 #   target_continuous_covs        continuous covariates on the target side
 #   groups / groups_reps          extra grouping metadata
-#   groups_encoding               "onehot" | "ordinal" (string passed through)
+#   groups_encoding               "onehot" | "ordinal"
 #   rep_lin / source_rep_quad / target_rep_quad / use_linear
 #                                 linear-vs-quadratic representation flags
 # -----------------------------------------------------------------------------
 datamanager:
   sample_rep: "X_pca"
-  conditions: {}
+  conditions: ["condition"]
   conditions_reps: {}
   conditions_covariates: []
-  control_values_dict: {}
-  matched_pairs: []
+  control_values_dict: {"condition": "control"}
+  matched_pairs: false
   split_by: "${splitter.split_key}"
   condition_state_key: null
   target_categorical_covs_dict: {}
@@ -116,17 +117,13 @@ datamanager:
   groups: []
   groups_reps: {}
   groups_encoding: "onehot"
-  rep_lin: false
-  source_rep_quad: false
-  target_rep_quad: false
+  rep_lin: null
+  source_rep_quad: null
+  target_rep_quad: null
   use_linear: true
 
 # -----------------------------------------------------------------------------
 # DataModule (`FlowDataModuleConfig`)
-#
-# `dtype` is passed through as a string per the sckitflow contract.
-# `loader_kwargs` is forwarded to the underlying torch DataLoader.
-# `n_train_steps` drives the training-loader iteration policy.
 # -----------------------------------------------------------------------------
 datamodule:
   train_split: "train"
@@ -149,35 +146,39 @@ datamodule:
 #   pca        → PCATransformConfig(n_components=...)
 #   zscore     → ZScoreTransformConfig(epsilon=...)
 #   whitening  → WhiteningTransformConfig(method=..., epsilon=...)
-#
-# All four keys are read unconditionally by `get_transform_cfg`, so keep them
-# present — OmegaConf struct mode raises `ConfigAttributeError` on a missing
-# key. Keys not consumed by the selected `name` are simply ignored.
 # -----------------------------------------------------------------------------
 transform:
   name: "identity"
-  # PCA: number of components to keep. `null` → keep all `n_features`.
   n_components: null
-  # Z-score / whitening: regularizer added to std / singular values.
   epsilon: 1.0e-8
-  # Whitening: one of "zca" | "pca" | "cholesky".
   method: "zca"
 
 # -----------------------------------------------------------------------------
 # Velocity field network (`MLPVelocityConfig`)
 #
-# Field names below must match `sckitflow.core.nn.MLP.__init__`:
-#   hidden_dims, activation_cls, final_activation_cls,
-#   use_batchnorm (+ eps / momentum / affine / track_running_stats),
-#   use_layernorm (+ eps / elementwise_affine / bias),
-#   dropout_p, dropout_inplace,
-#   activation_cls_kwargs, final_activation_cls_kwargs,
-#   bias
+# Field names match `sckitflow.core.nn.MLPVelocityConfig`:
+#   encode_state, encode_time, time_features_id, num_time_features, max_period,
+#   state_encoder_output_dim, time_encoder_output_dim,
+#   state_encoder_mlp_kwargs, time_encoder_mlp_kwargs, vf_decoder_mlp_kwargs,
+#   conditioning_id, conditioning_kwargs, condition_encoder_input_layers,
+#   condition_encoder_output_dim, condition_encoder_pooling_*,
+#   condition_encoder_covariates_not_pooled,
+#   condition_encoder_output_layers_kwargs,
+#   source_encoder_mlp_kwargs, source_encoder_output_dim
 #
-# NOTE: activation_cls is typed `type[torch.nn.Module] | None` on the MLP.
-# If passing the string "silu" here raises `'str' object is not callable`
-# after the field renames, sckitflow does NOT resolve string→class in
-# `init_module_from_dict`; you'll need a class reference instead.
+# Source encoder rule
+# -------------------
+# `source_encoder_*` is **off by default**. Only quadratic couplings
+# (``gromov-wasserstein`` / ``fused``) in a paired schema need the VF to
+# encode the source state. Linear OT couplings (``exact`` / ``sinkhorn`` /
+# ``partial`` / ``unbalanced``) couple samples for the interpolation path
+# but the VF itself does not need to see the source. Unpaired schemas have
+# no control pool → no source tensor at all.
+#
+# To enable for a quadratic-coupled run, override in the shell:
+#   module.source_encoder_output_dim=32 \
+#   module.source_encoder_mlp_kwargs.hidden_dims=[32] \
+#   module.source_encoder_mlp_kwargs.activation_cls=silu
 # -----------------------------------------------------------------------------
 module:
   encode_state: true
@@ -217,16 +218,11 @@ module:
   condition_encoder_output_layers_kwargs:
     hidden_dims: [128]
     activation_cls: "silu"
-  source_encoder_mlp_kwargs:
-    hidden_dims: [256, 256]
-    activation_cls: "silu"
-    dropout_p: 0.0
-  source_encoder_output_dim: 128
+  source_encoder_mlp_kwargs: null
+  source_encoder_output_dim: null
 
 # -----------------------------------------------------------------------------
 # Training method (`CFMTrainingConfig`)
-#
-# generate_from_noise — start from a noise sample rather than a data sample
 # -----------------------------------------------------------------------------
 training:
   generate_from_noise: true
@@ -234,23 +230,11 @@ training:
 # -----------------------------------------------------------------------------
 # Coupling (`get_coupling_cfg`)
 #
-# Wraps the base training method in a `MatchedTrainingConfig` that pairs
-# source/target samples before regression.
-#
 # `method` must be one of:
 #   independent | exact | sinkhorn | partial | unbalanced
 #               | gromov-wasserstein | fused
 #
-# Which keys are consumed depends on `method`. Keep ALL keys below so the
-# method is switchable from the YAML alone:
-#
-#   exact              → scale_cost, num_iter_max
-#   sinkhorn           → scale_cost, num_iter_max, reg, stop_thr
-#   partial            → scale_cost, num_iter_max, reg, stop_thr, m
-#   unbalanced         → scale_cost, num_iter_max, reg, stop_thr, reg_m
-#   gromov-wasserstein → scale_cost, epsilon, max_iter, tol
-#   fused              → scale_cost, epsilon, max_iter, tol, alpha
-#   independent        → (none of the above)
+# Keep ALL keys below so the method is switchable from the YAML alone.
 # -----------------------------------------------------------------------------
 coupling:
   method: "independent"
@@ -267,12 +251,6 @@ coupling:
 
 # -----------------------------------------------------------------------------
 # Inference method (`ODEInferenceConfig`)
-#
-# Used for the validation step during training. Note that the solver's
-# computational cost strongly affects wall time, especially with high-frequency
-# validation — prefer a cheap sampler here (low `n_steps`, e.g. Euler).
-# More accurate predictors can be built at inference time without affecting
-# training-time wall time.
 # -----------------------------------------------------------------------------
 inference:
   generate_from_noise: true
@@ -286,10 +264,6 @@ inference:
 
 # -----------------------------------------------------------------------------
 # Optimizer (`OptimizerConfig`)
-#
-# `name` + `kwargs` are passed to `torch.optim.<Name>(params, **kwargs)`.
-# `lr_scheduler` is `None` in the script; no scheduler section is needed here.
-# Add a `lr_scheduler:` block alongside this if the script later builds one.
 # -----------------------------------------------------------------------------
 optimizer:
   name: "Adam"
@@ -300,10 +274,6 @@ optimizer:
 
 # -----------------------------------------------------------------------------
 # Validation metrics (`EnergyDistance` / `MaximumMeanDiscrepancy`)
-#
-# edist.dist_sync_on_step  torchmetrics DDP sync behaviour
-# mmd.gammas               RBF kernel bandwidth list
-# mmd.dist_sync_on_step    same for MMD
 # -----------------------------------------------------------------------------
 metrics:
   edist:
@@ -314,25 +284,13 @@ metrics:
 
 # -----------------------------------------------------------------------------
 # Training plan (`TrainingPlan`)
-#
-# lr_scheduler_interval  "step" | "epoch"; ignored while lr_scheduler is None
-# seed                   seeds TrainingPlan's per-step generators
-#
-# `val_names` is NOT here: the script passes `datamodule.val_names` directly
-# to `TrainingPlan(...)`. If you need to override the val-set names, do it in
-# the datamodule config, not here.
 # -----------------------------------------------------------------------------
 training_plan:
   lr_scheduler_interval: "step"
+  seed: 42
 
 # -----------------------------------------------------------------------------
 # Loggers (`WandbLogger` / `CSVLogger`)
-#
-# wandb: `anonymous` + `version` are forwarded to WandbLogger (supported in
-#        lightning 2.6.6). `init_kwargs` is expanded with **, so any extra
-#        `wandb.init` kwarg can go there without touching the script.
-#        `offline: true` avoids any network calls.
-# csv:   `flush_logs_every_n_steps` supported in 2.6.6.
 # -----------------------------------------------------------------------------
 loggers:
   wandb:
@@ -356,18 +314,6 @@ loggers:
 
 # -----------------------------------------------------------------------------
 # Callbacks
-#
-# early_stopping:     patience on `val/edist` (mode=min → lower is better)
-# grad_accumulation:  the SOLE controller of gradient accumulation in this
-#                     pipeline — the `Trainer(...)` call does NOT pass
-#                     `accumulate_grad_batches`. Step schedule: 1 → 2 → 4.
-# lr_monitor:         logs the learning rate each step
-# model_checkpoint:   keeps top-3 `val/edist` plus `last.ckpt`
-#
-# Monitor keys must match the format emitted by `TrainingPlan`: the actual
-# logged key is `f"{val_name}/{metric_name}"`, e.g. `"val/edist"` — NOT
-# `"val_edist"`. If the datamodule's `val_names[0]` changes from `"val"`,
-# update `monitor` here accordingly (or compute it in the script).
 # -----------------------------------------------------------------------------
 callbacks:
   early_stopping:
@@ -384,8 +330,8 @@ callbacks:
   grad_accumulation:
     scheduling:
       0: 1
-      50: 2
-      80: 4
+      5000: 2
+      8000: 4
   lr_monitor:
     logging_interval: "step"
     log_momentum: false
@@ -406,24 +352,14 @@ callbacks:
 
 # -----------------------------------------------------------------------------
 # Trainer (lightning 2.6.6)
-#
-# Every key is read as `config.trainer.<key>` and passed straight to
-# `lightning.pytorch.Trainer(...)`. Values match the installed version's
-# defaults where the script passes them explicitly.
-#
-# NOTE: `accumulate_grad_batches` is intentionally NOT present — the
-# `GradientAccumulationScheduler` callback above is the single owner of
-# gradient accumulation. Adding it here would be dead config.
 # -----------------------------------------------------------------------------
 trainer:
-  # Hardware / distribution
   accelerator: "auto"
   strategy: "auto"
   devices: 1
   num_nodes: 1
   precision: "32-true"
 
-  # Run length
   fast_dev_run: false
   max_epochs: 100
   min_epochs: null
@@ -431,7 +367,6 @@ trainer:
   min_steps: null
   max_time: null
 
-  # Batch limits / validation cadence
   limit_train_batches: 1.0
   limit_val_batches: 1.0
   limit_test_batches: 1.0
@@ -442,7 +377,6 @@ trainer:
   num_sanity_val_steps: 2
   log_every_n_steps: 50
 
-  # Feature toggles
   enable_checkpointing: true
   enable_progress_bar: true
   enable_model_summary: true
@@ -451,55 +385,35 @@ trainer:
   enable_autolog_hparams: true
   model_registry: null
 
-  # Optimization
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
 
-  # Determinism / numeric behaviour
   deterministic: false
   benchmark: false
   detect_anomaly: false
 
-  # Distributed sampler
   use_distributed_sampler: true
   sync_batchnorm: false
 
-  # Dataloader reload
   reload_dataloaders_every_n_epochs: 0
 
-  # Profiling
   profiler: null
 
-  # Filesystem
   default_root_dir: "./logs"
 
-  # Resume: null = fresh run; a path resumes from that checkpoint
   ckpt_path: null
 
 # -----------------------------------------------------------------------------
 # Run metadata and persistence
-#
-# method_seed   seeds torch/python/numpy (via `seed_everything`) AND is written
-#               into `RunConfig`. Interpolated from `training_plan.seed` so the
-#               two uses agree.
-# splitter_seed seeds the splitter's np.random.Generator (split reproducibility)
-# loader_seed   seeds the datamodule's np.random.Generator (loader reproducibility)
-# allow_overwrite permits `save_run` to overwrite an existing run_dir
 # -----------------------------------------------------------------------------
 run:
   loader_seed: 42
   splitter_seed: 42
-  method_seed: 42
+  method_seed: ${training_plan.seed}
   allow_overwrite: false
 
 # -----------------------------------------------------------------------------
 # Saved-run directory (`save_run` + `save_transform`)
-#
-# Written by `save_run` as `specs.json` + `weights.pt`.
-# Written by `save_transform` as `transform.json` + `transform_params.npz`
-# (sidecar to the run — see the `transform` section above for why).
-# Training checkpoints go to `callbacks.model_checkpoint.dirpath` above,
-# not here.
 # -----------------------------------------------------------------------------
 save:
   run_dir: "./runs/cfm_run"

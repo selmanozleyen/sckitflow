@@ -338,7 +338,9 @@ def main(config: DictConfig) -> float:
         condition_encoder_output_layers_kwargs=resolve_omegaconf_to_dictionary(
             config.module.condition_encoder_output_layers_kwargs
         ),
-        source_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.source_encoder_mlp_kwargs),
+        source_encoder_mlp_kwargs=None
+        if config.module.source_encoder_mlp_kwargs is None
+        else resolve_omegaconf_to_dictionary(config.module.source_encoder_mlp_kwargs),
         source_encoder_output_dim=config.module.source_encoder_output_dim,
     )
     module = module_cfg.build(datamodule.data_dims)

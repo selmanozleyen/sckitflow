@@ -1,4 +1,70 @@
-"""Smoke test: run docs/scripts/fit_cfm.py against the dummy adata fixture."""
+"""Smoke test: run docs/scripts/fit_cfm.py against the dummy adata fixture.
+
+Three pair matrices, all built on the same principle: a DM override and the
+VF override it implies are **bundled together**, so they cannot drift.
+
+* ``_SCHEMA_PAIRS`` — datamanager schema (conditions, covariates, paired/
+  unpaired, groups) paired with the VF configuration it requires — including
+  one ``condition_encoder_input_layers`` entry per condition key.
+* ``_COUPLING_PAIRS`` — coupling method paired with the datamanager reps
+  it needs, plus the source encoder for quadratic couplings only.
+* ``_AXES`` — orthogonal dimensions on top of ``pair="one_cat_paired"``.
+
+Invariants the pairing tables enforce
+-------------------------------------
+
+1. **One condition_encoder_input_layers entry per condition key.**
+   ``MLPVelocityConfig.condition_encoder_input_layers`` is keyed by the
+   same names that appear in ``dims.condition_reps_dims`` /
+   ``condition_continuous_dims`` / ``groups_reps_dims``. Each entry is an
+   ``MLPConfig``-shaped spec *without* ``input_dim`` — the build method
+   supplies it from ``dims``. The test pairs provide exactly the entries
+   their DM produces, so the per-condition input-layer path is exercised
+   end-to-end. ``condition_encoder_input_layers`` defaults to ``null`` in
+   the YAML; overrides use bare ``path=value`` (not the ``~ +`` pattern)
+   because Hydra's ``~`` fails on null-valued keys.
+
+2. **Source encoder is off by default.**  ``source_encoder_output_dim`` and
+   ``source_encoder_mlp_kwargs`` are ``null``; ``_resolve_or_none`` in the
+   script preserves that through pydantic so ``MLPVelocity`` doesn't build
+   the branch. Only quadratic couplings (``gromov-wasserstein``,
+   ``fused``) turn it on via ``_enable_source_encoder``.
+
+3. **Every schema needs a real group column.**  ``groups=[]`` makes the
+   loader emit a synthetic ``_sckitflow_all_cells`` axis whose 1-tuple
+   weight keys don't match the loader's 2-tuple ``group_by``. Every pair
+   therefore defaults ``groups=["source_split"]``.
+
+4. **Coupling costs need a cell-level linear representation.**  The base
+   fixture's ``X_repr`` is group-level; the fixture therefore adds
+   ``X_coupling_lin`` with i.i.d. noise per cell, and every coupling pair
+   uses it as ``rep_lin``.
+
+Coupling → DM reps → VF mapping
+-------------------------------
+======================  ===========================  ==========================
+Coupling                DM reps                      VF source encoder
+======================  ===========================  ==========================
+``independent``         none                         OFF (either mode)
+``exact``               ``rep_lin``                  OFF (linear)
+``sinkhorn``            ``rep_lin``                  OFF (linear)
+``partial``             ``rep_lin``                  OFF (linear)
+``unbalanced``          ``rep_lin``                  OFF (linear)
+``gromov-wasserstein``  ``rep_lin`` + both quads     **ON**
+``fused``               ``rep_lin`` + both quads     **ON**
+======================  ===========================  ==========================
+
+Notes
+-----
+* ``rep_lin=X_coupling_lin`` (not ``X_repr`` / ``X_src``): the fixture's
+  ``X_coupling_lin`` is generated fresh with i.i.d. noise per cell, so the
+  coupling cost matrix is non-degenerate regardless of how the base
+  fixture shapes its other reps.
+* ``gromov-wasserstein`` passes ``rep_lin`` (not ``use_linear=false``):
+  ``ot_quadratic_coupling`` unconditionally calls
+  ``to_torch_tensor(source_lin)`` and fails on ``None``.
+* Runs cap at ``fast_dev_run``; deselect with ``-m "not slow"`` locally.
+"""
 
 import importlib.util
 import math
@@ -6,10 +72,10 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import numpy as np
 import pytest
 from anndata import AnnData
 from hydra import compose, initialize_config_dir
-from omegaconf import DictConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "docs" / "scripts" / "fit_cfm.py"
@@ -37,6 +103,9 @@ fit_cfm = _load_fit_cfm()
 fit_cfm_main = fit_cfm.main
 
 
+# --------------------------- override rendering ----------------------------
+
+
 def _render(value) -> str:
     if value is None:
         return "null"
@@ -56,6 +125,12 @@ def _render(value) -> str:
 
 
 def overrides(section: str, **fields) -> list[str]:
+    """Hydra overrides for **non-null** dict/list fields.
+
+    Uses ``~path`` then ``+path=value`` because Hydra merges dicts; the
+    ``~`` half resets the pre-populated value first. ``~path`` fails on
+    ``null``-valued keys — for those, use ``set_field``.
+    """
     out: list[str] = []
     for key, value in fields.items():
         path = f"{section}.{key}"
@@ -67,7 +142,20 @@ def overrides(section: str, **fields) -> list[str]:
     return out
 
 
-# --------------------------- section variants ------------------------------
+def set_field(section: str, key: str, value) -> str:
+    """Bare ``path=value`` override.
+
+    Works for ``null``-valued keys — ``overrides()`` fails at compose time
+    on those (``~path`` raises "Could not delete from config"). Use this
+    for any field whose YAML default is ``null``:
+    ``condition_encoder_input_layers``, ``source_encoder_*``,
+    ``conditioning_kwargs``, etc.
+    """
+    return f"{section}.{key}={_render(value)}"
+
+
+# --------------------------- fixed splitter axis ---------------------------
+
 
 _OVERRIDES_SPLITTER: list[tuple[str, list[str]]] = [
     (
@@ -83,31 +171,53 @@ _OVERRIDES_SPLITTER: list[tuple[str, list[str]]] = [
 ]
 
 
-_DM_SHARED = {
-    "conditions": {"drug": ["drugA"]},
-    "conditions_reps": {"drug": "drug"},
-    "conditions_covariates": [],
-    "control_values_dict": {"drug": "control"},
-    "groups": ["source_split"],
-    "groups_encoding": {"source_split": "label"},
-    "groups_reps": {},
-    "matched_pairs": [],
-    "rep_lin": None,
-    "source_rep_quad": None,
-    "target_rep_quad": None,
-    "use_linear": True,
-    "target_categorical_covs_dict": {},
-    "target_continuous_covs": [],
-}
-
-_OVERRIDES_DM: list[tuple[str, list[str]]] = [
-    ("base", overrides("datamanager", sample_rep="X_repr", **_DM_SHARED)),
-    ("sample_rep_x_src", overrides("datamanager", sample_rep="X_src", **_DM_SHARED)),
-]
+# --------------------------- datamanager builder ---------------------------
 
 
-_OVERRIDES_MODULE: list[tuple[str, list[str]]] = [
-    ("base", []),
+def _dm_shared(**overrides_kwargs) -> dict:
+    """Base datamanager kwargs; each pair extends specific fields."""
+    base = {
+        "conditions": {},
+        "conditions_reps": {},
+        "conditions_covariates": [],
+        "control_values_dict": {},
+        "groups": [],
+        "groups_encoding": {},
+        "groups_reps": {},
+        "matched_pairs": [],
+        "rep_lin": None,
+        "source_rep_quad": None,
+        "target_rep_quad": None,
+        "use_linear": True,
+        "target_categorical_covs_dict": {},
+        "target_continuous_covs": [],
+    }
+    base.update(overrides_kwargs)
+    return base
+
+
+# --------------------------- VF per-condition layers -----------------------
+
+
+def _per_condition_layers(keys: list[str]) -> str:
+    """``module.condition_encoder_input_layers=...`` override.
+
+    One entry per key (a condition name, a covariate name, or a group name
+    from the DM config). The spec is ``MLPConfig``-shaped and doesn't
+    include ``input_dim`` — ``MLPVelocityConfig.build`` fills it from
+    ``dims``.
+
+    Uses bare ``path=value`` (no ``~``): the YAML default is ``null`` and
+    Hydra's ``~`` fails on null-valued keys.
+    """
+    spec = {key: {"output_dim": 2} for key in keys}
+    return set_field("module", "condition_encoder_input_layers", spec)
+
+
+# --------------------------- override lookups ------------------------------
+
+
+_OVERRIDES_MODULE_SCALE: list[tuple[str, list[str]]] = [
     (
         "minimal",
         overrides(
@@ -115,16 +225,26 @@ _OVERRIDES_MODULE: list[tuple[str, list[str]]] = [
             num_time_features=8,
             state_encoder_output_dim=16,
             time_encoder_output_dim=16,
-            source_encoder_output_dim=16,
+            # source_encoder_* left off — off by YAML default
             condition_encoder_output_dim=8,
             condition_encoder_pooling_proj_dim=8,
+        ),
+    ),
+    (
+        "medium",
+        overrides(
+            "module",
+            num_time_features=16,
+            state_encoder_output_dim=32,
+            time_encoder_output_dim=32,
+            condition_encoder_output_dim=16,
+            condition_encoder_pooling_proj_dim=16,
         ),
     ),
 ]
 
 
 _OVERRIDES_INFERENCE: list[tuple[str, list[str]]] = [
-    ("base", []),
     (
         "fast",
         overrides(
@@ -132,6 +252,17 @@ _OVERRIDES_INFERENCE: list[tuple[str, list[str]]] = [
             n_samples=16,
             n_steps=5,
             solver_kwargs={"method": "euler"},
+        ),
+    ),
+    # ``midpoint`` is fixed-step; adaptive solvers hard-code float64
+    # for tolerances and raise on MPS.
+    (
+        "mid",
+        overrides(
+            "inference",
+            n_samples=32,
+            n_steps=10,
+            solver_kwargs={"method": "midpoint"},
         ),
     ),
 ]
@@ -157,21 +288,287 @@ def _lookup(variants, name):
     raise KeyError(f"unknown variant {name!r}; available: {[n for n, _ in variants]}")
 
 
+# --------------------------- schema pairs ----------------------------------
+_SCHEMA_PAIRS: dict[str, tuple[list[str], list[str]]] = {
+    # ---- Group-only, unpaired -----------------------------------------
+    # No conditions → no condition_encoder_input_layers entries.
+    "groups_only": (
+        overrides("datamanager", sample_rep="X_repr", **_dm_shared()),
+        [],
+    ),
+    # ---- Continuous-only condition, unpaired --------------------------
+    # One covariate key (X_tgt) → one input-layer entry.
+    "one_cont_unpaired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(conditions_covariates=["X_tgt"]),
+        ),
+        [
+            _per_condition_layers(["X_tgt"]),
+            *overrides(
+                "module",
+                condition_encoder_covariates_not_pooled=["X_tgt"],
+            ),
+        ],
+    ),
+    # ---- 1 categorical, unpaired --------------------------------------
+    "one_cat_unpaired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"]},
+                conditions_reps={"drug": "drug"},
+            ),
+        ),
+        [_per_condition_layers(["drug"])],
+    ),
+    # ---- 1 categorical, paired ----------------------------------------
+    "one_cat_paired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"]},
+                conditions_reps={"drug": "drug"},
+                control_values_dict={"drug": "control"},
+            ),
+        ),
+        [_per_condition_layers(["drug"])],
+    ),
+    "one_cat_paired_with_groups": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"]},
+                conditions_reps={"drug": "drug"},
+                control_values_dict={"drug": "control"},
+                groups=["source_split"],
+                groups_encoding={"source_split": "label"},
+            ),
+        ),
+        # groups_reps={} means no group dims → no group input-layer entry.
+        [_per_condition_layers(["drug", "source_split"])],
+    ),
+    # ---- 2 categorical, unpaired / paired -----------------------------
+    "two_cat_unpaired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"], "ko": ["koA"]},
+                conditions_reps={"drug": "drug", "ko": "ko"},
+            ),
+        ),
+        [_per_condition_layers(["drug", "ko"])],
+    ),
+    "two_cat_paired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"], "ko": ["koA"]},
+                conditions_reps={"drug": "drug", "ko": "ko"},
+                control_values_dict={"drug": "control", "ko": "control"},
+            ),
+        ),
+        [_per_condition_layers(["drug", "ko"])],
+    ),
+    "two_cat_paired_with_groups": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"], "ko": ["koA"]},
+                conditions_reps={"drug": "drug", "ko": "ko"},
+                control_values_dict={"drug": "control", "ko": "control"},
+                groups=["source_split"],
+                groups_encoding={"source_split": "label"},
+            ),
+        ),
+        [_per_condition_layers(["drug", "ko", "source_split"])],
+    ),
+    # ---- 1 categorical + 1 continuous, paired -------------------------
+    "one_cat_one_cont_paired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"]},
+                conditions_reps={"drug": "drug"},
+                conditions_covariates=["X_tgt"],
+                control_values_dict={"drug": "control"},
+            ),
+        ),
+        [
+            _per_condition_layers(["drug", "X_tgt"]),
+            *overrides(
+                "module",
+                condition_encoder_covariates_not_pooled=["X_tgt"],
+            ),
+        ],
+    ),
+    # ---- 2 categorical + 1 continuous, paired -------------------------
+    "two_cat_one_cont_paired": (
+        overrides(
+            "datamanager",
+            sample_rep="X_repr",
+            **_dm_shared(
+                conditions={"drug": ["drugA"], "ko": ["koA"]},
+                conditions_reps={"drug": "drug", "ko": "ko"},
+                conditions_covariates=["X_tgt"],
+                control_values_dict={"drug": "control", "ko": "control"},
+            ),
+        ),
+        [
+            _per_condition_layers(["drug", "ko", "X_tgt"]),
+            *overrides(
+                "module",
+                condition_encoder_covariates_not_pooled=["X_tgt"],
+            ),
+        ],
+    ),
+    # ---- alternative state representation -----------------------------
+    "sample_rep_x_src": (
+        overrides(
+            "datamanager",
+            sample_rep="X_src",
+            **_dm_shared(
+                conditions={"drug": ["drugA"]},
+                conditions_reps={"drug": "drug"},
+                control_values_dict={"drug": "control"},
+            ),
+        ),
+        [_per_condition_layers(["drug"])],
+    ),
+}
+
+
+# --------------------------- coupling pairs --------------------------------
+
+
+def _enable_source_encoder() -> list[str]:
+    """Enable the source encoder for quadratic couplings.
+
+    Bare ``key=value`` overrides (no ``~``) because the YAML sets
+    ``source_encoder_*`` to ``null``; Hydra's ``~`` (delete) fails on
+    null-valued keys.
+    """
+    return [
+        "module.source_encoder_output_dim=16",
+        "module.source_encoder_mlp_kwargs={hidden_dims: [16], activation_cls: silu}",
+    ]
+
+
+def _coupling_pair(
+    method: str,
+    *,
+    base_schema: str = "one_cat_paired",
+    dm_extra: dict | None = None,
+    vf_overrides: list[str] | None = None,
+) -> list[str]:
+    """Compose overrides for a coupling + base schema pair.
+
+    Order matters for Hydra's last-override-wins:
+        splitter → dm → fast dmod → module_scale → schema overrides
+        → coupling.method → dm_extra → vf_overrides
+    """
+    dm_over, module_schema_over = _SCHEMA_PAIRS[base_schema]
+    out = (
+        _OVERRIDES_SPLITTER[0][1]
+        + dm_over
+        + _lookup(_OVERRIDES_DMOD, "fast")
+        + _lookup(_OVERRIDES_MODULE_SCALE, "minimal")
+        + module_schema_over
+        + [f"coupling.method={method}"]
+    )
+    if dm_extra:
+        out += overrides("datamanager", **dm_extra)
+    if vf_overrides:
+        out += vf_overrides
+    return out
+
+
+_COUPLING_PAIRS: dict[str, list[str]] = {
+    # ---- Independent — no reps needed, source encoder off -------------
+    "independent_unpaired": _coupling_pair(
+        "independent",
+        base_schema="one_cat_unpaired",
+    ),
+    "independent_paired": _coupling_pair(
+        "independent",
+        base_schema="one_cat_paired",
+    ),
+    # ---- Linear OT couplings — rep_lin, source encoder OFF -----------
+    "exact": _coupling_pair(
+        "exact",
+        base_schema="one_cat_paired",
+        dm_extra={"rep_lin": "X_coupling_lin"},
+    ),
+    "sinkhorn": _coupling_pair(
+        "sinkhorn",
+        base_schema="one_cat_paired",
+        dm_extra={"rep_lin": "X_coupling_lin"},
+    ),
+    "partial": _coupling_pair(
+        "partial",
+        base_schema="one_cat_paired",
+        dm_extra={"rep_lin": "X_coupling_lin"},
+    ),
+    "unbalanced": _coupling_pair(
+        "unbalanced",
+        base_schema="one_cat_paired",
+        dm_extra={"rep_lin": "X_coupling_lin"},
+    ),
+    # ---- Gromov-Wasserstein — linear + quads, source encoder ON ------
+    "gromov_wasserstein": _coupling_pair(
+        "gromov-wasserstein",
+        base_schema="one_cat_paired",
+        dm_extra={
+            "rep_lin": "X_coupling_lin",
+            "source_rep_quad": "X_src_quad",
+            "target_rep_quad": "X_tgt_quad",
+        },
+        vf_overrides=_enable_source_encoder(),
+    ),
+    # ---- Fused — linear + quads blended by `alpha` -------------------
+    "fused": _coupling_pair(
+        "fused",
+        base_schema="one_cat_paired",
+        dm_extra={
+            "rep_lin": "X_coupling_lin",
+            "source_rep_quad": "X_src_quad",
+            "target_rep_quad": "X_tgt_quad",
+        },
+        vf_overrides=_enable_source_encoder(),
+    ),
+}
+
+
+# --------------------------- orthogonal axes --------------------------------
+
+
 def combine(
     *,
+    pair: str = "one_cat_paired",
     splitter: str = "base",
-    dm: str = "base",
     dmod: str = "fast",
-    module: str = "minimal",
+    module_scale: str = "minimal",
     inference: str = "fast",
     **extras: list[str],
 ) -> list[str]:
-    out: list[str] = []
-    out += _lookup(_OVERRIDES_SPLITTER, splitter)
-    out += _lookup(_OVERRIDES_DM, dm)
-    out += _lookup(_OVERRIDES_DMOD, dmod)
-    out += _lookup(_OVERRIDES_MODULE, module)
-    out += _lookup(_OVERRIDES_INFERENCE, inference)
+    """Assemble Hydra overrides for a single (DM, VF) schema pair."""
+    dm_over, module_schema_over = _SCHEMA_PAIRS[pair]
+    out = (
+        _lookup(_OVERRIDES_SPLITTER, splitter)
+        + dm_over
+        + _lookup(_OVERRIDES_DMOD, dmod)
+        + _lookup(_OVERRIDES_MODULE_SCALE, module_scale)
+        + module_schema_over
+        + _lookup(_OVERRIDES_INFERENCE, inference)
+    )
     for extra in extras.values():
         out += extra
     return out
@@ -206,46 +603,22 @@ def _compose(*, target_adata_path, tmp_path, overrides, config_name="fit_cfm"):
 def target_adata_path(tmp_path: Path, adata: AnnData) -> Path:
     adata.obs_names = adata.obs_names.astype(str)
     adata.var_names = adata.var_names.astype(str)
+    rng = np.random.default_rng(42)
+    # Cell-level linear rep for the coupling cost matrix.
+    adata.obsm["X_coupling_lin"] = rng.standard_normal((adata.n_obs, 8)).astype("float32")
+    # Quad reps for quadratic couplings.
+    adata.obsm["X_src_quad"] = rng.standard_normal((adata.n_obs, 4)).astype("float32")
+    adata.obsm["X_tgt_quad"] = rng.standard_normal((adata.n_obs, 6)).astype("float32")
     path = tmp_path / "target.h5ad"
     adata.write_h5ad(path)
     return path
 
 
-@pytest.fixture
-def compose_fit_cfm(tmp_path: Path, target_adata_path: Path) -> DictConfig:
-    return _compose(
-        target_adata_path=target_adata_path,
-        tmp_path=tmp_path,
-        overrides=combine(),
-    )
+# --------------------------- shared assertions -----------------------------
 
 
-# --------------------------- tests -----------------------------------------
-
-
-def test_script_loads() -> None:
-    assert hasattr(fit_cfm, "main")
-    assert callable(fit_cfm_main.__wrapped__)
-    assert fit_cfm.logger.name == "fit_cfm_script"
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize(
-    "overrides_list",
-    [
-        pytest.param(combine(), id="base"),
-        pytest.param(combine(dm="sample_rep_x_src"), id="dm-sample-rep-x-src"),
-        pytest.param(
-            combine(coupling=["coupling.method=sinkhorn"]),
-            id="coupling-sinkhorn",
-        ),
-        pytest.param(
-            combine(probability_path=["probability_path.name=schrodinger_bridge"]),
-            id="schrodinger-bridge",
-        ),
-    ],
-)
-def test_fit_cfm_runs(
+def _run_and_assert(
+    *,
     overrides_list: list[str],
     tmp_path: Path,
     target_adata_path: Path,
@@ -268,3 +641,117 @@ def test_fit_cfm_runs(
     run_dir = tmp_path / "run"
     assert (run_dir / "specs.json").is_file()
     assert (run_dir / "weights.pt").is_file()
+
+
+# --------------------------- tests -----------------------------------------
+
+
+class TestScriptLoads:
+    def test_script_loads(self) -> None:
+        assert hasattr(fit_cfm, "main")
+        assert callable(fit_cfm_main.__wrapped__)
+        assert fit_cfm.logger.name == "fit_cfm_script"
+
+
+class TestFitCFMRunsSchemaPairs:
+    """Schema matrix: conditions × covariates × paired/unpaired, all with groups.
+
+    Every pair supplies ``condition_encoder_input_layers`` with one entry per
+    condition key its DM produces, so the per-condition input-layer path is
+    exercised in ``MLPVelocityConfig.build`` and ``MLPVelocity`` end-to-end.
+    """
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("pair", list(_SCHEMA_PAIRS), ids=list(_SCHEMA_PAIRS))
+    def test_schema_pair(
+        self,
+        pair: str,
+        tmp_path: Path,
+        target_adata_path: Path,
+    ) -> None:
+        _run_and_assert(
+            overrides_list=combine(pair=pair),
+            tmp_path=tmp_path,
+            target_adata_path=target_adata_path,
+        )
+
+
+class TestFitCFMRunsCouplings:
+    """Coupling matrix: each method paired with the DM reps + VF it needs."""
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("coupling_name", list(_COUPLING_PAIRS), ids=list(_COUPLING_PAIRS))
+    def test_coupling(
+        self,
+        coupling_name: str,
+        tmp_path: Path,
+        target_adata_path: Path,
+    ) -> None:
+        _run_and_assert(
+            overrides_list=_COUPLING_PAIRS[coupling_name],
+            tmp_path=tmp_path,
+            target_adata_path=target_adata_path,
+        )
+
+
+class TestFitCFMRunsAxes:
+    """Orthogonal axes on top of ``pair="one_cat_paired"``."""
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "overrides_list",
+        [
+            pytest.param(
+                combine(pair="one_cat_paired", module_scale="minimal"),
+                id="scale-minimal",
+            ),
+            pytest.param(
+                combine(pair="one_cat_paired", module_scale="medium"),
+                id="scale-medium",
+            ),
+            pytest.param(
+                combine(pair="one_cat_paired", inference="fast"),
+                id="inference-fast",
+            ),
+            pytest.param(
+                combine(pair="one_cat_paired", inference="mid"),
+                id="inference-mid",
+            ),
+            pytest.param(
+                combine(
+                    pair="one_cat_paired",
+                    datamanager=[
+                        "datamanager.use_linear=false",
+                        "datamanager.source_rep_quad=X_src_quad",
+                        "datamanager.target_rep_quad=X_tgt_quad",
+                    ],
+                ),
+                id="use-linear-false",
+            ),
+            pytest.param(
+                combine(
+                    pair="one_cat_paired",
+                    probability_path=["probability_path.name=linear_dirac"],
+                ),
+                id="linear-dirac",
+            ),
+            pytest.param(
+                combine(
+                    pair="one_cat_paired",
+                    probability_path=["probability_path.name=schrodinger_bridge"],
+                ),
+                id="schrodinger-bridge",
+            ),
+        ],
+    )
+    def test_axis(
+        self,
+        overrides_list: list[str],
+        tmp_path: Path,
+        target_adata_path: Path,
+    ) -> None:
+        _run_and_assert(
+            overrides_list=overrides_list,
+            tmp_path=tmp_path,
+            target_adata_path=target_adata_path,
+        )

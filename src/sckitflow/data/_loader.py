@@ -28,9 +28,9 @@ import pandas as pd
 from anndata import AnnData
 from scfit.data import EvalLoader as ScfitEvalLoader
 from scfit.data import Loader as ScfitLoader
-from scfit.data import SamplerParams, Stream
+from scfit.data import SamplerParams, Stream, obs_columns
 
-from sckitflow.data._utils import with_derived_obs
+from sckitflow.data._utils import AnnDataLike, as_adatas, row_of, with_derived_obs
 
 
 @runtime_checkable
@@ -184,7 +184,7 @@ class _StepDataBridge:
 
     def __init__(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
@@ -213,10 +213,11 @@ class _StepDataBridge:
         # group it flows from -- appended to `group_by` so scfit can `match_on` it, and stripped back off
         # before a leaf is used as a group identity (see `_strip`).
         self._pair_cols: tuple[str, ...] = (pair_key,) if pair_key is not None else ()
+        adatas = as_adatas(adata)
         if not self._group_cols:
             # Unconditional schema (no groups, no conditions): scfit must still group on something, so stream
-            # one implicit group holding every observation, on a shallow copy of the caller's AnnData.
-            adata = with_derived_obs(adata, {_ALL_CELLS: pd.Categorical(np.full(adata.n_obs, "all"))})
+            # one implicit group holding every observation, on shallow copies of the caller's AnnData.
+            adatas = [with_derived_obs(a, {_ALL_CELLS: pd.Categorical(np.full(a.n_obs, "all"))}) for a in adatas]
             self._group_cols = (_ALL_CELLS,)
         # Continuous covariates ride as aligned reps: {rep loc -> StepData dict key}.
         self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.continuous_conditions}
@@ -228,12 +229,11 @@ class _StepDataBridge:
 
         # One O(N) drop_duplicates gives the group combos + a representative row per group (no per-obs logic).
         # The categorical -> encoding is deferred to batch time (cached), keyed by the group's id.
-        sub = adata.obs.loc[:, list(self._group_cols)].reset_index(drop=True)
-        uniq = sub.drop_duplicates()
+        uniq = obs_columns(adatas, self._group_cols).drop_duplicates()  # stacked rows, positional index
         self._leaves: list[tuple] = list(map(tuple, uniq.to_numpy()))
         self._leaf_to_gid: dict[tuple, int] = {leaf: i for i, leaf in enumerate(self._leaves)}
-        self._rep_idx: list[int] = uniq.index.to_numpy().tolist()
-        self._adata = adata
+        self._rep_idx: list[int] = uniq.index.to_numpy().tolist()  # stacked positions
+        self._adatas = adatas
         self._encode_cache: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     @cached_property
@@ -247,7 +247,7 @@ class _StepDataBridge:
         ``groupby(sort=False)`` and the ``drop_duplicates`` behind :attr:`_leaves` both order by first
         appearance, so the counts zip straight onto the leaves (``strict`` makes a divergence loud).
         """
-        sub = self._adata.obs.loc[:, list(self._group_cols)]
+        sub = obs_columns(self._adatas, self._group_cols)
         sizes = sub.groupby(list(self._group_cols), observed=True, sort=False).size()
         return {leaf: int(n) for leaf, n in zip(self._leaves, sizes.to_numpy(), strict=True)}
 
@@ -304,7 +304,7 @@ class _StepDataBridge:
         Cached already conformed to ``dtype``/``device``, so the per-batch tile is a device-local expand.
         """
         if gid not in self._encode_cache:
-            entry, cond_keys, group_keys = self._encode_group(self._adata[int(self._rep_idx[gid])])
+            entry, cond_keys, group_keys = self._encode_group(row_of(self._adatas, int(self._rep_idx[gid])))
             conformed = {k: self._conform(_as_tensor(v), streamed=False) for k, v in entry.items()}
             self._encode_cache[gid] = (
                 {k: conformed[k] for k in cond_keys},
@@ -460,7 +460,7 @@ class Loader(_StepDataBridge):
     """Yields ``StepData`` batches for one population, backed by :class:`scfit.data.Loader`.
 
     :param adata: The annotated data object to stream (the whole thing -- selection is by weights).
-    :type adata: class: `AnnData`
+    :type adata: class: `AnnData | Sequence[AnnData]`
 
     :param condition_schema: The condition schema: its columns join ``group_by``, its continuous covariates
         stream as reps, and it encodes each group's categorical conditions.
@@ -524,7 +524,7 @@ class Loader(_StepDataBridge):
 
     def __init__(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
@@ -583,9 +583,9 @@ class Loader(_StepDataBridge):
             reps=primary_reps,
             weights=primary_weights,
         )
-        # `self._adata`, not the argument: an unconditional schema streams a shallow copy carrying the
+        # `self._adatas`, not the argument: an unconditional schema streams shallow copies carrying the
         # implicit all-observations group column (see `with_derived_obs`).
-        sources: dict[str, AnnData] = {_PRIMARY: self._adata}
+        sources: dict[str, list[AnnData]] = {_PRIMARY: self._adatas}
         links: dict[str, Stream] = {}
 
         # Control link -- `in_memory` materializes just the selected control observations, a small pool re-drawn
@@ -681,7 +681,7 @@ class EvalLoader(_StepDataBridge):
 
     def __init__(
         self,
-        adata: AnnData,
+        adata: AnnDataLike,
         *,
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
@@ -725,7 +725,7 @@ class EvalLoader(_StepDataBridge):
             reps=primary_reps,
             weights=primary_weights,
         )
-        sources: dict[str, AnnData] = {_PRIMARY: self._adata}
+        sources: dict[str, list[AnnData]] = {_PRIMARY: self._adatas}
         links: dict[str, Stream] = {}
 
         # Control link (source), matched on the group columns -- controls always carry a state to flow from.

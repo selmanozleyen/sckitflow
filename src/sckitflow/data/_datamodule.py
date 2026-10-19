@@ -9,10 +9,10 @@ import lightning.pytorch as pl
 import numpy as np
 import pandas as pd
 import torch
-from anndata import AnnData
 
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerConfig
+from sckitflow.data._utils import AnnDataLike
 from sckitflow.data.splitters import SplitterConfig
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ class FlowDataModule(pl.LightningDataModule):
 
     :param dm: The fitted data manager describing the data schema.
     :param data_dims: The dimensionalities derived from the registration data.
-    :param adata: The annotated data object to stream. Fixed for the module's
+    :param adata: The annotated data object to stream, or several read as one dataset. Fixed for the module's
         life: streaming other data means building another module, which is cheap.
         ``None`` only for a schema-only module, e.g. to read its dimensionalities.
     :param train_split: The split value whose loader drives optimization.
@@ -64,7 +64,7 @@ class FlowDataModule(pl.LightningDataModule):
         self,
         dm: DataManager,
         data_dims: DataDimensions,
-        adata: AnnData | None = None,
+        adata: AnnDataLike | None = None,
         *,
         train_split: str = "train",
         n_train_steps: int = 100_000,
@@ -86,7 +86,7 @@ class FlowDataModule(pl.LightningDataModule):
     @classmethod
     def from_adata(
         cls,
-        adata: AnnData,
+        adata: AnnDataLike,
         dm: DataManager,
         *,
         train_split: str = "train",
@@ -172,7 +172,7 @@ class FlowDataModule(pl.LightningDataModule):
         self._loaders = None
 
     @classmethod
-    def load_from_checkpoint(cls, filepath: str, adata: AnnData | None = None) -> FlowDataModule:
+    def load_from_checkpoint(cls, filepath: str, adata: AnnDataLike | None = None) -> FlowDataModule:
         """Rebuilds the data module from the schema stored in a Lightning checkpoint.
 
         Overrides Lightning's, which rebuilds from saved hyperparameters: the schema here is the state itself.
@@ -207,7 +207,7 @@ class FlowDataModule(pl.LightningDataModule):
         return self._dtype
 
     @property
-    def adata(self) -> AnnData | None:
+    def adata(self) -> AnnDataLike | None:
         """The streamed annotated data object, if any."""
         return self._adata
 

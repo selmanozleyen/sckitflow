@@ -18,7 +18,7 @@ from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.trainer import TrainingPlan
 
 DRUGS = ("control", "a", "b", "c")
-GROUPS = {"groups": ("cell_line",), "groups_encoding": {"cell_line": OneHotEncoderConfig()}}
+GROUPS = {"groups": ("cell_line",), "groups_encoding": {"cell_line": OneHotEncoderConfig(categories=("c1", "c2"))}}
 
 
 def _adata() -> AnnData:

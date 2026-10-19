@@ -12,6 +12,8 @@ import torch
 from anndata import AnnData
 from scipy import sparse
 
+from sckitflow.data._dims import DataDimensions
+from sckitflow.data._group_encoders import LabelEncoderConfig, OneHotEncoderConfig
 from sckitflow.data._loader import Loader
 from sckitflow.data._manager import DataManager, DataManagerConfig
 from sckitflow.data.schemas import CouplingDataSchema
@@ -553,3 +555,24 @@ class TestEvalLoaderNeverStreamsCoupling:
             assert sd["target_coupling_quad"] is None
             assert sd["source_coupling_lin"] is None
             assert sd["source_coupling_quad"] is None
+
+
+class TestGroupEncoding:
+    """Encoded groups (no `uns` rep) stream with the config's vocabulary, whatever cell a group is encoded from."""
+
+    @pytest.mark.parametrize(
+        "encoder", [LabelEncoderConfig(classes=("s0", "s1")), OneHotEncoderConfig(categories=("s0", "s1"))]
+    )
+    def test_each_group_gets_its_own_code(self, loader_adata, encoder):
+        dm = _dm(groups_reps=None, groups_encoding={"source_split": encoder})
+        codes = {
+            split: next(iter(_loader(loader_adata, dm, primary_weights={(split, "d0"): 1.0})))["target_group_data"][
+                "source_split"
+            ][0]
+            for split in ("s0", "s1")
+        }
+        assert not torch.equal(codes["s0"], codes["s1"])
+        dims = DataDimensions.init_from_distribution_data(
+            dm.get_distribution_data(loader_adata), loader_adata.var_names
+        )
+        assert codes["s0"].shape[-1] == dims.groups_reps_dims["source_split"]

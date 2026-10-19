@@ -2,25 +2,25 @@
 
 Each encoder is a frozen model of plain scalars -- no callables -- so it pickles trivially, compares by
 value, AND exports a portable ``{type, version, **fields}`` spec via ``.to_spec()`` (round-tripped with
-``GroupEncoderConfig.from_spec``). ``build`` fits and returns a transformer exposing ``transform`` (and, for the
-functional encoders, ``inverse_transform``). This replaces the string encoder ids + raw
-``groups_encoding_transform_fn`` callables, which could not be serialized inside a ``DataManager``.
+``GroupEncoderConfig.from_spec``). ``build`` returns a transformer exposing ``transform`` (and, for the
+functional encoders, ``inverse_transform``).
 
 ``GroupEncoderConfig`` is the family base; each config subclasses it, is registered with
 ``@component(type_id, builds=X)`` and named ``XConfig`` after the transformer ``X`` it builds. Add a new encoder the same way.
 
-The stateful encoders (:class:`LabelEncoderConfig`, :class:`OneHotEncoderConfig`) accept an optional **pinned vocabulary** so a
-serialized config rebuilds the *exact* same mapping instead of re-deriving one from whatever data ``build``
-happens to see. Unknown categories always **raise** -- never silently ignored -- so train/predict skew
-fails loudly rather than producing quietly wrong codes.
+The categorical encoders (:class:`LabelEncoderConfig`, :class:`OneHotEncoderConfig`) take their vocabulary
+explicitly, so a config maps the same way whatever data it is built on: one cell per group in the loaders,
+or new data after a reload. Unknown categories always **raise**.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated
 
 import numpy as np
+from pydantic import AfterValidator, Field
 from scfit.registry import Component, component
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder, OneHotEncoder
 
@@ -29,7 +29,6 @@ from sckitflow._types import TargetCovariatesEncoderCls
 __all__ = [
     "GroupEncoderConfig",
     "GroupEncoderContext",
-    "GroupEncoderId",
     "LabelEncoderConfig",
     "OneHotEncoderConfig",
     "IdentityTransformer",
@@ -38,11 +37,20 @@ __all__ = [
     "Log1pTransformerConfig",
     "AffineTransformer",
     "AffineTransformerConfig",
-    "as_group_encoder",
 ]
 
-#: String ids accepted at the public interfaces as a shorthand for the parameter-free encoders.
-GroupEncoderId = Literal["label", "one-hot"]
+
+def _unique(vocabulary: tuple[Category, ...]) -> tuple[Category, ...]:
+    if len(set(vocabulary)) != len(vocabulary):
+        duplicates = sorted(str(v) for v, n in Counter(vocabulary).items() if n > 1)
+        raise ValueError(f"The vocabulary lists {duplicates} more than once.")
+    return vocabulary
+
+
+#: A category as it appears in ``.obs``: a string, or an integer or boolean id.
+Category = str | int | bool
+#: A non-empty category list, each category once.
+Vocabulary = Annotated[tuple[Category, ...], Field(min_length=1), AfterValidator(_unique)]
 
 
 @dataclass(frozen=True)
@@ -63,37 +71,35 @@ class GroupEncoderConfig(Component):
 class LabelEncoderConfig(GroupEncoderConfig):
     """Integer-codes a categorical column.
 
-    :param classes: Pinned vocabulary. ``None`` derives it from the data at fit time (order is
-        ``np.unique``, i.e. sorted). When set, the mapping is exactly ``classes`` in the given order, so a
-        round-tripped config reproduces identical codes. ``transform`` raises on any value not listed.
-    :type classes: class: `tuple[str, ...] | None`
+    :param classes: The vocabulary. Each value's code is its position here, so ``("b", "a")`` codes ``b`` as 0.
+        ``transform`` raises on any value not listed.
+    :type classes: class: `tuple[str, ...]`
     """
 
-    classes: tuple[str, ...] | None = None
+    classes: Vocabulary
 
     def build(self, context: GroupEncoderContext) -> LabelEncoder:
-        # Fitting on the vocabulary itself pins the mapping; unseen labels raise in transform.
-        values = np.asarray(context.data).reshape(-1) if self.classes is None else np.asarray(self.classes)
-        return LabelEncoder().fit(values)
+        encoder = LabelEncoder()
+        # Set rather than fit: fitting sorts. An object array is mapped by lookup, so the given order holds.
+        encoder.classes_ = np.asarray(self.classes, dtype=object)
+        return encoder
 
 
 @component("group_encoder.one_hot", builds=OneHotEncoder)
 class OneHotEncoderConfig(GroupEncoderConfig):
     """One-hot encodes a categorical column.
 
-    :param categories: Pinned vocabulary. ``None`` derives it from the data at fit time. When set, it fixes
-        the column order, so a round-tripped config reproduces identical columns -- do not reorder it. Fit
-        raises if the data holds a value outside it, and ``transform`` raises on unknown categories.
-    :type categories: class: `tuple[str, ...] | None`
+    :param categories: The vocabulary, in column order. Fit raises if the data holds a value outside it, and
+        ``transform`` raises on unknown categories.
+    :type categories: class: `tuple[str, ...]`
     """
 
-    categories: tuple[str, ...] | None = None
+    categories: Vocabulary
 
     def build(self, context: GroupEncoderContext) -> OneHotEncoder:
-        # handle_unknown="error" is sklearn's default; set explicitly because pinning a vocabulary makes
-        # "what happens to an unlisted category" a load-bearing decision -- it must fail loudly.
-        categories = "auto" if self.categories is None else [list(self.categories)]
-        return OneHotEncoder(categories=categories, handle_unknown="error").fit(np.asarray(context.data).reshape(-1, 1))
+        return OneHotEncoder(categories=[list(self.categories)], handle_unknown="error").fit(
+            np.asarray(context.data).reshape(-1, 1)
+        )
 
 
 class IdentityTransformer(FunctionTransformer):
@@ -156,34 +162,3 @@ class AffineTransformerConfig(GroupEncoderConfig):
 
     def build(self, context: GroupEncoderContext) -> AffineTransformer:
         return AffineTransformer(scale=self.scale, shift=self.shift).fit(context.data)
-
-
-#: The string ids, mapped to their component equivalent. Deliberately only the parameter-free encoders:
-#: the legacy ``"functional"`` id carried its transform in the separate ``groups_encoding_transform_fn``
-#: callables, so with those gone it has no meaning as a string -- pass :class:`IdentityTransformerConfig`,
-#: :class:`Log1pTransformerConfig` or :class:`AffineTransformerConfig` explicitly instead.
-_ENCODER_BY_ID: dict[str, type[GroupEncoderConfig]] = {
-    "label": LabelEncoderConfig,
-    "one-hot": OneHotEncoderConfig,
-}
-
-
-def as_group_encoder(value: GroupEncoderConfig | GroupEncoderId) -> GroupEncoderConfig:
-    """Coerces a string encoder id into a :class:`GroupEncoderConfig`, passing instances through.
-
-    Strings are a convenience accepted only at the public interfaces (``DataManager`` /
-    ``GroupsDataSchema``); everything downstream stores components. Only the parameter-free encoders have
-    string ids -- reach for the instance (``AffineTransformerConfig(scale=2.0)``, ``OneHotEncoderConfig(categories=(...))``) when you need
-    parameters or a pinned vocabulary.
-
-    :param value: A :class:`GroupEncoderConfig` instance, or one of ``"label"`` / ``"one-hot"``.
-    :type value: class: `GroupEncoderConfig | GroupEncoderId`
-    """
-    if isinstance(value, GroupEncoderConfig):
-        return value
-    try:
-        encoder_cls = _ENCODER_BY_ID[value]
-    except (KeyError, TypeError):
-        msg = f"Group encoder {value!r} not available. Pass a GroupEncoderConfig instance or one of {sorted(_ENCODER_BY_ID)}."
-        raise ValueError(msg) from None
-    return encoder_cls()

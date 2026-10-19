@@ -1,4 +1,4 @@
-"""Group encoders are portable components, with string ids accepted only at the interfaces."""
+"""Group encoders are portable components that list their categories explicitly."""
 
 import pickle
 
@@ -14,48 +14,29 @@ from sckitflow.data._group_encoders import (
     LabelEncoderConfig,
     Log1pTransformerConfig,
     OneHotEncoderConfig,
-    as_group_encoder,
 )
 from sckitflow.data._manager import DataManagerConfig
 
 ALL_ENCODERS = [
     IdentityTransformerConfig(),
-    LabelEncoderConfig(),
-    OneHotEncoderConfig(),
+    LabelEncoderConfig(classes=("a", "b")),
+    OneHotEncoderConfig(categories=("a", "b")),
     Log1pTransformerConfig(),
     AffineTransformerConfig(scale=2.0, shift=1.0),
 ]
 
 
-class TestStringIds:
-    """Strings are coerced to components at the interface; only parameter-free ids exist."""
+class TestVocabularyIsExplicit:
+    """The categorical encoders take their categories from the config, never from the data."""
 
-    @pytest.mark.parametrize(
-        ("encoder_id", "expected"), [("label", LabelEncoderConfig()), ("one-hot", OneHotEncoderConfig())]
-    )
-    def test_coerces_string_id(self, encoder_id: str, expected: GroupEncoderConfig) -> None:
-        assert as_group_encoder(encoder_id) == expected
+    @pytest.mark.parametrize("encoder", [LabelEncoderConfig, OneHotEncoderConfig])
+    def test_categories_are_required(self, encoder: type[GroupEncoderConfig]) -> None:
+        with pytest.raises(ValueError, match="Field required"):
+            encoder()
 
-    def test_passes_instances_through(self) -> None:
-        encoder = AffineTransformerConfig(scale=2.0)
-        assert as_group_encoder(encoder) is encoder
-
-    @pytest.mark.parametrize("bad", ["functional", "identity", "log1p", "affine", "nope", None, 1])
-    def test_rejects_unknown_id(self, bad: object) -> None:
-        # "functional" is gone: its transform lived in the removed groups_encoding_transform_fn callables.
-        # The parameterized encoders have no string form either -- pass the instance instead.
-        with pytest.raises(ValueError, match="not available"):
-            as_group_encoder(bad)
-
-    def test_datamanager_accepts_strings_and_stores_components(self) -> None:
-        dm = DataManagerConfig(
-            groups=("drug", "ko"), groups_encoding={"drug": "one-hot", "ko": LabelEncoderConfig()}
-        ).build()
-        assert dm.groups_data_schema.groups_encoders == {"drug": OneHotEncoderConfig(), "ko": LabelEncoderConfig()}
-
-    def test_datamanager_rejects_unknown_id(self) -> None:
+    def test_datamanager_rejects_string_ids(self) -> None:
         with pytest.raises(ValueError, match="groups_encoding"):
-            DataManagerConfig(groups=("drug",), groups_encoding={"drug": "functional"})
+            DataManagerConfig(groups=("drug",), groups_encoding={"drug": "one-hot"})
 
 
 class TestPortableSpec:
@@ -86,8 +67,8 @@ class TestPortableSpec:
             GroupEncoderConfig.from_spec(spec)
 
 
-class TestPinnedVocabulary:
-    """A pinned vocabulary makes the mapping deterministic, and unknown categories raise."""
+class TestVocabularyOrder:
+    """The vocabulary fixes the mapping in the order given, and unknown categories raise."""
 
     def test_one_hot_pins_column_order(self) -> None:
         encoder = OneHotEncoderConfig(categories=("c", "a", "b"))
@@ -95,10 +76,6 @@ class TestPinnedVocabulary:
         for data in (np.array(["a", "b"]), np.array(["b", "a", "a"])):
             built = encoder.build(GroupEncoderContext(data))
             assert list(built.categories_[0]) == ["c", "a", "b"]
-
-    def test_one_hot_unpinned_fits_from_data(self) -> None:
-        built = OneHotEncoderConfig().build(GroupEncoderContext(np.array(["b", "a"])))
-        assert list(built.categories_[0]) == ["a", "b"]
 
     def test_one_hot_raises_on_unknown_category(self) -> None:
         built = OneHotEncoderConfig(categories=("a", "b")).build(GroupEncoderContext(np.array(["a"])))
@@ -109,9 +86,10 @@ class TestPinnedVocabulary:
         with pytest.raises(ValueError, match="unknown categories"):
             OneHotEncoderConfig(categories=("a", "b")).build(GroupEncoderContext(np.array(["a", "QQ"])))
 
-    def test_label_pins_mapping(self) -> None:
-        built = LabelEncoderConfig(classes=("x", "y", "z")).build(GroupEncoderContext(np.array(["x"])))
-        assert list(built.classes_) == ["x", "y", "z"]
+    def test_label_codes_follow_the_given_order(self) -> None:
+        built = LabelEncoderConfig(classes=("z", "x", "y")).build(GroupEncoderContext(np.array(["x"])))
+        assert built.transform(np.array(["x", "y", "z"])).tolist() == [1, 2, 0]
+        assert built.inverse_transform([0, 1, 2]).tolist() == ["z", "x", "y"]
 
     def test_label_raises_on_unseen_label(self) -> None:
         built = LabelEncoderConfig(classes=("x", "y")).build(GroupEncoderContext(np.array(["x"])))
@@ -138,3 +116,24 @@ class TestSerialization:
             built = encoder.build(GroupEncoderContext(np.arange(3.0)))
             np.testing.assert_allclose(built.transform(np.arange(3.0)), np.arange(3.0) * 2.0 + 1.0)
             np.testing.assert_allclose(built.inverse_transform(built.transform(np.arange(3.0))), np.arange(3.0))
+
+
+@pytest.mark.parametrize("make", [lambda v: LabelEncoderConfig(classes=v), lambda v: OneHotEncoderConfig(categories=v)])
+def test_a_vocabulary_lists_each_category_once(make) -> None:
+    with pytest.raises(ValueError, match=r"lists \['a'\] more than once"):
+        make(("a", "b", "a"))
+
+
+@pytest.mark.parametrize("make", [lambda v: LabelEncoderConfig(classes=v), lambda v: OneHotEncoderConfig(categories=v)])
+def test_a_vocabulary_is_not_empty(make) -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        make(())
+
+
+def test_integer_categories_encode_integer_columns() -> None:
+    data = np.array([3, 1, 2])
+    label = LabelEncoderConfig(classes=(3, 1, 2)).build(GroupEncoderContext(data))
+    assert label.transform(data).tolist() == [0, 1, 2]
+    one_hot = OneHotEncoderConfig(categories=(1, 2, 3)).build(GroupEncoderContext(data))
+    assert one_hot.transform(data.reshape(-1, 1)).toarray().argmax(axis=1).tolist() == [2, 0, 1]
+    assert LabelEncoderConfig.from_spec(LabelEncoderConfig(classes=(3, 1)).to_spec()).classes == (3, 1)

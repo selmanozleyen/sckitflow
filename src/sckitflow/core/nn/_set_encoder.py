@@ -99,7 +99,7 @@ class SetEncoder(torch.nn.Module):
         pooling_kwargs: dict[str, Any] | None = None,
         pooling_proj_dim: int | None = None,
         pooling_proj_bias: bool = True,
-        covariates_not_pooled: Collection[str] | None = None,
+        continuous_covariates: Collection[str] | None = None,
         output_layers_kwargs: LayersDict | None = None,
     ) -> None:
         """Initializes the set encoder.
@@ -128,10 +128,9 @@ class SetEncoder(torch.nn.Module):
             covariates to pool, defaults to `True`.
         :type pooling_proj_bias: class: `bool`
 
-        :param covariates_not_pooled: Collection of string identifiers for the covariates not to pool,
-            defaults to `None`. Each holds one entry per observation (a set of size 1), e.g. a cell line.
-            For ordered slots such as a first and a second drug, give each slot its own condition level.
-        :type covariates_not_pooled: class: `Collection[str] | None`
+        :param continuous_covariates: Collection of string identifiers for the continuous covariates, defaults to
+            `None`. These come as `[..., D]` and join the pooled categorical covariates `[..., n, D]` unpooled.
+        :type continuous_covariates: class: `Collection[str] | None`
 
         :param output_layers_kwargs: Dictionary containing the configurations for the output layer.
             Defaults to `None`.
@@ -143,7 +142,7 @@ class SetEncoder(torch.nn.Module):
         self._pooling_mode = pooling_mode
         self._pooling_kwargs = {} if pooling_kwargs is None else pooling_kwargs
         self._pooling_proj_bias = pooling_proj_bias
-        self._covariates_not_pooled = [] if covariates_not_pooled is None else covariates_not_pooled
+        self._continuous_covariates = [] if continuous_covariates is None else continuous_covariates
         self._output_layers_kwargs = {} if output_layers_kwargs is None else output_layers_kwargs
         self._pooling_proj_dim = pooling_proj_dim if pooling_proj_dim else self._min_pooled_dims
 
@@ -185,7 +184,7 @@ class SetEncoder(torch.nn.Module):
         """Initializes the projection layers."""
         layers = {}
         for covariate_id, covariate_layers_dict in self._input_layers.items():
-            if covariate_id not in self._covariates_not_pooled:
+            if covariate_id not in self._continuous_covariates:
                 # and initialize projection
                 cov_out_dim = covariate_layers_dict["output_dim"]
                 cov_proj = torch.nn.Linear(
@@ -244,7 +243,7 @@ class SetEncoder(torch.nn.Module):
 
         # prepare dictionary to store encoded covariates
         encoded_covariates_to_pool = {}
-        encoded_covariates_not_pooled = {}
+        encoded_continuous = {}
 
         # iterating over perturbation covariates
         for covariate_id, covariate_data in condition_dict.items():
@@ -257,18 +256,9 @@ class SetEncoder(torch.nn.Module):
             cov_enc = self._condition_encoder["input_layers"][covariate_id]
             z_cov = cov_enc(covariate_data)
 
-            # update dictionaries
-            if covariate_id in self._covariates_not_pooled:
-                # categorical covariates carry a set axis `[B, n, D]`; continuous ones are `[B, D]` already
-                if z_cov.ndim == 3:
-                    if z_cov.shape[-2] != 1:
-                        msg = (
-                            f"Covariate {covariate_id!r} is not pooled, so it must hold one entry per observation; "
-                            f"found {z_cov.shape[-2]}. Pool it, or split its columns into one condition level each."
-                        )
-                        raise ValueError(msg)
-                    z_cov = z_cov.squeeze(-2)
-                encoded_covariates_not_pooled[covariate_id] = z_cov
+            # update dictionaries: categorical covariates are sets `[..., n, D]` to pool, continuous ones `[..., D]`
+            if covariate_id in self._continuous_covariates:
+                encoded_continuous[covariate_id] = z_cov
 
             else:
                 # get shared projection layer
@@ -285,18 +275,18 @@ class SetEncoder(torch.nn.Module):
         else:
             pooled_covariates = None
 
-        # not pooled covariates
-        if len(encoded_covariates_not_pooled) > 0:
-            covariates_not_pooled = torch.concatenate(tuple(encoded_covariates_not_pooled.values()), dim=-1)
+        # continuous covariates
+        if len(encoded_continuous) > 0:
+            continuous_covariates = torch.concatenate(tuple(encoded_continuous.values()), dim=-1)
         else:
-            covariates_not_pooled = None
+            continuous_covariates = None
 
         # get joint representation
         to_concat = []
         if pooled_covariates is not None:
             to_concat.append(pooled_covariates)
-        if covariates_not_pooled is not None:
-            to_concat.append(covariates_not_pooled)
+        if continuous_covariates is not None:
+            to_concat.append(continuous_covariates)
         if len(to_concat) == 0:
             msg = "No condition covariate found."
             raise ValueError(msg)
@@ -310,23 +300,23 @@ class SetEncoder(torch.nn.Module):
     ) -> int:
         """Retrieves the input dimensionality for the output decoder."""
         # define list to store dimensions
-        not_pooled_input_dims = []
+        continuous_input_dims = []
 
         # iterate over each covariate
         for cov, cov_dict in self._input_layers.items():
             # update store
-            if cov in self._covariates_not_pooled:
+            if cov in self._continuous_covariates:
                 output_dim = cov_dict["output_dim"]
-                not_pooled_input_dims.append(output_dim)
+                continuous_input_dims.append(output_dim)
 
         # get the pooled dim if pooled covariates are present
         pooled_dim = self._pooled_dim if len(self.covariates_pooled) > 0 else 0
 
         # construct decoder input dim
-        decoder_input_dim = pooled_dim + sum(not_pooled_input_dims)
+        decoder_input_dim = pooled_dim + sum(continuous_input_dims)
         return decoder_input_dim
 
     @property
     def covariates_pooled(self) -> list[str]:
-        """Returns the list of covariates that need to be pooled together."""
-        return [cov for cov in self._input_layers.keys() if cov not in self._covariates_not_pooled]
+        """Returns the list of covariates that need to be pooled together, the categorical ones."""
+        return [cov for cov in self._input_layers.keys() if cov not in self._continuous_covariates]

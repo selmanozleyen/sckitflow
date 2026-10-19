@@ -219,7 +219,7 @@ class _StepDataBridge:
             adata = with_derived_obs(adata, {_ALL_CELLS: pd.Categorical(np.full(adata.n_obs, "all"))})
             self._group_cols = (_ALL_CELLS,)
         # Continuous covariates ride as aligned reps: {rep loc -> StepData dict key}.
-        self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.conditions_covariates}
+        self._cond_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in condition_schema.continuous_conditions}
         self._resp_cont_locs: dict[str, str] = {f"obsm/{c}": c for c in response_covs}
 
         # Handle coupling terms and construct coupling locs dictionary

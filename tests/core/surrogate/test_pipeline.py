@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from sckitflow.core._types import PredictionData
-from sckitflow.core.surrogate import SurrogatePotential
+from sckitflow.core.surrogate import MeanSamplesReadoutConfig, SquaredErrorPotentialConfig, SurrogatePotential
 from sckitflow.data import DataManagerConfig, FlowDataModule
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ class FakeInferer:
             raise RuntimeError("FakeInferer: no per-sample covariate")
 
         # The aligned layout is (B, N, D); its condition axis lives at
-        # position -2 and survives ``get_response``'s collapse. Prefer a 3D
+        # position -2 and survives the readout's collapse. Prefer a 3D
         # tensor so the fake never accidentally uses the batch dim as N.
         three_d = [v for v in candidates if v.ndim == 3]
         if three_d:
@@ -88,18 +88,17 @@ class FakeInferer:
 # ---------------------------------------------------------------------------
 
 
-class MeanMSESurrogate(SurrogatePotential):
-    """Collapses every leading axis of ``raw_samples`` down to ``(N, R)``,
-    then returns a per-condition squared-error potential of shape ``(N,)``."""
-
-    def get_response(self, pred_data: PredictionData) -> torch.Tensor:
-        x = pred_data.raw_samples
-        while x.ndim > 2:
-            x = x.mean(dim=0)
-        return x
-
-    def compute_raw_potential(self, y, ystar):
-        return ((y - ystar) ** 2).sum(dim=-1)
+def mean_mse_surrogate(inferer, ystar, datamodule, adata, **kwargs):
+    """Averages the samples over every axis before the conditions', then a summed squared error."""
+    return SurrogatePotential(
+        inferer,
+        ystar,
+        datamodule,
+        adata,
+        readout=MeanSamplesReadoutConfig().build(),
+        potential=SquaredErrorPotentialConfig().build(),
+        **kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +144,7 @@ def build_potential(
 ):
     dmod = build_datamodule(adata, **dmod_kwargs)
     inferer = FakeInferer(ystar.numel(), n_samples=n_samples)
-    potential = MeanMSESurrogate(
+    potential = mean_mse_surrogate(
         inferer, ystar, dmod, adata, require_target_state=require_target_state, seed=potential_seed
     )
     return potential, dmod
@@ -576,7 +575,7 @@ class TestYstarAndMask:
         ystar = torch.zeros(n_genes)
         dmod = build_datamodule(adata, continuous_conditions=(CONT_COV_1,))
         inferer = FakeInferer(n_genes)
-        potential = MeanMSESurrogate(inferer, ystar, dmod, adata, mask=mask)
+        potential = mean_mse_surrogate(inferer, ystar, dmod, adata, mask=mask)
         out = potential(cond_dict_single)
         assert out.shape == (4,)
 
@@ -632,7 +631,7 @@ class TestRealInference:
             condition_encoder_input_layers={k: {"input_dim": d, "output_dim": 2} for k, d in layers.items()},
         )
         inferer = ODEInference(module, ODEInferenceConfig(generate_from_noise=True, n_samples=2, n_steps=2), dims=dims)
-        potential = MeanMSESurrogate(inferer, ystar, dmod, adata, require_target_state=False)
+        potential = mean_mse_surrogate(inferer, ystar, dmod, adata, require_target_state=False)
         cond = {CONT_COV_1: torch.zeros(3, 1, requires_grad=True)}
         out = potential(cond)
         out.sum().backward()

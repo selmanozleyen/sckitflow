@@ -3,8 +3,8 @@
 Test suite for ``SurrogatePotential``.
 
 Uses minimal fakes for ``SupportsInference``, ``EvalLoader`` and ``FlowDataModule``
-so nothing here touches AnnData or Lightning. Only the two abstract hooks are
-implemented, in a single ``MSESurrogate`` subclass that every test reuses.
+so nothing here touches AnnData or Lightning. The fake inferer returns the response
+itself, so the readout is the identity and the potential a mean squared error.
 """
 
 from types import SimpleNamespace
@@ -85,30 +85,27 @@ class FakeDataModule:
 # ---------------------------------------------------------------------------
 
 
-class MSESurrogate(SurrogatePotential):
-    """Squared-error potential. Smallest subclass that exercises the hooks."""
-
-    def get_response(self, pred_data):
-        return pred_data
-
-    def compute_raw_potential(self, y, ystar):
-        return ((y - ystar) ** 2).mean(dim=-1)
+def _identity(pred_data):
+    return pred_data
 
 
-class RecorderSurrogate(SurrogatePotential):
-    """Records the tensors its hooks receive, for shape/values assertions."""
+def _mse(y, ystar):
+    return ((y - ystar) ** 2).mean(dim=-1)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.received_y = None
-        self.received_ystar = None
 
-    def get_response(self, pred_data):
-        return pred_data
+def surrogate(inferer, ystar, datamodule, *, readout=_identity, potential=_mse, **kwargs):
+    return SurrogatePotential(inferer, ystar, datamodule, None, readout=readout, potential=potential, **kwargs)
 
-    def compute_raw_potential(self, y, ystar):
-        self.received_y = y.detach().clone()
-        self.received_ystar = ystar.detach().clone()
+
+class Recorder:
+    """A potential that records what it receives, for shape/values assertions."""
+
+    def __init__(self):
+        self.y = None
+        self.ystar = None
+
+    def __call__(self, y, ystar):
+        self.y, self.ystar = y.detach().clone(), ystar.detach().clone()
         return (y - ystar).sum(dim=-1)
 
 
@@ -130,9 +127,7 @@ def make_cond_dict(cond_keys=("cond_a",), n=4, dim=3, requires_grad=True, device
     return {k: torch.randn(n, dim, requires_grad=requires_grad, device=device) for k in cond_keys}
 
 
-def make_potential(
-    cond_keys=("cond_a",), n=4, dim=3, n_leaves=3, ystar_dim=3, mask=None, seed=0, device="cpu", cls=MSESurrogate
-):
+def make_potential(cond_keys=("cond_a",), n=4, dim=3, n_leaves=3, ystar_dim=3, mask=None, seed=0, device="cpu"):
     dims = make_dims(cond_keys, dim)
     step_data = make_step_data(cond_keys, n=n, dims=dict.fromkeys(cond_keys, dim), device=device)
     batches = [(step_data, f"leaf_{i}") for i in range(n_leaves)]
@@ -157,7 +152,7 @@ def make_potential(
     datamodule = FakeDataModule(dims, FakeEvalLoader(batches))
     ystar = torch.zeros(ystar_dim, device=device)
 
-    potential = cls(inferer, ystar, datamodule, None, mask=mask, seed=seed)
+    potential = surrogate(inferer, ystar, datamodule, mask=mask, seed=seed)
     if device != "cpu":
         potential = potential.to(device)
     return potential, inferer, datamodule
@@ -229,15 +224,11 @@ class TestInit:
     def test_rejects_non_1d_ystar(self):
         dims = make_dims(("cond_a",), 3)
         with pytest.raises(ValueError, match="Invalid shape for target response"):
-            MSESurrogate(
-                FakeInferer(lambda *a: None), torch.zeros(2, 3), FakeDataModule(dims, FakeEvalLoader([])), None
-            )
+            surrogate(FakeInferer(lambda *a: None), torch.zeros(2, 3), FakeDataModule(dims, FakeEvalLoader([])))
 
     def test_squeezes_1d_ystar_from_column(self):
         dims = make_dims(("cond_a",), 3)
-        p = MSESurrogate(
-            FakeInferer(lambda *a: None), torch.zeros(3, 1), FakeDataModule(dims, FakeEvalLoader([])), None
-        )
+        p = surrogate(FakeInferer(lambda *a: None), torch.zeros(3, 1), FakeDataModule(dims, FakeEvalLoader([])))
         assert p.ystar.shape == (3,)
 
     def test_default_mask_is_all_true(self):
@@ -388,13 +379,13 @@ class TestMasking:
         dmod = FakeDataModule(dims, FakeEvalLoader([(step, "leaf_0")]))
         ystar = torch.tensor([1.0, 2.0, 3.0, 4.0])
 
-        p = RecorderSurrogate(inferer, ystar, dmod, None, mask=mask)
-        p(make_cond_dict(n=4))
+        rec = Recorder()
+        surrogate(inferer, ystar, dmod, potential=rec, mask=mask)(make_cond_dict(n=4))
 
-        assert p.received_y.shape == (4, 2)
-        assert p.received_ystar.shape == (2,)
-        assert torch.allclose(p.received_ystar, torch.tensor([1.0, 3.0]))
-        assert torch.allclose(p.received_y, torch.ones(4, 2))
+        assert rec.y.shape == (4, 2)
+        assert rec.ystar.shape == (2,)
+        assert torch.allclose(rec.ystar, torch.tensor([1.0, 3.0]))
+        assert torch.allclose(rec.y, torch.ones(4, 2))
 
     def test_all_true_mask_matches_no_mask_at_hook(self):
         dims = make_dims(("cond_a",), 3)
@@ -404,13 +395,12 @@ class TestMasking:
         ystar = torch.tensor([1.0, 2.0, 3.0, 4.0])
 
         m_all = torch.ones(4, dtype=torch.bool)
-        p_none = RecorderSurrogate(inferer, ystar, dmod, None, mask=None)
-        p_all = RecorderSurrogate(inferer, ystar, dmod, None, mask=m_all)
-        p_none(make_cond_dict(n=3))
-        p_all(make_cond_dict(n=3))
+        rec_none, rec_all = Recorder(), Recorder()
+        surrogate(inferer, ystar, dmod, potential=rec_none, mask=None)(make_cond_dict(n=3))
+        surrogate(inferer, ystar, dmod, potential=rec_all, mask=m_all)(make_cond_dict(n=3))
 
-        assert p_none.received_y.shape == p_all.received_y.shape
-        assert torch.allclose(p_none.received_y, p_all.received_y)
+        assert rec_none.y.shape == rec_all.y.shape
+        assert torch.allclose(rec_none.y, rec_all.y)
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +466,7 @@ class TestEdgeCases:
         batches = [make_batch() for _ in range(3)]
         inferer = FakeInferer(lambda sd, g: torch.ones(4, 3))
         dmod = FakeDataModule(dims, FakeEvalLoader(batches))
-        p = MSESurrogate(inferer, torch.zeros(3), dmod, None)
+        p = surrogate(inferer, torch.zeros(3), dmod)
         p(make_cond_dict(n=4))
 
         # Every leaf's original step_data still holds its all-zeros condition.
@@ -518,36 +508,23 @@ class TestForwardErrors:
         cond = {"cond_a": torch.zeros(4, 3), "cond_b": torch.zeros(4, 3, device="cuda")}
         assert potential(cond).device.type == "cpu"
 
-    def test_compute_raw_potential_wrong_shape(self):
-        class BadShape(MSESurrogate):
-            def compute_raw_potential(self, y, ystar):
-                return torch.zeros(1)
-
+    def test_potential_of_the_wrong_shape_raises(self):
         dims = make_dims(("cond_a",), 3)
         step = make_step_data(("cond_a",), n=4, dims={"cond_a": 3})
         inferer = FakeInferer(lambda sd, g: torch.zeros(4, 3))
         dmod = FakeDataModule(dims, FakeEvalLoader([(step, "leaf_0")]))
-        p = BadShape(inferer, torch.zeros(3), dmod, None)
+        p = surrogate(inferer, torch.zeros(3), dmod, potential=lambda y, ystar: torch.zeros(1))
 
         with pytest.raises(ValueError, match="wrong shape"):
             p(make_cond_dict(n=4))
 
-    def test_y_with_wrong_last_dim_from_hook_raises(self):
-        # ``get_response`` returns a tensor whose last dim does not
-        # match ``ystar``. The explicit shape check in ``forward`` catches it
-        # with a ValueError (not an IndexError) thanks to the added guard.
-        class WrongY(SurrogatePotential):
-            def get_response(self, pred_data):
-                return torch.zeros(4, 10)
-
-            def compute_raw_potential(self, y, ystar):
-                return y.sum(dim=-1)
-
+    def test_a_readout_with_the_wrong_last_dim_raises(self):
+        """The readout's last dim must match ``ystar``; caught with a ValueError, not an IndexError."""
         dims = make_dims(("cond_a",), 3)
         step = make_step_data(("cond_a",), n=4, dims={"cond_a": 3})
         inferer = FakeInferer(lambda sd, g: None)
         dmod = FakeDataModule(dims, FakeEvalLoader([(step, "leaf_0")]))
-        p = WrongY(inferer, torch.zeros(3), dmod, None)
+        p = surrogate(inferer, torch.zeros(3), dmod, readout=lambda pred: torch.zeros(4, 10))
 
         with pytest.raises(ValueError, match="last dim"):
             p(make_cond_dict(n=4))

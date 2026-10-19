@@ -8,9 +8,9 @@ everything lives; nothing is inferred from the data.
 | What | Where | Schema field | Requirement |
 | --- | --- | --- | --- |
 | State | `.X`, or `.obsm[sample_rep]` | `sample_rep` | One float matrix, the same width for every cell. |
-| Condition | `.obs[col]` | `conditions` | Per condition level, one or more columns. Several columns form a set, e.g. `drug: [drug1, drug2]` for combinations. |
-| Condition embeddings | `.uns[rep]` | `conditions_reps` | A dict from every value in those columns to a vector, `(d,)` or `(1, d)`, all of one width. Include the control value when it fills an unused slot, e.g. `drug2 == "control"` for a single drug. |
-| Continuous condition covariates | `.obsm[key]` | `conditions_covariates` | Per-cell arrays. |
+| Condition | `.obs[col]` | `categorical_conditions` | Per condition level, one or more columns. Several columns form a set, e.g. `drug: [drug1, drug2]` for combinations. |
+| Condition embeddings | `.uns[rep]` | `categorical_reps` | A dict from every value in those columns to a vector, `(d,)` or `(1, d)`, all of one width. Include the control value when it fills an unused slot, e.g. `drug2 == "control"` for a single drug. |
+| Continuous condition covariates | `.obsm[key]` | `continuous_conditions` | Per-cell arrays. |
 | Groups | `.obs[col]` | `groups` | Columns controls are matched within, e.g. `cell_line`. |
 | Group embeddings | `.uns[rep]`, or an encoder | `groups_reps`, `groups_encoding` | Like condition embeddings, or an encoder with an explicit vocabulary. |
 | Response covariates | `.obs[col]` / `.obsm[key]` | `target_categorical_covs_dict` / `target_continuous_covs` | Categorical in `.obs`, continuous in `.obsm`. |

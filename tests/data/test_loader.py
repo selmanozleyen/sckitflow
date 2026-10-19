@@ -291,7 +291,6 @@ class TestLeafEncoding:
             pooling_kwargs=None,
             pooling_proj_dim=out_dim,
             pooling_proj_bias=True,
-            covariates_not_pooled=[],
             output_layers_kwargs={},
         )
         for n_cols in (1, 2, 3):

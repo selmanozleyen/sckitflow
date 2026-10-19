@@ -54,7 +54,6 @@ class MLPVelocityConfig(ModuleConfig):
     condition_encoder_pooling_kwargs: dict[str, Any] | None = None
     condition_encoder_pooling_proj_dim: int | None = None
     condition_encoder_pooling_proj_bias: bool = True
-    condition_encoder_covariates_not_pooled: tuple[str, ...] | None = None
     condition_encoder_output_layers_kwargs: dict[str, Any] | None = None
     source_encoder_mlp_kwargs: dict[str, Any] | None = None
     source_encoder_output_dim: int | None = None

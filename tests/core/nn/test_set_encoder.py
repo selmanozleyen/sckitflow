@@ -35,10 +35,10 @@ input_layers_double_condition = {
 
 class TestSetEncoder:
     @pytest.mark.parametrize(
-        "input_layers, covariates_not_pooled, expected_decoder_input_dim",
+        "input_layers, continuous_covariates, expected_decoder_input_dim",
         [
             (input_layers_single_condition, [], pooling_proj_dim),  # one pooled covariate
-            (input_layers_single_condition, ["condition0"], condition0_output_dim),  # one not pooled
+            (input_layers_single_condition, ["condition0"], condition0_output_dim),  # one continuous
             (
                 input_layers_double_condition,
                 [],
@@ -48,12 +48,12 @@ class TestSetEncoder:
                 input_layers_double_condition,
                 ["condition0"],
                 pooling_proj_dim + condition0_output_dim,
-            ),  # condition0 not pooled, condition1 pooled
+            ),  # condition0 continuous, condition1 pooled
             (
                 input_layers_double_condition,
                 ["condition0", "condition1"],
                 condition0_output_dim + condition1_output_dim,
-            ),  # both not pooled
+            ),  # both continuous
         ],
     )
     @pytest.mark.parametrize("pooling_mode", ["mean", "sum"])
@@ -61,7 +61,7 @@ class TestSetEncoder:
     def test_set_encoder_forward_and_properties(
         self,
         input_layers: NestedLayersDict,
-        covariates_not_pooled: list[str],
+        continuous_covariates: list[str],
         expected_decoder_input_dim: int,
         pooling_mode: str,
         output_layers_kwargs: LayersDict,
@@ -74,7 +74,7 @@ class TestSetEncoder:
             pooling_kwargs=None,
             pooling_proj_dim=pooling_proj_dim,
             pooling_proj_bias=True,
-            covariates_not_pooled=covariates_not_pooled,
+            continuous_covariates=continuous_covariates,
             output_layers_kwargs=output_layers_kwargs,
         )
 
@@ -84,8 +84,8 @@ class TestSetEncoder:
         # Build condition dictionary with all covariates present
         condition_dict = {}
         for cov_id, cfg in input_layers.items():
-            n_entries = 1 if cov_id in covariates_not_pooled else n_combs
-            condition_dict[cov_id] = torch.randn(batch_size, n_entries, cfg["input_dim"])
+            set_axis = () if cov_id in continuous_covariates else (n_combs,)
+            condition_dict[cov_id] = torch.randn(batch_size, *set_axis, cfg["input_dim"])
 
         # Forward pass
         encoded = encoder(condition_dict)
@@ -93,7 +93,7 @@ class TestSetEncoder:
 
         # Also check that the internal modules exist as expected
         pooled_covs = encoder.covariates_pooled
-        assert set(pooled_covs) == set(input_layers.keys()) - set(covariates_not_pooled)
+        assert set(pooled_covs) == set(input_layers.keys()) - set(continuous_covariates)
 
         # projection layers exist for pooled covariates only
         proj_layers = encoder._condition_encoder["proj_layers"]
@@ -103,34 +103,17 @@ class TestSetEncoder:
             assert proj_layers[cov].in_features == input_layers[cov]["output_dim"]
             assert proj_layers[cov].out_features == pooling_proj_dim
 
-    @pytest.mark.parametrize("not_pooled", [["condition0"], ["condition1"], []])
     @pytest.mark.parametrize("batch", [(batch_size,), (2, batch_size)], ids=["B", "N-B"])
-    def test_continuous_covariate_without_set_axis(self, not_pooled: list[str], batch: tuple[int, ...]) -> None:
-        """A continuous covariate streams as `[..., D]` and joins either side, under any batch axes."""
+    def test_leading_batch_axes(self, batch: tuple[int, ...]) -> None:
+        """Any batch axes lead the set axis, e.g. several noise samples per source `[N, B, ...]`."""
         encoder = SetEncoder(
-            input_layers=input_layers_double_condition,
-            output_dim=output_dim,
-            covariates_not_pooled=not_pooled,
-            continuous_covariates=["condition0"],
+            input_layers=input_layers_double_condition, output_dim=output_dim, continuous_covariates=["condition0"]
         )
-        n_cat = 1 if "condition1" in not_pooled else n_combs
         condition_dict = {
             "condition0": torch.randn(*batch, condition0_input_dim),
-            "condition1": torch.randn(*batch, n_cat, condition1_input_dim),
+            "condition1": torch.randn(*batch, n_combs, condition1_input_dim),
         }
         assert encoder(condition_dict).shape == (*batch, output_dim)
-
-    def test_not_pooled_needs_one_entry(self) -> None:
-        """A not-pooled covariate with several entries would have to drop or reorder them, so it is refused."""
-        encoder = SetEncoder(
-            input_layers=input_layers_double_condition, output_dim=output_dim, covariates_not_pooled=["condition0"]
-        )
-        condition_dict = {
-            "condition0": torch.randn(batch_size, n_combs, condition0_input_dim),
-            "condition1": torch.randn(batch_size, n_combs, condition1_input_dim),
-        }
-        with pytest.raises(ValueError, match="'condition0' is not pooled.*found 3"):
-            encoder(condition_dict)
 
     @pytest.mark.xfail(
         reason="https://github.com/theislab/sckitflow/issues/144 - validation raises ValueError, not KeyError",
@@ -195,12 +178,12 @@ def test_attention_pooling(pooling_mode: str, pooling_kwargs: dict, pooled_dim: 
         pooling_mode=pooling_mode,
         pooling_kwargs=pooling_kwargs,
         pooling_proj_dim=pooling_proj_dim,
-        covariates_not_pooled=["condition1"],
+        continuous_covariates=["condition1"],
     )
     assert encoder.decoder_input_dim == pooled_dim + condition1_output_dim
 
     x = torch.randn(batch_size, n_combs, condition0_input_dim)
-    other = torch.randn(batch_size, 1, condition1_input_dim)
+    other = torch.randn(batch_size, condition1_input_dim)
     encoded = encoder({"condition0": x, "condition1": other})
     assert encoded.shape == (batch_size, output_dim)
     torch.testing.assert_close(encoder({"condition0": x.flip(-2), "condition1": other}), encoded)

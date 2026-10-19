@@ -117,11 +117,9 @@ from sckitflow import (
     get_logger,
     save_run,
     IsotropicGaussianNoiseSamplerConfig,
-    SamplerConfig,
     UniformTimeSamplerConfig,
 )
 from sckitflow.core.coupling import (
-    CouplingConfig,
     IndependentCouplingConfig,
     ExactCouplingConfig,
     SinkhornCouplingConfig,
@@ -134,7 +132,6 @@ from sckitflow.core.methods import CFMTrainingConfig, MatchedTrainingConfig, ODE
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
 from sckitflow.core.nn import MLPVelocityConfig
 from sckitflow.core.probability_paths import (
-    ProbabilityPathConfig,
     LinearDiracProbabilityPathConfig,
     LinearGaussianProbabilityPathConfig,
     SchrodingerBridgeProbabilityPathConfig,
@@ -144,7 +141,6 @@ from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDat
 from sckitflow.preprocessing.transforms import (
     IdentityTransformConfig,
     PCATransformConfig,
-    TransformConfig,
     WhiteningTransformConfig,
     ZScoreTransformConfig,
     save_transform,
@@ -159,107 +155,6 @@ MMD_KEY = "mmd"
 ORIGINAL_REP_KEY = "original_rep"
 
 
-def read_adatas(config: DictConfig) -> tuple[ad.AnnData, ad.AnnData | None]:
-    """Reads the input data from disk."""
-    logger.info(f"Reading target adata from {config.paths.target_adata}.")
-    adata = ad.read_h5ad(config.paths.target_adata)
-    logger.info(f"Target adata read: {adata}")
-    return adata
-
-
-def get_probability_path_cfg(config: DictConfig) -> ProbabilityPathConfig:
-    """Retrieves the probability path configuration object from the given specification."""
-    if config.probability_path.name == "linear_dirac":
-        return LinearDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
-    elif config.probability_path.name == "linear_gaussian":
-        return LinearGaussianProbabilityPathConfig(sigma=config.probability_path.sigma)
-    elif config.probability_path.name == "schrodinger_bridge":
-        return SchrodingerBridgeProbabilityPathConfig(
-            sigma=config.probability_path.sigma, eps=config.probability_path.eps
-        )
-    elif config.probability_path.name == "variance_preserving":
-        return VariancePreservingDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
-    else:
-        raise ValueError(f"Invalid probability path name {config.probability_path.name}.")
-
-
-def get_time_sampler_cfg(config: DictConfig) -> SamplerConfig:
-    """Retrieves the time-sampler *config* for CFM training.
-
-    The returned ``SamplerConfig`` is portable — ``save_run`` can serialize it
-    into ``specs.json`` — while the method that consumes it resolves it to a
-    raw callable in ``AbstractFlowMethod.__init__``. At the moment, the only
-    available time sampler is ``"uniform"``.
-    """
-    if config.time_sampler.name == "uniform":
-        return UniformTimeSamplerConfig()
-    else:
-        raise ValueError(f"Invalid time sampler name {config.time_sampler.name}.")
-
-
-def get_noise_sampler_cfg(config: DictConfig) -> SamplerConfig:
-    """Retrieves the noise-sampler *config* for CFM training.
-
-    Same rationale as :func:`get_time_sampler_cfg`. At the moment, the only
-    available noise sampler is ``"isotropic_gaussian"``.
-    """
-    if config.noise_sampler.name == "isotropic_gaussian":
-        return IsotropicGaussianNoiseSamplerConfig()
-    else:
-        raise ValueError(f"Invalid noise sampler name {config.noise_sampler.name}.")
-
-
-def get_coupling_cfg(config: DictConfig) -> CouplingConfig:
-    """Resolves the coupling configuration from the input."""
-    if config.coupling.method == "independent":
-        return IndependentCouplingConfig()
-    elif config.coupling.method == "exact":
-        return ExactCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-        )
-    elif config.coupling.method == "sinkhorn":
-        return SinkhornCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-            reg=config.coupling.reg,
-            stop_thr=config.coupling.stop_thr,
-        )
-    elif config.coupling.method == "partial":
-        return PartialCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-            reg=config.coupling.reg,
-            stop_thr=config.coupling.stop_thr,
-            m=config.coupling.m,
-        )
-    elif config.coupling.method == "unbalanced":
-        return UnbalancedCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            num_iter_max=config.coupling.num_iter_max,
-            reg=config.coupling.reg,
-            stop_thr=config.coupling.stop_thr,
-            reg_m=config.coupling.reg_m,
-        )
-    elif config.coupling.method == "gromov-wasserstein":
-        return GromovWassersteinCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            epsilon=config.coupling.epsilon,
-            max_iter=config.coupling.max_iter,
-            tol=config.coupling.tol,
-        )
-    elif config.coupling.method == "fused":
-        return FusedGromovWassersteinCouplingConfig(
-            scale_cost=config.coupling.scale_cost,
-            epsilon=config.coupling.epsilon,
-            max_iter=config.coupling.max_iter,
-            tol=config.coupling.tol,
-            alpha=config.coupling.alpha,
-        )
-    else:
-        raise ValueError(f"Invalid coupling method {config.coupling.method}")
-
-
 def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfig) -> dict[str, Any]:
     """Resolves the omegaconf ``DictConfig`` to a plain dictionary."""
     out_dict = {}
@@ -271,24 +166,7 @@ def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfi
     return out_dict
 
 
-def get_transform_cfg(config: DictConfig) -> TransformConfig:
-    """Retrieves the transform configuration object from the given specification."""
-    if config.transform.name == "identity":
-        return IdentityTransformConfig()
-    elif config.transform.name == "pca":
-        return PCATransformConfig(n_components=config.transform.n_components)
-    elif config.transform.name == "zscore":
-        return ZScoreTransformConfig(epsilon=config.transform.epsilon)
-    elif config.transform.name == "whitening":
-        return WhiteningTransformConfig(
-            method=config.transform.method,
-            epsilon=config.transform.epsilon,
-        )
-    else:
-        raise ValueError(f"Invalid transform {config.transform.name}")
-
-
-@hydra.main(config_path="../config", config_name="fit_cfm", version_base=None)
+@hydra.main(config_path="../configs", config_name="fit_cfm", version_base=None)
 def main(config: DictConfig) -> float:
     """Main entrypoint for CFM training."""
     # Seed everything with lightning
@@ -302,7 +180,9 @@ def main(config: DictConfig) -> float:
     # data after loading; at the moment, only vanilla loading
     # with ``anndata`` is performed, and no other transformation is
     # applied to the data.
-    adata = read_adatas(config)
+    logger.info(f"Reading target adata from {config.paths.target_adata}.")
+    adata = ad.read_h5ad(config.paths.target_adata)
+    logger.info(f"Target adata read: {adata}")
 
     # Prepare splitter for training.
     # The splitter defines control, train, validation and test splits
@@ -338,7 +218,19 @@ def main(config: DictConfig) -> float:
     # Applying transformations to the data. First, we need to infer the
     # parameters from the training data, then we have to transform all of the
     # data using such parameters.
-    transform_cfg = get_transform_cfg(config)
+    if config.transform.name == "identity":
+        transform_cfg = IdentityTransformConfig()
+    elif config.transform.name == "pca":
+        transform_cfg = PCATransformConfig(n_components=config.transform.n_components)
+    elif config.transform.name == "zscore":
+        transform_cfg = ZScoreTransformConfig(epsilon=config.transform.epsilon)
+    elif config.transform.name == "whitening":
+        transform_cfg = WhiteningTransformConfig(
+            method=config.transform.method,
+            epsilon=config.transform.epsilon,
+        )
+    else:
+        raise ValueError(f"Invalid transform {config.transform.name}")
     transform = transform_cfg.build()
 
     # Fitting the transformation parameters on the training split only.
@@ -451,13 +343,34 @@ def main(config: DictConfig) -> float:
     )
     module = module_cfg.build(datamodule.data_dims)
 
-    # Initialize probability path, time sampler and noise sampler.
+    # Initialize probability path
     logger.info("Initializing probability path.")
-    probability_path_cfg = get_probability_path_cfg(config)
+    if config.probability_path.name == "linear_dirac":
+        probability_path_cfg = LinearDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
+    elif config.probability_path.name == "linear_gaussian":
+        probability_path_cfg = LinearGaussianProbabilityPathConfig(sigma=config.probability_path.sigma)
+    elif config.probability_path.name == "schrodinger_bridge":
+        probability_path_cfg = SchrodingerBridgeProbabilityPathConfig(
+            sigma=config.probability_path.sigma, eps=config.probability_path.eps
+        )
+    elif config.probability_path.name == "variance_preserving":
+        probability_path_cfg = VariancePreservingDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
+    else:
+        raise ValueError(f"Invalid probability path name {config.probability_path.name}.")
+
+    # Initialize time sampler
     logger.info("Initializing time sampler.")
-    time_sampler_cfg = get_time_sampler_cfg(config)
+    if config.time_sampler.name == "uniform":
+        time_sampler_cfg = UniformTimeSamplerConfig()
+    else:
+        raise ValueError(f"Invalid time sampler name {config.time_sampler.name}.")
+
+    # Initialize noise sampler
     logger.info("Initializing noise sampler.")
-    noise_sampler_cfg = get_noise_sampler_cfg(config)
+    if config.noise_sampler.name == "isotropic_gaussian":
+        noise_sampler_cfg = IsotropicGaussianNoiseSamplerConfig()
+    else:
+        raise ValueError(f"Invalid noise sampler name {config.noise_sampler.name}.")
 
     # Initialize training module.
     logger.info("Initializing base training method.")
@@ -470,7 +383,55 @@ def main(config: DictConfig) -> float:
 
     # Initialize coupling configuration and matched training configurations.
     logger.info("Initializing coupling module.")
-    coupling_cfg = get_coupling_cfg(config)
+    if config.coupling.method == "independent":
+        coupling_cfg = IndependentCouplingConfig()
+    elif config.coupling.method == "exact":
+        coupling_cfg = ExactCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+        )
+    elif config.coupling.method == "sinkhorn":
+        coupling_cfg = SinkhornCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+            reg=config.coupling.reg,
+            stop_thr=config.coupling.stop_thr,
+        )
+    elif config.coupling.method == "partial":
+        coupling_cfg = PartialCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+            reg=config.coupling.reg,
+            stop_thr=config.coupling.stop_thr,
+            m=config.coupling.m,
+        )
+    elif config.coupling.method == "unbalanced":
+        coupling_cfg = UnbalancedCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+            reg=config.coupling.reg,
+            stop_thr=config.coupling.stop_thr,
+            reg_m=config.coupling.reg_m,
+        )
+    elif config.coupling.method == "gromov-wasserstein":
+        coupling_cfg = GromovWassersteinCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            epsilon=config.coupling.epsilon,
+            max_iter=config.coupling.max_iter,
+            tol=config.coupling.tol,
+        )
+    elif config.coupling.method == "fused":
+        coupling_cfg = FusedGromovWassersteinCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            epsilon=config.coupling.epsilon,
+            max_iter=config.coupling.max_iter,
+            tol=config.coupling.tol,
+            alpha=config.coupling.alpha,
+        )
+    else:
+        raise ValueError(f"Invalid coupling method {config.coupling.method}")
+
+    # Initialize wrapped method for matched training.
     logger.info("Initializing matched wrapper.")
     training_cfg = MatchedTrainingConfig(
         method=base_training_cfg,
@@ -540,7 +501,7 @@ def main(config: DictConfig) -> float:
         val_names=datamodule.val_names,
         pred_transform=pred_transform,
         target_transform=target_transform,
-        seed=config.training_plan.seed,
+        seed=config.run.method_seed,
     )
 
     # Prepare wandb and csv loggers.

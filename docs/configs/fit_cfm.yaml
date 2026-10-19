@@ -104,11 +104,11 @@ splitter:
 # -----------------------------------------------------------------------------
 datamanager:
   sample_rep: "X_pca"
-  conditions: ["condition"]
+  conditions: {}
   conditions_reps: {}
   conditions_covariates: []
-  control_values_dict: {"condition": "control"}
-  matched_pairs: false
+  control_values_dict: {}
+  matched_pairs: []
   split_by: "${splitter.split_key}"
   condition_state_key: null
   target_categorical_covs_dict: {}
@@ -324,7 +324,6 @@ metrics:
 # -----------------------------------------------------------------------------
 training_plan:
   lr_scheduler_interval: "step"
-  seed: 42
 
 # -----------------------------------------------------------------------------
 # Loggers (`WandbLogger` / `CSVLogger`)
@@ -385,8 +384,8 @@ callbacks:
   grad_accumulation:
     scheduling:
       0: 1
-      5000: 2
-      8000: 4
+      50: 2
+      80: 4
   lr_monitor:
     logging_interval: "step"
     log_momentum: false
@@ -490,7 +489,7 @@ trainer:
 run:
   loader_seed: 42
   splitter_seed: 42
-  method_seed: ${training_plan.seed}
+  method_seed: 42
   allow_overwrite: false
 
 # -----------------------------------------------------------------------------

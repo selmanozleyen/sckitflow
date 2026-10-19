@@ -163,7 +163,7 @@ class TestIdentityTransformConfig:
         spec = IdentityTransformConfig().to_spec()
         # ``Component`` injects a ``version`` field into every spec; identity
         # adds nothing else.
-        assert set(spec) == {"type", "version"}
+        assert set(spec) == {"type"}
         assert spec["type"] == "transform.identity"
 
 

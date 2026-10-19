@@ -222,7 +222,7 @@ class TestLoadTransformErrors:
         error contract, this test should fail loudly so the caller knows the API
         moved — a blind ``pytest.raises(Exception)`` would silently keep passing.
         """
-        (tmp_path / TRANSFORM_SPEC_FILENAME).write_text(json.dumps({"type": "transform.does_not_exist", "version": 1}))
+        (tmp_path / TRANSFORM_SPEC_FILENAME).write_text(json.dumps({"type": "transform.does_not_exist"}))
         np.savez_compressed(tmp_path / TRANSFORM_PARAMS_FILENAME)
 
         with pytest.raises((KeyError, ValueError)):

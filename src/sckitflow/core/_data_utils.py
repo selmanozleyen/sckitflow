@@ -190,7 +190,11 @@ def prepare_latent_inference(
     elif len(condition_dict) == 0:
         batch_size = None
     elif n_obs is None:
-        raise ValueError("a conditional batch without a source needs its row count, `n_obs`.")
+        raise ValueError(
+            "Cannot size the latent: the batch has conditions but no source state, and its group encodings are "
+            "one row each, so the number of observations to generate has to come from `step_data['n_obs']`, "
+            "which is None. Batches from sckitflow's loaders set it; set it when building a `StepData` by hand."
+        )
     else:
         batch_size = n_obs
 

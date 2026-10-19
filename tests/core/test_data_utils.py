@@ -273,7 +273,7 @@ class TestPrepareLatentInference:
 
     def test_unpaired_with_conditioning_needs_n_obs(self, dims):
         """A group's encoding is one row, so the row count must be given, not read off it."""
-        with pytest.raises(ValueError, match="needs its row count"):
+        with pytest.raises(ValueError, match="Cannot size the latent"):
             prepare_latent_inference(
                 None,
                 _cond(1),

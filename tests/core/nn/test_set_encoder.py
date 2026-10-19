@@ -128,7 +128,7 @@ class TestSetEncoder:
             layers["condition1"]["use_batchnorm"] = True
         else:
             output_layers_kwargs["use_batchnorm"] = True
-        with pytest.raises(ValueError, match="Batch normalization over one group's encoding"):
+        with pytest.raises(ValueError, match="only ever see one row per batch"):
             SetEncoder(
                 input_layers=layers,
                 output_dim=output_dim,

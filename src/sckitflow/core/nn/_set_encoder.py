@@ -154,7 +154,12 @@ class SetEncoder(torch.nn.Module):
         if len(self._continuous_covariates) == 0 and self._output_layers_kwargs.get("use_batchnorm", False):
             normed.append("output layer")
         if len(normed) > 0:
-            raise ValueError(f"Batch normalization over one group's encoding, a single row per batch: {normed}.")
+            raise ValueError(
+                f"`use_batchnorm` is set on {normed}, but these layers only ever see one row per batch: a batch "
+                "is one group, so a categorical covariate's encoding is the same for all of its observations and "
+                "is passed as a single row. Batch statistics over one row are undefined. Turn batch "
+                "normalization off for these layers (`use_layernorm` works on a single row)."
+            )
 
         input_layers_dict = self._make_input_layers()
         input_layers = torch.nn.ModuleDict(input_layers_dict)

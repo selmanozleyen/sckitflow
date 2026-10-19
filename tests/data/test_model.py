@@ -15,6 +15,8 @@ from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.data._manager import DataManagerConfig
 from sckitflow.data.splitters._combination import CombinationSplitterConfig
 
+from .conftest import CELL_LINES
+
 SPLITTER = CombinationSplitterConfig(
     group_keys=("cell_line", "drug"), always_train_keys=("cell_line",), control_key="drug", test_fraction=0.5
 )
@@ -22,7 +24,7 @@ SCHEMA = DataManagerConfig(
     categorical_conditions={"drug": ("drug",)},
     categorical_reps={"drug": "drug"},
     groups=("cell_line",),
-    groups_encoding={"cell_line": OneHotEncoderConfig()},
+    groups_encoding={"cell_line": OneHotEncoderConfig(categories=tuple(CELL_LINES))},
     split_by="split",
 )
 SPEC = ModelConfig(
@@ -75,3 +77,19 @@ def test_from_pretrained_needs_a_model_with_module_weights(tmp_path, adata_small
     save_pretrained(tmp_path / "no_weights", SPEC)
     with pytest.raises(ValueError, match="no module weights"):
         Model.from_pretrained(tmp_path / "no_weights", adata_small)
+
+
+def test_reload_keeps_the_training_vocabulary(tmp_path, adata_small: AnnData):
+    """A reloaded model encodes each group as in training, even when the new data lacks one of them."""
+    first, *rest = CELL_LINES
+    without_first = adata_small[adata_small.obs["cell_line"] != first].copy()
+
+    def encodings(model: Model) -> dict:
+        encoder = model.manager.get_distribution_data(without_first).groups_data.categorical_encoders["cell_line"]
+        return {line: encoder.transform([[line]]).toarray().tolist() for line in rest}
+
+    trained = SPEC.build(_split(adata_small))
+    trained.save_pretrained(tmp_path)
+    reloaded = Model.from_pretrained(tmp_path, _split(without_first))
+    assert encodings(reloaded) == encodings(trained)
+    assert reloaded.dims.groups_reps_dims == trained.dims.groups_reps_dims

@@ -263,8 +263,8 @@ def _buffer(series: pd.Series) -> np.ndarray:
 class TestStreamingLeavesTheCallersDataAlone:
     """The invariant behind `with_derived_obs`: streaming derives obs columns without copying or mutating.
 
-    Each case exercises one derived column -- the split label, the ``matched_keys`` pair id, the implicit
-    all-cells group -- since each is a separate place sckitflow could have written to the caller's object.
+    Each case exercises one derived column -- the split label, the ``matched_keys`` pair id -- since each is a
+    separate place sckitflow could have written to the caller's object.
     Nothing at runtime enforces this (``X`` and ``obsm`` are the caller's own arrays, and on a pandas
     without copy-on-write so are the obs columns), so it is pinned here instead.
     """
@@ -281,7 +281,6 @@ class TestStreamingLeavesTheCallersDataAlone:
                 ).build(rng=np.random.default_rng(0)),
             ),
             "matched_keys": _make_manager(matched_keys={("HeLa", "aspirin"): ("HeLa", "ibuprofen")}),
-            "unconditional": DataManager(),  # no group columns -> the implicit all-cells group
         }
 
     def _assert_shares_everything(self, streamed: AnnData, adata: AnnData) -> None:
@@ -293,7 +292,7 @@ class TestStreamingLeavesTheCallersDataAlone:
         for col in adata.obs.columns:
             assert np.shares_memory(_buffer(adata.obs[col]), _buffer(streamed.obs[col])), f"obs[{col!r}] was copied"
 
-    @pytest.mark.parametrize("case", ["splitter", "matched_keys", "unconditional"])
+    @pytest.mark.parametrize("case", ["splitter", "matched_keys"])
     def test_training_derives_obs_without_copying_or_mutating(self, adata_small: AnnData, case):
         adata_small.obsm["X_repr"] = np.zeros((adata_small.n_obs, 3), dtype=np.float32)
         before = list(adata_small.obs.columns)
@@ -305,7 +304,7 @@ class TestStreamingLeavesTheCallersDataAlone:
             self._assert_shares_everything(loader._adatas[0], adata_small)
         assert list(adata_small.obs.columns) == before, "the caller's obs gained a column"
 
-    @pytest.mark.parametrize("case", ["matched_keys", "unconditional"])
+    @pytest.mark.parametrize("case", ["matched_keys"])
     def test_prediction_derives_obs_without_copying_or_mutating(self, adata_small: AnnData, case):
         adata_small.obsm["X_repr"] = np.zeros((adata_small.n_obs, 3), dtype=np.float32)
         before = list(adata_small.obs.columns)

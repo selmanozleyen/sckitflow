@@ -56,7 +56,9 @@ def dims() -> DataDimensions:
 
 
 def _datamodule(adata: AnnData, **dm_kwargs) -> FlowDataModule:
-    dm = DataManagerConfig(conditions={"drug": ("drug",)}, conditions_reps={"drug": "drug"}, **dm_kwargs).build()
+    dm = DataManagerConfig(
+        categorical_conditions={"drug": ("drug",)}, categorical_reps={"drug": "drug"}, **dm_kwargs
+    ).build()
     return FlowDataModule.from_adata(adata, dm, n_train_steps=10, batch_size=8)
 
 

@@ -15,12 +15,12 @@ class TestConditionDataSchema:
     @staticmethod
     def _is_valid_args(
         conditions: dict[str, Collection[str]],
-        conditions_reps: dict[str, str],
+        categorical_reps: dict[str, str],
     ) -> bool:
-        if conditions is None and conditions_reps is None:
+        if conditions is None and categorical_reps is None:
             return True
-        elif conditions is not None and conditions_reps is not None:
-            return set(conditions.keys()) == set(conditions_reps.keys())
+        elif conditions is not None and categorical_reps is not None:
+            return set(conditions.keys()) == set(categorical_reps.keys())
         else:
             return False
 
@@ -38,7 +38,7 @@ class TestConditionDataSchema:
         ],
     )
     @pytest.mark.parametrize(
-        "conditions_reps",
+        "categorical_reps",
         [
             None,
             {"drug": "drug"},
@@ -47,7 +47,7 @@ class TestConditionDataSchema:
         ],
     )
     @pytest.mark.parametrize(
-        "conditions_covariates",
+        "continuous_conditions",
         [
             None,
             ["drugA_time", "drugA_dose"],
@@ -56,37 +56,41 @@ class TestConditionDataSchema:
     def test_init(
         self,
         conditions: dict[str, Collection[str]],
-        conditions_reps: dict[str, str],
-        conditions_covariates: Collection[str] | None,
+        categorical_reps: dict[str, str],
+        continuous_conditions: Collection[str] | None,
     ) -> None:
         # failure at initialization
-        is_valid_args = self._is_valid_args(conditions, conditions_reps)
+        is_valid_args = self._is_valid_args(conditions, categorical_reps)
         if (
-            (conditions is not None and conditions_reps is None)
-            or (conditions is None and conditions_reps is not None)
+            (conditions is not None and categorical_reps is None)
+            or (conditions is None and categorical_reps is not None)
             or not is_valid_args
         ):
             with pytest.raises(ValueError):
                 # with pytest.raises(ValueError, match="The following reference columns are missing"):
                 schema = ConditionDataSchema(
-                    conditions=conditions, conditions_reps=conditions_reps, conditions_covariates=conditions_covariates
+                    categorical_conditions=conditions,
+                    categorical_reps=categorical_reps,
+                    continuous_conditions=continuous_conditions,
                 )
             return None
         # init schema
         schema = ConditionDataSchema(
-            conditions=conditions, conditions_reps=conditions_reps, conditions_covariates=conditions_covariates
+            categorical_conditions=conditions,
+            categorical_reps=categorical_reps,
+            continuous_conditions=continuous_conditions,
         )
         # check attributes
-        if conditions_covariates is None:
+        if continuous_conditions is None:
             assert schema.allows_grouping
         else:
             assert not schema.allows_grouping
-        assert schema.conditions is not None
+        assert schema.categorical_conditions is not None
         if conditions is None:
-            assert len(schema.conditions) == 0
-        assert schema.conditions_reps is not None
-        if conditions_reps is None:
-            assert len(schema.conditions_reps) == 0
+            assert len(schema.categorical_conditions) == 0
+        assert schema.categorical_reps is not None
+        if categorical_reps is None:
+            assert len(schema.categorical_reps) == 0
 
     @pytest.mark.parametrize(
         "conditions",
@@ -99,7 +103,7 @@ class TestConditionDataSchema:
         ],
     )
     @pytest.mark.parametrize(
-        "conditions_reps",
+        "categorical_reps",
         [
             None,
             {"drug": "drug"},
@@ -108,7 +112,7 @@ class TestConditionDataSchema:
         ],
     )
     @pytest.mark.parametrize(
-        "conditions_covariates",
+        "continuous_conditions",
         [
             None,
             ["drugA_time", "drugA_dose"],
@@ -121,18 +125,18 @@ class TestConditionDataSchema:
         uns_keys_to_nunique_prefix_and_dim: dict[str, tuple[int, str, int]],
         obsm_keys_to_dim: dict[str, int],
         conditions: dict[str, Collection[str]] | None,
-        conditions_reps: dict[str, str] | None,
-        conditions_covariates: Collection[str] | None,
+        categorical_reps: dict[str, str] | None,
+        continuous_conditions: Collection[str] | None,
     ) -> None:
-        is_valid_args = self._is_valid_args(conditions, conditions_reps)
+        is_valid_args = self._is_valid_args(conditions, categorical_reps)
         if not is_valid_args:
             pytest.skip()
         schema = ConditionDataSchema(
-            conditions=conditions,
-            conditions_reps=conditions_reps,
-            conditions_covariates=conditions_covariates,
+            categorical_conditions=conditions,
+            categorical_reps=categorical_reps,
+            continuous_conditions=continuous_conditions,
         )
-        if conditions_covariates is not None and inval_key in conditions_covariates:
+        if continuous_conditions is not None and inval_key in continuous_conditions:
             with pytest.raises(KeyError, match=r"Key .* not found in adata"):
                 data = schema.get_data(adata)
             return None
@@ -140,14 +144,14 @@ class TestConditionDataSchema:
             with pytest.raises(KeyError, match=r"Key .* not found in adata"):
                 data = schema.get_data(adata)
             return None
-        if conditions_reps is not None and inval_key in conditions_reps.values():
+        if categorical_reps is not None and inval_key in categorical_reps.values():
             with pytest.raises(KeyError, match=r"Key .* not found in adata"):
                 data = schema.get_data(adata)
             return None
 
         # get data
         data = schema.get_data(adata)
-        if conditions is None and conditions_covariates is None:
+        if conditions is None and continuous_conditions is None:
             assert data is None
             return
         else:
@@ -160,11 +164,11 @@ class TestConditionDataSchema:
                 data.categorical_covariates,
                 expected_df_cols,
                 uns_keys_to_nunique_prefix_and_dim,
-                conditions_reps=conditions_reps,
+                categorical_reps=categorical_reps,
             )
         else:
             assert data.categorical_covariates is None
 
         # test condition covariates
         N = len(adata)
-        verify_mixin(data.continuous_covariates, N, obsm_keys_to_dim, conditions_covariates)
+        verify_mixin(data.continuous_covariates, N, obsm_keys_to_dim, continuous_conditions)

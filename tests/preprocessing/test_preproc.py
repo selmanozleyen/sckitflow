@@ -127,9 +127,9 @@ class TestDataPreprocessor:
         assert preproc._cond_preproc_dict == {}
         assert preproc.state_preproc is preproc._state_preproc
 
-    def test_init_with_conditions_covariates(self):
+    def test_init_with_continuous_conditions(self):
         conditions = ["cov1", "cov2"]
-        preproc = DataPreprocessor(conditions_covariates=conditions)
+        preproc = DataPreprocessor(continuous_conditions=conditions)
         assert set(preproc._cond_preproc_dict.keys()) == set(conditions)
         for cov in conditions:
             assert isinstance(preproc._cond_preproc_dict[cov], ConditionPreprocessing)
@@ -141,7 +141,7 @@ class TestDataPreprocessor:
         encoder_dict = {"cov1": DummyEncoder(), "cov2": None}
         decoder_dict = {"cov1": None, "cov2": DummyDecoder()}
         preproc = DataPreprocessor(
-            conditions_covariates=conditions,
+            continuous_conditions=conditions,
             condition_covariates_transform_dict=transform_dict,
             condition_covariates_encoder_context_dict=encoder_dict,
             condition_covariates_decoder_context_dict=decoder_dict,
@@ -154,7 +154,7 @@ class TestDataPreprocessor:
 
     def test_fit_calls_state_and_condition_fit(self, sample_distribution):
         preproc = DataPreprocessor(
-            conditions_covariates=["cov1"],
+            continuous_conditions=["cov1"],
             state_transform=DummyTransform(),
         )
         # Replace internal preprocessors with dummy counters
@@ -168,7 +168,7 @@ class TestDataPreprocessor:
 
     def test_transform_calls_state_and_condition_transform(self, sample_distribution):
         preproc = DataPreprocessor(
-            conditions_covariates=["cov1"],
+            continuous_conditions=["cov1"],
             state_transform=DummyTransform(),
         )
         preproc._state_preproc = DummyStatePreprocessing()
@@ -188,7 +188,7 @@ class TestDataPreprocessor:
 
     def test_inverse_transform_calls_state_and_condition_inverse(self, sample_distribution):
         preproc = DataPreprocessor(
-            conditions_covariates=["cov1"],
+            continuous_conditions=["cov1"],
             state_transform=DummyTransform(),
         )
         preproc._state_preproc = DummyStatePreprocessing()
@@ -206,7 +206,7 @@ class TestDataPreprocessor:
 
     def test_unload_calls_state_and_condition_unload(self):
         preproc = DataPreprocessor(
-            conditions_covariates=["cov1"],
+            continuous_conditions=["cov1"],
         )
         preproc._state_preproc = DummyStatePreprocessing()
         preproc._cond_preproc_dict = {
@@ -248,11 +248,11 @@ class TestDataPreprocessor:
         inverse = preproc.inverse_transform(transformed)
         np.testing.assert_array_almost_equal(inverse.state_data.X, sample_distribution.state_data.X)
 
-    def test_init_with_no_conditions_covariates(self):
-        preproc = DataPreprocessor(conditions_covariates=None)
+    def test_init_with_no_continuous_conditions(self):
+        preproc = DataPreprocessor(continuous_conditions=None)
         assert preproc._cond_preproc_dict == {}
 
     def test_cond_preproc_dict_creation_skips_when_conditions_none(self):
-        preproc = DataPreprocessor(conditions_covariates=None)
+        preproc = DataPreprocessor(continuous_conditions=None)
         # Should not call check_sequence_query_against_reference
         assert preproc._cond_preproc_dict == {}

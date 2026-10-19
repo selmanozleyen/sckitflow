@@ -48,9 +48,9 @@ def loader_adata() -> AnnData:
 
 def _dm(**overrides) -> DataManager:
     base = {
-        "conditions": {"drug": ("drugA",)},
-        "conditions_reps": {"drug": "drug"},
-        "conditions_covariates": ["Xcond"],
+        "categorical_conditions": {"drug": ("drugA",)},
+        "categorical_reps": {"drug": "drug"},
+        "continuous_conditions": ["Xcond"],
         "groups": ("source_split",),
         "groups_reps": {"source_split": "source_split"},
         "control_values_dict": {"drug": "control"},
@@ -291,7 +291,6 @@ class TestLeafEncoding:
             pooling_kwargs=None,
             pooling_proj_dim=out_dim,
             pooling_proj_bias=True,
-            covariates_not_pooled=[],
             output_layers_kwargs={},
         )
         for n_cols in (1, 2, 3):

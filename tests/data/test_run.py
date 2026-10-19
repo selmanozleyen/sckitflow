@@ -17,8 +17,8 @@ SPLITTER = CombinationSplitterConfig(
 )
 DATA = FlowDataModuleConfig(
     manager=DataManagerConfig(
-        conditions={"drug": ("drug",)},
-        conditions_reps={"drug": "drug"},
+        categorical_conditions={"drug": ("drug",)},
+        categorical_reps={"drug": "drug"},
         groups=("cell_line",),
         groups_encoding={"cell_line": OneHotEncoderConfig()},
     ),

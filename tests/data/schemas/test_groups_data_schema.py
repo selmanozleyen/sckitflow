@@ -131,6 +131,6 @@ class TestGroupsDataSchema:
             data,
             groups,
             uns_keys_to_nunique_prefix_and_dim,
-            conditions_reps=groups_reps,
+            categorical_reps=groups_reps,
             groups_encoding=groups_encoding,
         )

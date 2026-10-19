@@ -674,10 +674,27 @@ class TestSeveralAnnData:
         batch = next(iter(dm.get_dataloaders(self._parts(adata_small), batch_size=8)["train"]))
         assert batch["source_state"] is not None and batch["target_state"].shape[0] == 8
 
-    def test_parts_with_different_uns_tables_are_refused(self, adata_small: AnnData):
+    @pytest.mark.parametrize("holder", [0, 1])
+    def test_a_table_may_live_in_one_part(self, adata_small: AnnData, holder: int):
+        parts = self._parts(adata_small)
+        parts[1 - holder].uns = {}
+        dm = _make_manager(control_values_dict={"drug": "control"})
+        assert dm.get_data_dimensionalities(parts).state_dim == dm.get_data_dimensionalities(adata_small).state_dim
+        assert next(iter(dm.get_dataloaders(parts, batch_size=8)["train"]))["target_condition_data"]["drug"] is not None
+        assert parts[1 - holder].uns == {}  # the caller's AnnData gain no tables
+
+    def test_an_entry_differing_between_parts_is_refused(self, adata_small: AnnData):
         parts = self._parts(adata_small)
         parts[1].uns["drug"] = {k: v + 1 for k, v in parts[1].uns["drug"].items()}
-        with pytest.raises(ValueError, match=r"\.uns\['drug'\] of AnnData 1 differs"):
+        with pytest.raises(ValueError, match=r"\.uns\['drug'\]\['\w+'\] differs between AnnData 0 and 1"):
+            _make_manager().get_data_dimensionalities(parts)
+
+    def test_a_value_without_an_entry_is_refused(self, adata_small: AnnData):
+        parts = self._parts(adata_small)
+        drug = next(iter(parts[0].uns["drug"]))
+        for part in parts:
+            part.uns["drug"] = {k: v for k, v in part.uns["drug"].items() if k != drug}
+        with pytest.raises(KeyError, match=rf"\.uns\['drug'\] has no entry for \['{drug}'\]"):
             _make_manager().get_data_dimensionalities(parts)
 
     def test_parts_with_different_features_are_refused(self, adata_small: AnnData):

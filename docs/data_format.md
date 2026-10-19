@@ -33,7 +33,8 @@ times the state width. Prediction reads them per group.
 
 Wherever an `AnnData` is taken, a list of them is too, read as one dataset: their `.obs` are stacked in list
 order with categories unioned, and the controls of any of them can serve the targets of any other. They must
-agree on the state width, on the feature names, and on every `.uns` table the schema reads; a split column
-(`split_by`) must be in each. A list of zarr stores is opened lazily with `scfit.data.open_source(paths,
+agree on the state width and on the feature names, and a split column (`split_by`) must be in each. Each
+`.uns` table the schema reads must be in at least one of them: its entries are merged, an entry in several
+must be the same in each, and every value looked up must have one. A list of zarr stores is opened lazily with `scfit.data.open_source(paths,
 keys=..., cols=..., uns=...)`, listing every store explicitly. A store holding only controls is just one more
 entry.

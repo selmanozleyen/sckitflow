@@ -63,9 +63,8 @@ class ODEInference(AbstractFlowMethod):
         """Integrates the ODE and returns the aggregated prediction.
 
         The latent is drawn at ``dims.state_dim`` on the module's own device and
-        dtype. Batch shape comes from ``step_data["source_state"]`` when present,
-        else the conditioning tensors; when neither is present, ``n_samples``
-        standalone samples are drawn. A caller-supplied ``latent`` overrides both.
+        dtype. Batch shape is the source's rows when present, else ``step_data["n_obs"]``; an unconditional
+        batch without a source draws ``n_samples`` standalone samples. A caller-supplied ``latent`` overrides both.
         """
         source_state = step_data["source_state"]
 
@@ -87,6 +86,7 @@ class ODEInference(AbstractFlowMethod):
                 n_samples=self.config.n_samples,
                 generate_from_noise=self.generate_from_noise,
                 generator=generator,
+                n_obs=step_data.get("n_obs"),
             )
         else:
             # The only tensor the method does not draw itself; placed on the

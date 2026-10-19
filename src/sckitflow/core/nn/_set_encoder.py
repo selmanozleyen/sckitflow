@@ -6,6 +6,7 @@ import torch
 from sckitflow._types import LayersDict, NestedLayersDict
 from sckitflow._utils import check_sequence_query_against_reference
 from sckitflow.core._types import MappedTensor
+from sckitflow.core._utils import make_concatenation_possible
 from sckitflow.core.nn._modules import FunctionalModule
 from sckitflow.core.nn._utils import init_module_from_dict
 
@@ -146,6 +147,20 @@ class SetEncoder(torch.nn.Module):
         self._output_layers_kwargs = {} if output_layers_kwargs is None else output_layers_kwargs
         self._pooling_proj_dim = pooling_proj_dim if pooling_proj_dim else self._min_pooled_dims
 
+        # A categorical covariate is one row per batch (the batch's group), so batch statistics over it are
+        # meaningless; so are the output layer's when nothing per observation reaches it.
+        per_group = [k for k in input_layers if k not in self._continuous_covariates]
+        normed = [k for k in per_group if input_layers[k].get("use_batchnorm", False)]
+        if len(self._continuous_covariates) == 0 and self._output_layers_kwargs.get("use_batchnorm", False):
+            normed.append("output layer")
+        if len(normed) > 0:
+            raise ValueError(
+                f"`use_batchnorm` is set on {normed}, but these layers only ever see one row per batch: a batch "
+                "is one group, so a categorical covariate's encoding is the same for all of its observations and "
+                "is passed as a single row. Batch statistics over one row are undefined. Turn batch "
+                "normalization off for these layers (`use_layernorm` works on a single row)."
+            )
+
         input_layers_dict = self._make_input_layers()
         input_layers = torch.nn.ModuleDict(input_layers_dict)
 
@@ -281,16 +296,17 @@ class SetEncoder(torch.nn.Module):
         else:
             continuous_covariates = None
 
-        # get joint representation
-        to_concat = []
-        if pooled_covariates is not None:
-            to_concat.append(pooled_covariates)
-        if continuous_covariates is not None:
-            to_concat.append(continuous_covariates)
-        if len(to_concat) == 0:
+        # get joint representation; pooled covariates are one row per group, continuous ones one per observation
+        if pooled_covariates is None and continuous_covariates is None:
             msg = "No condition covariate found."
             raise ValueError(msg)
-        latent_cond = torch.concatenate(to_concat, dim=-1)
+        if pooled_covariates is None:
+            latent_cond = continuous_covariates
+        elif continuous_covariates is None:
+            latent_cond = pooled_covariates
+        else:
+            pooled_covariates = make_concatenation_possible(pooled_covariates, continuous_covariates, -1)
+            latent_cond = torch.concatenate((pooled_covariates, continuous_covariates), dim=-1)
 
         return self._condition_encoder["output_layer"](latent_cond)
 

@@ -78,6 +78,23 @@ def _col(field) -> list[float]:
 
 
 class TestSubscriptStepData:
+    def test_a_one_row_target_is_expanded_by_its_index(self):
+        """Every per-observation field is indexed, whatever its row count: one target matched four times is four rows."""
+        out = subscript_step_data(
+            new_step_data(target_state=torch.zeros(1, 3), source_state=torch.arange(4.0).reshape(4, 1)),
+            src_idxs=torch.tensor([0, 1, 2, 3]),
+            tgt_idxs=torch.tensor([0, 0, 0, 0]),
+        )
+        assert out["target_state"].shape == (4, 3) and out["n_obs"] == 4
+
+    def test_the_group_row_is_not_reordered(self):
+        """`target_group_data` describes the whole batch, one row, so a permutation leaves it."""
+        group_row = torch.tensor([[7.0]])
+        batch = {**_batch(), "target_group_data": {"line": group_row}}
+        out = subscript_step_data(batch, tgt_idxs=torch.tensor([3, 1, 2, 0]))
+        assert out["target_group_data"]["line"] is group_row
+        assert _col(out["target_state"]) == [3.0, 1.0, 2.0, 0.0]
+
     def test_each_side_is_indexed_independently(self):
         out = subscript_step_data(_batch(), src_idxs=torch.tensor([3, 2]), tgt_idxs=torch.tensor([0, 1]))
 
@@ -90,7 +107,8 @@ class TestSubscriptStepData:
         out = subscript_step_data(_batch(), src_idxs=torch.tensor([1]), tgt_idxs=torch.tensor([2]))
 
         assert _col(out["target_condition_data"]["drug"]) == [202.0]
-        assert _col(out["target_group_data"]["line"]) == [302.0]
+        assert _col(out["target_group_data"]["line"]) == [300.0, 301.0, 302.0, 303.0]  # describes the batch: not sliced
+        assert out["n_obs"] == 1
         assert _col(out["source_condition_data"]["drug"]) == [1201.0]
         assert out["target_condition_data"]["absent"] is None
 
@@ -152,84 +170,28 @@ class TestUnalignedFields:
 
 # -------------------- prepare_latent_train --------------------
 class TestPrepareLatentTrain:
+    def _latent(self, source, dims, *, generate_from_noise):
+        return prepare_latent_train(
+            source,
+            _sampler,
+            dims,
+            batch_size=8,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            generate_from_noise=generate_from_noise,
+            generator=_gen(),
+        )
+
     def test_source_present_returns_it_unchanged(self, dims):
-        """Paired, not generating: the source *is* the latent."""
-        source = torch.randn(8, dims.state_dim)
-        out = prepare_latent_train(
-            source,
-            {},
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=False,
-            generator=_gen(),
-        )
-        assert out is source
+        """Paired, not generating: the source *is* the latent, whatever its width (that belongs to it)."""
+        source = torch.randn(8, 99)
+        assert self._latent(source, dims, generate_from_noise=False) is source
 
-    def test_source_present_with_noise_draws_from_source_rows(self, dims):
-        """Paired, generating: batch size from `source.shape[0]`, width from `dims.state_dim`."""
-        source = torch.randn(8, dims.state_dim)
-        out = prepare_latent_train(
-            source,
-            {},
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=True,
-            generator=_gen(),
-        )
-        assert out.shape == (8, dims.state_dim)
-
-    def test_source_absent_uses_conditioning_rows(self, dims):
-        """Unpaired: batch size from the first conditioning tensor."""
-        out = prepare_latent_train(
-            None,
-            _cond(5),
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=True,
-            generator=_gen(),
-        )
-        assert out.shape == (5, dims.state_dim)
-
-    def test_neither_source_nor_conditioning_raises(self, dims):
-        """A training batch always has a batch; a missing one is a loader bug, not a shape one."""
-        with pytest.raises(ValueError, match="cannot size the training latent"):
-            prepare_latent_train(
-                None,
-                {},
-                _sampler,
-                dims,
-                device=torch.device("cpu"),
-                dtype=torch.float32,
-                generate_from_noise=True,
-                generator=_gen(),
-            )
-
-    def test_width_ignores_the_source_shape(self, dims):
-        """A source with the wrong last dim is still returned unchanged when paired, not generating.
-
-        The width belongs to `dims`; the source is authoritative for `B` and its
-        own `D`, which is why it short-circuits. This test pins that `dims` is
-        *not* consulted for the width in the paired case -- if the source is
-        accepted as-is, the module and the source are on the same page.
-        """
-        source = torch.randn(8, 99)  # wrong width on purpose
-        out = prepare_latent_train(
-            source,
-            {},
-            _sampler,
-            dims,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-            generate_from_noise=False,
-            generator=_gen(),
-        )
-        assert out is source  # unchanged; `dims.state_dim` is 4, source is 99, no error
+    @pytest.mark.parametrize("paired", [True, False])
+    def test_noise_is_batch_size_by_state_dim(self, dims, paired):
+        """Generating from noise: `(batch_size, dims.state_dim)`, paired or not."""
+        source = torch.randn(8, dims.state_dim) if paired else None
+        assert self._latent(source, dims, generate_from_noise=True).shape == (8, dims.state_dim)
 
 
 # -------------------- prepare_latent_inference --------------------
@@ -290,6 +252,7 @@ class TestPrepareLatentInference:
             n_samples=3,
             generate_from_noise=True,
             generator=_gen(),
+            n_obs=5,
         )
         assert out.shape == (3, 5, dims.state_dim)
 
@@ -304,8 +267,22 @@ class TestPrepareLatentInference:
             n_samples=None,
             generate_from_noise=True,
             generator=_gen(),
+            n_obs=5,
         )
         assert out.shape == (5, dims.state_dim)
+
+    def test_unpaired_with_conditioning_needs_n_obs(self, dims):
+        """A group's encoding is one row, so the row count must be given, not read off it."""
+        with pytest.raises(ValueError, match="Cannot size the latent"):
+            prepare_latent_inference(
+                None,
+                _cond(1),
+                _sampler,
+                dims,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                generator=_gen(),
+            )
 
     def test_standalone_with_n_samples(self, dims):
         """No source, no conditioning: draw `n_samples` standalone latents of width `dims.state_dim`."""
@@ -372,5 +349,6 @@ class TestPrepareLatentInference:
             n_samples=None,
             generate_from_noise=True,
             generator=_gen(),
+            n_obs=3,
         )
         assert out.dtype is torch.float64

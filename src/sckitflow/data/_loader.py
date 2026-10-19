@@ -9,7 +9,7 @@ materializes only the selected observations). No Python-side masking or copying 
   held in memory by scfit;
 * **continuous** covariates ride as *aligned reps* (per-obs, straight from ``obsm``);
 * **categorical** condition/group encodings are computed per group at batch time (cached), keyed off the
-  group the batch belongs to, then tiled to the batch.
+  group the batch belongs to, as one row ``(1, c, d)``.
 
 :class:`Loader` samples a stochastic per-batch schedule for training (one group per ``__next__``).
 :class:`EvalLoader` walks every group once, deterministically, for prediction -- yielding ``(StepData,
@@ -67,6 +67,7 @@ _STEP_DATA_KEYS = (
     "source_coupling_quad",
     "source_condition_data",
     "source_group_data",
+    "n_obs",
 )
 
 _PRIMARY = "primary"
@@ -121,20 +122,15 @@ def _leaf_encoding(array: np.ndarray) -> np.ndarray:
     return array[0]
 
 
-def _tile(encoding: torch.Tensor, batch_size: int) -> torch.Tensor:
-    """One group's encoding ``(c, d)`` -> ``(batch_size, c, d)``, the shape :class:`SetEncoder` pools.
-
-    The ``c`` axis is what pooling reduces (``dim=-2``), so the batch axis is prepended, never written over.
-    """
-    if batch_size < 1:
-        raise ValueError(f"batch_size must be at least 1, got {batch_size}.")
+def _group_row(encoding: torch.Tensor) -> torch.Tensor:
+    """One group's encoding ``(c, d)`` -> ``(1, c, d)``; ``c`` is the axis :class:`SetEncoder` pools."""
     if encoding.ndim == 1:  # a flat (d,) rep carries no set axis of its own
         encoding = encoding.unsqueeze(0)
     elif encoding.ndim != 2:
         # Rank 3 here means the per-observation axis was never dropped -- `_leaf_encoding` was skipped -- and
         # the batch axis would land in front of it, handing the encoder a 4-D tensor to pool.
         raise ValueError(f"expected an encoding of rank 1 or 2, got shape {tuple(encoding.shape)}.")
-    return encoding.unsqueeze(0).expand(batch_size, *encoding.shape).contiguous()
+    return encoding.unsqueeze(0)
 
 
 def _get_coupling_locs(coupling_schema: CouplingDataSchema | None) -> tuple[dict[str, str], dict[str, str]]:
@@ -227,7 +223,7 @@ class _StepDataBridge:
         self._leaf_to_gid: dict[tuple, int] = {leaf: i for i, leaf in enumerate(self._leaves)}
         self._adatas = adatas
         self._uns = adatas[0].uns  # the tables groups are encoded from; the same in every AnnData
-        self._encode_cache: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
+        self._encode_cache: dict[int, dict[str, Any]] = {}
 
     @cached_property
     def _leaf_size(self) -> dict[tuple, int]:
@@ -286,47 +282,39 @@ class _StepDataBridge:
         if self._dtype is None and self._device is None:
             return step_data
         for key, value in step_data.items():
-            if value is None:
+            if value is None or key == "n_obs":
                 continue
             step_data[key] = (
                 {k: self._conform(v) for k, v in value.items()} if isinstance(value, dict) else self._conform(value)
             )
         return step_data
 
-    def _encode_group_cached(self, gid: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        """The group's ``(condition, group)`` categorical encodings -- computed once per group, then cached.
+    def _encode_group_cached(self, gid: int) -> dict[str, Any]:
+        """The group's categorical encodings (groups and categorical conditions), ``(1, c, d)``, cached per group.
 
-        Cached already conformed to ``dtype``/``device``, so the per-batch tile is a device-local expand.
+        Cached already conformed to ``dtype``/``device``; every batch of the group reuses the same tensors.
         """
         if gid not in self._encode_cache:
-            entry, cond_keys, group_keys = self._encode_group(self._leaves[gid])
-            conformed = {k: self._conform(_as_tensor(v), streamed=False) for k, v in entry.items()}
-            self._encode_cache[gid] = (
-                {k: conformed[k] for k in cond_keys},
-                {k: conformed[k] for k in group_keys},
-            )
+            entry = self._encode_group(self._leaves[gid])
+            self._encode_cache[gid] = {
+                k: _group_row(self._conform(_as_tensor(v), streamed=False)) for k, v in entry.items()
+            }
         return self._encode_cache[gid]
 
-    def _encode_group(self, leaf: tuple) -> tuple[dict[str, np.ndarray], list, list]:
-        """Encode one group's values to ``{key: vector}`` plus the condition/group key lists."""
+    def _encode_group(self, leaf: tuple) -> dict[str, np.ndarray]:
+        """Encode one group's values -- its group columns and categorical conditions -- to ``{key: vector}``."""
         entry: dict[str, np.ndarray] = {}
-        cond_keys: list[str] = []
-        group_keys: list[str] = []
         values = pd.DataFrame([leaf], columns=list(self._group_cols))
-        condition_data = self._cond_schema.categorical_data(values, self._uns)
-        if condition_data is not None:
-            reps = condition_data.extract_reps().mapping
-            entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
-            cond_keys = list(reps)
-        groups_data = self._groups_schema.categorical_data(values, self._uns)
-        if groups_data is not None:
-            reps = groups_data.extract_reps().mapping
-            entry.update({k: _leaf_encoding(v) for k, v in reps.items()})
-            group_keys = list(reps)
-        return entry, cond_keys, group_keys
+        for data in (
+            self._cond_schema.categorical_data(values, self._uns),
+            self._groups_schema.categorical_data(values, self._uns),
+        ):
+            if data is not None:
+                entry.update({k: _leaf_encoding(v) for k, v in data.extract_reps().mapping.items()})
+        return entry
 
     def _batch_size(self, batch: dict, target_state: Any, n_rows: int) -> int:
-        """Rows to tile the conditioning to: what the primary delivered, else the caller's known ``n_rows``.
+        """Rows the batch has, which the source is aligned to: what the primary delivered, else ``n_rows``.
 
         Measuring the delivered tensor is authoritative -- it already accounts for the sampler's
         ``drop_last`` and for a group shorter than its cap. Only a metadata-only pass (``reps=()``) reads
@@ -376,9 +364,9 @@ class _StepDataBridge:
     def _step_data_from_batch(self, batch: dict, gid: int, *, has_state: bool, n_rows: int) -> StepData:
         """Assemble one scfit batch (+ its group id) into a ``StepData``.
 
-        The categorical condition/group encoding is cached per group and tiled to the batch; continuous
-        covariates are the per-obs aligned reps already in the batch, and the source is row-aligned to
-        the same count. ``has_state=False`` omits the target state (metadata-only prediction), and
+        The categorical encodings (groups and categorical conditions) are cached per group, one row
+        ``(1, c, d)``, in ``target_group_data``; continuous covariates are the per-obs aligned reps already in the
+        batch, in ``target_condition_data``, and the source is row-aligned to the same count, ``n_obs``. ``has_state=False`` omits the target state (metadata-only prediction), and
         ``n_rows`` is the caller's row count for that case -- see :meth:`_batch_size`.
         """
         target_state = _as_tensor(batch[_PRIMARY][self._state_loc]) if has_state else None
@@ -386,13 +374,11 @@ class _StepDataBridge:
         batch_size = self._batch_size(batch, target_state, n_rows)
         source_state = self._align_source(source_state, batch_size)
 
-        cond_enc, group_enc = self._encode_group_cached(gid)
-        condition: dict[str, Any] = {k: _tile(v, batch_size) for k, v in cond_enc.items()}
-        group: dict[str, Any] = {k: _tile(v, batch_size) for k, v in group_enc.items()}
+        group = self._encode_group_cached(gid)
         # continuous covariates: per-obs aligned reps (present only when the stream carries them)
-        for loc, key in self._cond_cont_locs.items():
-            if loc in batch[_PRIMARY]:
-                condition[key] = _as_tensor(batch[_PRIMARY][loc])
+        condition = {
+            key: _as_tensor(batch[_PRIMARY][loc]) for loc, key in self._cond_cont_locs.items() if loc in batch[_PRIMARY]
+        }
         response = {
             key: _as_tensor(batch[_PRIMARY][loc]) for loc, key in self._resp_cont_locs.items() if loc in batch[_PRIMARY]
         }
@@ -407,6 +393,7 @@ class _StepDataBridge:
         step_data["target_condition_data"] = condition or None
         step_data["target_group_data"] = group or None
         step_data["target_response_data"] = response or None
+        step_data["n_obs"] = batch_size
         # Update step data with coupling reps
         step_data.update(src_couplings)
         step_data.update(tgt_couplings)

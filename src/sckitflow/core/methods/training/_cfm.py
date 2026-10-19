@@ -68,7 +68,6 @@ class CFMTraining(AbstractFlowMethod):
         # the width belongs to `dims`.
         latent = prepare_latent_train(
             source,
-            cond,
             self.noise_sampler,
             self.dims,
             batch_size=target.shape[0],

@@ -6,7 +6,7 @@ import torch
 from pydantic import ValidationError
 from scfit.registry import component
 
-from sckitflow.core._samplers import (
+from sckitflow._samplers import (
     NoiseSamplerConfig,
 )
 from sckitflow.core._types import PredictionData

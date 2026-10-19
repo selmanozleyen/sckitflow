@@ -4,7 +4,7 @@ import pydantic
 import pytest
 import torch
 
-from sckitflow.core._samplers import (
+from sckitflow._samplers import (
     IsotropicGaussianNoiseSamplerConfig,
     TimeSamplerConfig,
     UniformTimeSamplerConfig,

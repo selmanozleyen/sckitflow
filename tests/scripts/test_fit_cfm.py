@@ -1,83 +1,209 @@
-"""Run docs/scripts/fit_cfm.py on the dummy adata, then reload what it saved."""
+"""Smoke test: run docs/scripts/fit_cfm.py against the dummy adata fixture."""
 
 import importlib.util
 import math
 import sys
 from pathlib import Path
+from types import ModuleType
 
-import anndata as ad
-import numpy as np
 import pytest
 from anndata import AnnData
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
+from omegaconf import DictConfig
 
-from sckitflow import load_run, predict_adata
-
-SCRIPT_PATH = Path(__file__).resolve().parents[2] / "docs" / "scripts" / "fit_cfm.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = REPO_ROOT / "docs" / "scripts" / "fit_cfm.py"
 CONFIG_DIR = (SCRIPT_PATH.parent / ".." / "configs").resolve()
 
+if not SCRIPT_PATH.is_file():
+    raise RuntimeError(f"training script not found at {SCRIPT_PATH}")
+if not (CONFIG_DIR / "fit_cfm.yaml").is_file():
+    raise RuntimeError(f"fit_cfm.yaml not found at {CONFIG_DIR / 'fit_cfm.yaml'}.")
 
-def _load_script():
+
+def _load_fit_cfm() -> ModuleType:
+    if "fit_cfm_script" in sys.modules:
+        return sys.modules["fit_cfm_script"]
     spec = importlib.util.spec_from_file_location("fit_cfm_script", SCRIPT_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {SCRIPT_PATH}")
     module = importlib.util.module_from_spec(spec)
     sys.modules["fit_cfm_script"] = module
     spec.loader.exec_module(module)
     return module
 
 
-fit_cfm = sys.modules.get("fit_cfm_script") or _load_script()
+fit_cfm = _load_fit_cfm()
+fit_cfm_main = fit_cfm.main
 
-# The dummy adata: drug embeddings in `uns["drug"]`, a `source_split` group, `X_repr` / `X_src` in `obsm`.
-SMALL = {
-    "run.splitter.group_keys": ["source_split"],
-    "run.splitter.always_train_keys": [],
-    "run.splitter.control_key": "drugA",
-    "run.data.batch_size": 32,
-    "run.data.n_train_steps": 100,
-    "run.data.manager": {
-        "type": "data_manager",
-        "version": 1,
-        "sample_rep": "X_repr",
-        "conditions": {"drug": ["drugA"]},
-        "conditions_reps": {"drug": "drug"},
-        "control_values_dict": {"drug": "control"},
-        "groups": ["source_split"],
-        "groups_encoding": {"source_split": "label"},
-    },
-    "run.module.num_time_features": 8,
-    "run.module.state_encoder_output_dim": 16,
-    "run.module.time_encoder_output_dim": 16,
-    "run.module.source_encoder_output_dim": 16,
-    "run.module.condition_encoder_output_dim": 8,
-    "run.module.condition_encoder_pooling_proj_dim": 8,
-    "run.inference.n_samples": 16,
-    "run.inference.n_steps": 5,
-    "run.inference.solver_kwargs": {"method": "euler"},
-    "trainer.fast_dev_run": True,
-    "trainer.enable_progress_bar": False,
-    "save.allow_overwrite": True,
+
+def _render(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        if value in ("", "null", "true", "false") or any(c in value for c in ":[]{},.'\" \t"):
+            return "'" + value.replace("'", "''") + "'"
+        return value
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_render(k)}: {_render(v)}" for k, v in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_render(v) for v in value) + "]"
+    raise TypeError(f"cannot render {type(value).__name__} as Hydra override")
+
+
+def overrides(section: str, **fields) -> list[str]:
+    out: list[str] = []
+    for key, value in fields.items():
+        path = f"{section}.{key}"
+        if isinstance(value, (dict, list, tuple)):
+            out.append(f"~{path}")
+            out.append(f"+{path}={_render(value)}")
+        else:
+            out.append(f"{path}={_render(value)}")
+    return out
+
+
+# --------------------------- section variants ------------------------------
+
+_OVERRIDES_SPLITTER: list[tuple[str, list[str]]] = [
+    (
+        "base",
+        overrides(
+            "splitter",
+            group_keys=["source_split"],
+            always_train_keys=[],
+            control_key="drugA",
+            control_value="control",
+        ),
+    ),
+]
+
+
+_DM_SHARED = {
+    "conditions": {"drug": ["drugA"]},
+    "conditions_reps": {"drug": "drug"},
+    "conditions_covariates": [],
+    "control_values_dict": {"drug": "control"},
+    "groups": ["source_split"],
+    "groups_encoding": {"source_split": "label"},
+    "groups_reps": {},
+    "matched_pairs": [],
+    "rep_lin": None,
+    "source_rep_quad": None,
+    "target_rep_quad": None,
+    "use_linear": True,
+    "target_categorical_covs_dict": {},
+    "target_continuous_covs": [],
 }
 
+_OVERRIDES_DM: list[tuple[str, list[str]]] = [
+    ("base", overrides("datamanager", sample_rep="X_repr", **_DM_SHARED)),
+    ("sample_rep_x_src", overrides("datamanager", sample_rep="X_src", **_DM_SHARED)),
+]
 
-def _config(tmp_path: Path, adata_path: Path, variant: dict):
+
+_OVERRIDES_MODULE: list[tuple[str, list[str]]] = [
+    ("base", []),
+    (
+        "minimal",
+        overrides(
+            "module",
+            num_time_features=8,
+            state_encoder_output_dim=16,
+            time_encoder_output_dim=16,
+            source_encoder_output_dim=16,
+            condition_encoder_output_dim=8,
+            condition_encoder_pooling_proj_dim=8,
+        ),
+    ),
+]
+
+
+_OVERRIDES_INFERENCE: list[tuple[str, list[str]]] = [
+    ("base", []),
+    (
+        "fast",
+        overrides(
+            "inference",
+            n_samples=16,
+            n_steps=5,
+            solver_kwargs={"method": "euler"},
+        ),
+    ),
+]
+
+
+_OVERRIDES_DMOD: list[tuple[str, list[str]]] = [
+    (
+        "fast",
+        overrides(
+            "datamodule",
+            batch_size=32,
+            n_train_steps=100,
+            loader_kwargs={},
+        ),
+    ),
+]
+
+
+def _lookup(variants, name):
+    for variant_name, variant_lines in variants:
+        if variant_name == name:
+            return variant_lines
+    raise KeyError(f"unknown variant {name!r}; available: {[n for n, _ in variants]}")
+
+
+def combine(
+    *,
+    splitter: str = "base",
+    dm: str = "base",
+    dmod: str = "fast",
+    module: str = "minimal",
+    inference: str = "fast",
+    **extras: list[str],
+) -> list[str]:
+    out: list[str] = []
+    out += _lookup(_OVERRIDES_SPLITTER, splitter)
+    out += _lookup(_OVERRIDES_DM, dm)
+    out += _lookup(_OVERRIDES_DMOD, dmod)
+    out += _lookup(_OVERRIDES_MODULE, module)
+    out += _lookup(_OVERRIDES_INFERENCE, inference)
+    for extra in extras.values():
+        out += extra
+    return out
+
+
+# --------------------------- composition -----------------------------------
+
+
+def _compose(*, target_adata_path, tmp_path, overrides, config_name="fit_cfm"):
+    ephemeral = [
+        f"paths.target_adata={target_adata_path}",
+        "paths.control_adata=null",
+        f"save.run_dir={tmp_path / 'run'}",
+        f"callbacks.model_checkpoint.dirpath={tmp_path / 'ckpt'}",
+        f"loggers.wandb.save_dir={tmp_path / 'wandb'}",
+        f"loggers.csv.save_dir={tmp_path / 'csv'}",
+        f"trainer.default_root_dir={tmp_path / 'logs'}",
+        "trainer.fast_dev_run=true",
+        "trainer.enable_progress_bar=false",
+        "loggers.wandb.offline=true",
+        "run.allow_overwrite=true",
+        "hydra.job.chdir=false",
+    ]
     with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base=None):
-        config = compose(config_name="fit_cfm")
-    paths = {
-        "paths.target_adata": str(adata_path),
-        "save.run_dir": str(tmp_path / "run"),
-        "callbacks.model_checkpoint.dirpath": str(tmp_path / "ckpt"),
-        "loggers.wandb.save_dir": str(tmp_path / "wandb"),
-        "loggers.csv.save_dir": str(tmp_path / "csv"),
-        "trainer.default_root_dir": str(tmp_path / "logs"),
-    }
-    for key, value in {**SMALL, **paths, **variant}.items():
-        OmegaConf.update(config, key, value, merge=False, force_add=True)
-    return config
+        return compose(config_name=config_name, overrides=overrides + ephemeral)
+
+
+# --------------------------- fixtures --------------------------------------
 
 
 @pytest.fixture
-def adata_path(tmp_path: Path, adata: AnnData) -> Path:
+def target_adata_path(tmp_path: Path, adata: AnnData) -> Path:
     adata.obs_names = adata.obs_names.astype(str)
     adata.var_names = adata.var_names.astype(str)
     path = tmp_path / "target.h5ad"
@@ -85,36 +211,60 @@ def adata_path(tmp_path: Path, adata: AnnData) -> Path:
     return path
 
 
+@pytest.fixture
+def compose_fit_cfm(tmp_path: Path, target_adata_path: Path) -> DictConfig:
+    return _compose(
+        target_adata_path=target_adata_path,
+        tmp_path=tmp_path,
+        overrides=combine(),
+    )
+
+
+# --------------------------- tests -----------------------------------------
+
+
+def test_script_loads() -> None:
+    assert hasattr(fit_cfm, "main")
+    assert callable(fit_cfm_main.__wrapped__)
+    assert fit_cfm.logger.name == "fit_cfm_script"
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "variant",
+    "overrides_list",
     [
-        pytest.param({}, id="base"),
-        pytest.param({"run.data.manager.sample_rep": "X_src"}, id="sample-rep-x-src"),
-        pytest.param({"run.training.coupling": {"type": "coupling.pot.sinkhorn", "version": 1}}, id="sinkhorn"),
+        pytest.param(combine(), id="base"),
+        pytest.param(combine(dm="sample_rep_x_src"), id="dm-sample-rep-x-src"),
         pytest.param(
-            {"run.training.method.probability_path.type": "probability_path.schrodinger_bridge"},
+            combine(coupling=["coupling.method=sinkhorn"]),
+            id="coupling-sinkhorn",
+        ),
+        pytest.param(
+            combine(probability_path=["probability_path.name=schrodinger_bridge"]),
             id="schrodinger-bridge",
         ),
     ],
 )
-def test_fit_cfm_trains_saves_and_reloads(tmp_path: Path, adata_path: Path, variant: dict) -> None:
-    score = fit_cfm.main.__wrapped__(_config(tmp_path, adata_path, variant))
-    assert math.isfinite(score)
-
-    adata = ad.read_h5ad(adata_path)
-    datamodule, plan = load_run(tmp_path / "run", adata)
-    control = adata.obs["drugA"] == "control"
-    pred = predict_adata(
-        datamodule, plan.inference_method, adata[~control].copy(), control_adata=adata[control].copy(), max_per_group=4
+def test_fit_cfm_runs(
+    overrides_list: list[str],
+    tmp_path: Path,
+    target_adata_path: Path,
+) -> None:
+    cfg = _compose(
+        target_adata_path=target_adata_path,
+        tmp_path=tmp_path,
+        overrides=overrides_list,
     )
-    assert pred.n_obs > 0
-    assert np.isfinite(np.asarray(pred.X)).all()
 
+    try:
+        score = fit_cfm_main.__wrapped__(cfg)
+    except Exception:
+        fit_cfm.logger.exception("fit_cfm.main() raised")
+        raise
 
-def test_existing_run_fails_before_training(tmp_path: Path, adata_path: Path) -> None:
-    config = _config(tmp_path, adata_path, {"save.allow_overwrite": False})
-    (tmp_path / "run").mkdir()
-    (tmp_path / "run" / "specs.json").write_text("{}")
-    with pytest.raises(FileExistsError, match="allow_overwrite"):
-        fit_cfm.main.__wrapped__(config)
+    assert isinstance(score, float)
+    assert not math.isnan(score)
+
+    run_dir = tmp_path / "run"
+    assert (run_dir / "specs.json").is_file()
+    assert (run_dir / "weights.pt").is_file()

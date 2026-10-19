@@ -1,21 +1,105 @@
-"""Train a conditional flow matching run from ``docs/configs/fit_cfm.yaml``.
+"""Full training pipeline for a Conditional Flow Matching (CFM) model.
 
-    python docs/scripts/fit_cfm.py [hydra overrides, e.g. run.training.coupling.type=coupling.pot.sinkhorn]
+Wires together the components needed to train a Conditional Flow Matching
+model on single-cell data with an MLP-parameterised velocity field. Designed
+to be invoked via Hydra as the entry point of a training run:
 
-Needs ``hydra-core`` and ``wandb`` (the ``scripts`` extra). ``config.run`` is a portable
-:class:`~sckitflow.RunConfig` spec, built as is; the other sections configure the Lightning
-loggers, callbacks and trainer around it. After training, the best checkpoint's weights are saved
-with the spec via :func:`~sckitflow.save_run`, so :func:`~sckitflow.load_run` rebuilds the run.
-Returns the last validation energy distance (``inf`` if validation never ran), for sweeps.
+    python -m <package>.fit_cfm [+config overrides]
+
+(e.g. ``python -m sckitflow.training.fit_cfm`` — the ``-m`` flag takes a
+module path, not a file; adjust to the module's actual location.)
+
+Pipeline (in the order ``main`` executes them)
+----------------------------------------------
+1. Seed everything from ``config.run.method_seed`` (``lightning.seed_everything``).
+2. Load AnnData from disk (``read_adatas``; paths in ``config.paths``).
+3. Build a ``CombinationSplitter`` from ``config.splitter`` (control/train/val/test
+   splits) and a ``FlowDataModule`` from ``config.datamanager`` + ``config.datamodule``.
+4. Build the MLP velocity field (``MLPVelocityConfig`` from ``config.module``).
+5. Build the base training method (``CFMTrainingConfig``), wrap it in a
+   ``MatchedTrainingConfig`` that pairs source/target samples according to
+   ``config.coupling``, and build the inference method (``ODEInferenceConfig``).
+   Probability path and samplers arrive as portable ``*Config`` objects so
+   ``save_run`` can serialize them; each method resolves them to a callable
+   inside ``build``.
+6. Build an optimizer (``OptimizerConfig``) and validation metrics
+   (``EnergyDistance``, ``MaximumMeanDiscrepancy``) from ``config.metrics``.
+7. Build a ``TrainingPlan`` (the ``LightningModule`` wrapper) from
+   ``config.training_plan``, wiring together the training/inference methods,
+   metrics, optimizer, and transforms.
+8. Configure ``WandbLogger`` + ``CSVLogger``, callbacks (``EarlyStopping``,
+   ``GradientAccumulationScheduler``, ``LearningRateMonitor``, ``ModelCheckpoint``),
+   and the ``lightning.pytorch.Trainer``.
+9. ``trainer.fit(...)``.
+10. Persist the run via ``save_run`` (writes ``specs.json`` + ``weights.pt``).
+    Training checkpoints are written separately by the ``ModelCheckpoint``
+    callback during ``trainer.fit``. The fitted transform is persisted
+    separately (``transform.json`` + ``transform_params.npz``) via
+    ``save_transform``, since ``RunConfig`` does not yet carry a ``transform``
+    field.
+11. Return the last validation ``edist`` from ``trainer.callback_metrics``
+    (fallback: ``+inf``) for sweeps / shell exit codes. The key is
+    ``f"{val_name}/edist"`` where ``val_name`` is the first entry of
+    ``datamodule.val_names`` (default ``"val"`` → ``"val/edist"``).
+
+Key concepts
+------------
+- **Conditional Flow Matching (CFM)**: learns a velocity field v(x, t | c) that
+  transports a source distribution to a target distribution conditioned on c.
+- **Probability path**: defines the interpolation between source and target
+  samples. Supported: ``linear_dirac``, ``linear_gaussian``,
+  ``schrodinger_bridge``, ``variance_preserving``. See
+  ``sckitflow.core.probability_paths``.
+- **Velocity field**: the network that predicts the time derivative along the
+  path. Here an MLP with separate state/time/condition encoders.
+- **Coupling**: at training time, pairs source samples with target samples
+  before regression. Selected by ``config.coupling.method``: ``independent``,
+  ``exact``, ``sinkhorn``, ``partial``, ``unbalanced``,
+  ``gromov-wasserstein``, ``fused``. See ``sckitflow.core.coupling``.
+- **Sampler**: time and noise draws during training / inference.
+  ``time_sampler`` and ``noise_sampler`` in the config are ``SamplerConfig``
+  objects (portable — the run's spec serializes them). See
+  ``sckitflow.core._samplers``.
+- **Transform**: optional pre-processing of the ``sample_rep`` (or ``.X`` when
+  ``sample_rep is None``), fitted on the training split only. Configured via
+  ``config.transform``. Persisted to ``run_dir`` alongside the run.
+- **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
+  configured via ``ODEInferenceConfig``.
+
+Configuration
+-------------
+The full YAML is expected at ``<module_dir>/../config/fit_cfm.yaml`` (Hydra).
+See that file for every key, its meaning, and its default. The coupling
+selection and its hyperparameters live under ``config.coupling``.
+``hydra.job.chdir: false`` is recommended so relative paths
+(``save.run_dir``, ``callbacks.model_checkpoint.dirpath``, logger
+``save_dir``) resolve from the launch directory rather than Hydra's
+``outputs/<date>/<time>/`` tree.
+
+Outputs
+-------
+- Checkpoints: ``config.callbacks.model_checkpoint.dirpath`` (written by the
+  ``ModelCheckpoint`` callback during training; best-``val_edist`` weights
+  plus ``last.ckpt``).
+- Loggers: ``config.loggers.{wandb,csv}.save_dir``.
+- Serialised run: ``config.save.run_dir`` (via ``save_run``; contains
+  ``specs.json`` — the portable ``RunConfig`` — and ``weights.pt``). Suitable
+  for reloading with ``sckitflow.load_run`` for **inference**; a reloaded
+  plan carries no validation metrics, so it is not suitable for re-training
+  with validation.
+- Fitted transform: ``config.save.run_dir`` (via ``save_transform``; contains
+  ``transform.json`` — the portable ``TransformConfig`` spec — and
+  ``transform_params.npz`` — the fitted numpy arrays). Loadable via
+  ``sckitflow.preprocessing.transforms.load_transform`` for applying the same
+  transform in a different process.
+- Return value: last ``<val_name>/edist`` from
+  ``trainer.callback_metrics`` (``+inf`` if validation never ran).
 """
 
-import logging
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import anndata as ad
 import hydra
-import torch
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -23,56 +107,586 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from lightning.pytorch.loggers import CSVLogger, WandbLogger
+from lightning.pytorch.loggers import WandbLogger, CSVLogger
+import numpy as np
 from omegaconf import DictConfig, OmegaConf
+from scipy.sparse import issparse
 
-from sckitflow import RunConfig, save_run
+from sckitflow import (
+    RunConfig,
+    get_logger,
+    save_run,
+    IsotropicGaussianNoiseSamplerConfig,
+    SamplerConfig,
+    UniformTimeSamplerConfig,
+)
+from sckitflow.core.coupling import (
+    CouplingConfig,
+    IndependentCouplingConfig,
+    ExactCouplingConfig,
+    SinkhornCouplingConfig,
+    PartialCouplingConfig,
+    UnbalancedCouplingConfig,
+    GromovWassersteinCouplingConfig,
+    FusedGromovWassersteinCouplingConfig,
+)
+from sckitflow.core.methods import CFMTrainingConfig, MatchedTrainingConfig, ODEInferenceConfig
 from sckitflow.core.metrics import EnergyDistance, MaximumMeanDiscrepancy
+from sckitflow.core.nn import MLPVelocityConfig
+from sckitflow.core.probability_paths import (
+    ProbabilityPathConfig,
+    LinearDiracProbabilityPathConfig,
+    LinearGaussianProbabilityPathConfig,
+    SchrodingerBridgeProbabilityPathConfig,
+    VariancePreservingDiracProbabilityPathConfig,
+)
+from sckitflow.data import CombinationSplitterConfig, DataManagerConfig, FlowDataModuleConfig
+from sckitflow.preprocessing.transforms import (
+    IdentityTransformConfig,
+    PCATransformConfig,
+    TransformConfig,
+    WhiteningTransformConfig,
+    ZScoreTransformConfig,
+    save_transform,
+)
+from sckitflow.trainer import TrainingPlan, OptimizerConfig
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
+
+EDIST_KEY = "edist"
+MMD_KEY = "mmd"
+ORIGINAL_REP_KEY = "original_rep"
 
 
-@hydra.main(config_path="../configs", config_name="fit_cfm", version_base=None)
-def main(config: DictConfig) -> float:
-    """Trains ``config.run`` and returns its last validation energy distance."""
-    cfg = cast(dict[str, Any], OmegaConf.to_container(config, resolve=True))
-    run_dir, allow_overwrite = Path(cfg["save"]["run_dir"]), cfg["save"]["allow_overwrite"]
-    if (run_dir / "specs.json").exists() and not allow_overwrite:  # fail before training, not after
-        raise FileExistsError(f"{run_dir} already holds a run; set save.allow_overwrite=true.")
+def read_adatas(config: DictConfig) -> tuple[ad.AnnData, ad.AnnData | None]:
+    """Reads the input data from disk."""
+    logger.info(f"Reading target adata from {config.paths.target_adata}.")
+    adata = ad.read_h5ad(config.paths.target_adata)
+    logger.info(f"Target adata read: {adata}")
+    return adata
 
-    spec = RunConfig.from_spec(cfg["run"])
-    seed_everything(spec.method_seed, workers=True)
-    paths = cfg["paths"]
-    adata = ad.read_h5ad(paths["target_adata"])
-    control_adata = ad.read_h5ad(paths["control_adata"]) if paths["control_adata"] else None
-    metrics = {
-        "edist": EnergyDistance(**cfg["metrics"]["edist"]),
-        "mmd": MaximumMeanDiscrepancy(**cfg["metrics"]["mmd"]),
-    }
-    datamodule, plan = spec.build(adata, control_adata=control_adata, metrics=metrics)
 
-    callbacks = cfg["callbacks"]
-    checkpoint = ModelCheckpoint(**callbacks["model_checkpoint"])
-    trainer = Trainer(
-        **cfg["trainer"],
-        logger=[WandbLogger(**cfg["loggers"]["wandb"]), CSVLogger(**cfg["loggers"]["csv"])],
-        callbacks=[
-            EarlyStopping(**callbacks["early_stopping"]),
-            GradientAccumulationScheduler(**callbacks["grad_accumulation"]),
-            LearningRateMonitor(**callbacks["lr_monitor"]),
-            checkpoint,
-        ],
-    )
-    trainer.fit(plan, datamodule=datamodule, ckpt_path=cfg["ckpt_path"])
-
-    if checkpoint.best_model_path:  # save the best weights, not the last epoch's
-        plan.load_state_dict(
-            torch.load(checkpoint.best_model_path, map_location="cpu", weights_only=False)["state_dict"]
+def get_probability_path_cfg(config: DictConfig) -> ProbabilityPathConfig:
+    """Retrieves the probability path configuration object from the given specification."""
+    if config.probability_path.name == "linear_dirac":
+        return LinearDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
+    elif config.probability_path.name == "linear_gaussian":
+        return LinearGaussianProbabilityPathConfig(sigma=config.probability_path.sigma)
+    elif config.probability_path.name == "schrodinger_bridge":
+        return SchrodingerBridgeProbabilityPathConfig(
+            sigma=config.probability_path.sigma, eps=config.probability_path.eps
         )
-    save_run(run_dir, spec, plan.module, allow_overwrite=allow_overwrite)
-    score = float(trainer.callback_metrics.get(f"{datamodule.val_names[0]}/edist", float("inf")))
-    logger.info(f"Saved the run to {run_dir}; validation energy distance {score:.4f}.")
-    return score
+    elif config.probability_path.name == "variance_preserving":
+        return VariancePreservingDiracProbabilityPathConfig(sigma=config.probability_path.sigma)
+    else:
+        raise ValueError(f"Invalid probability path name {config.probability_path.name}.")
+
+
+def get_time_sampler_cfg(config: DictConfig) -> SamplerConfig:
+    """Retrieves the time-sampler *config* for CFM training.
+
+    The returned ``SamplerConfig`` is portable — ``save_run`` can serialize it
+    into ``specs.json`` — while the method that consumes it resolves it to a
+    raw callable in ``AbstractFlowMethod.__init__``. At the moment, the only
+    available time sampler is ``"uniform"``.
+    """
+    if config.time_sampler.name == "uniform":
+        return UniformTimeSamplerConfig()
+    else:
+        raise ValueError(f"Invalid time sampler name {config.time_sampler.name}.")
+
+
+def get_noise_sampler_cfg(config: DictConfig) -> SamplerConfig:
+    """Retrieves the noise-sampler *config* for CFM training.
+
+    Same rationale as :func:`get_time_sampler_cfg`. At the moment, the only
+    available noise sampler is ``"isotropic_gaussian"``.
+    """
+    if config.noise_sampler.name == "isotropic_gaussian":
+        return IsotropicGaussianNoiseSamplerConfig()
+    else:
+        raise ValueError(f"Invalid noise sampler name {config.noise_sampler.name}.")
+
+
+def get_coupling_cfg(config: DictConfig) -> CouplingConfig:
+    """Resolves the coupling configuration from the input."""
+    if config.coupling.method == "independent":
+        return IndependentCouplingConfig()
+    elif config.coupling.method == "exact":
+        return ExactCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+        )
+    elif config.coupling.method == "sinkhorn":
+        return SinkhornCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+            reg=config.coupling.reg,
+            stop_thr=config.coupling.stop_thr,
+        )
+    elif config.coupling.method == "partial":
+        return PartialCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+            reg=config.coupling.reg,
+            stop_thr=config.coupling.stop_thr,
+            m=config.coupling.m,
+        )
+    elif config.coupling.method == "unbalanced":
+        return UnbalancedCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            num_iter_max=config.coupling.num_iter_max,
+            reg=config.coupling.reg,
+            stop_thr=config.coupling.stop_thr,
+            reg_m=config.coupling.reg_m,
+        )
+    elif config.coupling.method == "gromov-wasserstein":
+        return GromovWassersteinCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            epsilon=config.coupling.epsilon,
+            max_iter=config.coupling.max_iter,
+            tol=config.coupling.tol,
+        )
+    elif config.coupling.method == "fused":
+        return FusedGromovWassersteinCouplingConfig(
+            scale_cost=config.coupling.scale_cost,
+            epsilon=config.coupling.epsilon,
+            max_iter=config.coupling.max_iter,
+            tol=config.coupling.tol,
+            alpha=config.coupling.alpha,
+        )
+    else:
+        raise ValueError(f"Invalid coupling method {config.coupling.method}")
+
+
+def resolve_omegaconf_to_dictionary(conf_dict: dict[str, Any] | None | DictConfig) -> dict[str, Any]:
+    """Resolves the omegaconf ``DictConfig`` to a plain dictionary."""
+    out_dict = {}
+    if conf_dict is not None:
+        out_dict = conf_dict
+        if isinstance(out_dict, dict):
+            out_dict = OmegaConf.create(out_dict)
+        out_dict = OmegaConf.to_container(out_dict, resolve=True)
+    return out_dict
+
+
+def get_transform_cfg(config: DictConfig) -> TransformConfig:
+    """Retrieves the transform configuration object from the given specification."""
+    if config.transform.name == "identity":
+        return IdentityTransformConfig()
+    elif config.transform.name == "pca":
+        return PCATransformConfig(n_components=config.transform.n_components)
+    elif config.transform.name == "zscore":
+        return ZScoreTransformConfig(epsilon=config.transform.epsilon)
+    elif config.transform.name == "whitening":
+        return WhiteningTransformConfig(
+            method=config.transform.method,
+            epsilon=config.transform.epsilon,
+        )
+    else:
+        raise ValueError(f"Invalid transform {config.transform.name}")
+
+
+@hydra.main(config_path="../config", config_name="fit_cfm", version_base=None)
+def main(config: DictConfig) -> float:
+    """Main entrypoint for CFM training."""
+    # Seed everything with lightning
+    # This is the master seeding, and it will be also saved to the run
+    # for further reproducibility.
+    logger.info(f"Setting the global run seed to {config.run.method_seed}")
+    seed_everything(seed=config.run.method_seed, workers=True)
+
+    # Load data from disk using the utility function.
+    # Please override this function to allow custom operations on the
+    # data after loading; at the moment, only vanilla loading
+    # with ``anndata`` is performed, and no other transformation is
+    # applied to the data.
+    adata = read_adatas(config)
+
+    # Prepare splitter for training.
+    # The splitter defines control, train, validation and test splits
+    # and writes a column in the input ``ad.AnnData``. We should always
+    # fit any data transformation only on the training cases.
+    logger.info(f"Initializing splitter with seed {config.run.splitter_seed}.")
+    splitter_rng = np.random.default_rng(config.run.splitter_seed)
+    splitter_cfg = CombinationSplitterConfig(
+        split_key=config.splitter.split_key,
+        group_keys=config.splitter.group_keys,
+        always_train_keys=config.splitter.always_train_keys,
+        control_key=config.splitter.control_key,
+        control_value=config.splitter.control_value,
+        test_fraction=config.splitter.test_fraction,
+        train_label=config.splitter.train_label,
+        test_label=config.splitter.test_label,
+        control_label=config.splitter.control_label,
+    )
+    splitter = splitter_cfg.build(rng=splitter_rng)
+
+    # Split the data upfront. This is required for optional transformations
+    # on the data -- their parameters should be inferred exclusively from
+    # the training data, therefore we need to explicitly split the input
+    # data to avoid information leakage.
+    adata = splitter.split(adata, copy=False)
+
+    # Subsetting the data to train only, so that we can then infer the
+    # parameters for the required transformations without leaking information
+    # from the validation and test sets.
+    train_mask = adata.obs[config.splitter.split_key] == config.splitter.train_label
+    training_adata = adata[train_mask]
+
+    # Applying transformations to the data. First, we need to infer the
+    # parameters from the training data, then we have to transform all of the
+    # data using such parameters.
+    transform_cfg = get_transform_cfg(config)
+    transform = transform_cfg.build()
+
+    # Fitting the transformation parameters on the training split only.
+    transform = transform.fit_adata(
+        training_adata,
+        obsm=config.datamanager.sample_rep,
+    )
+
+    # Now we need to store the original representation in a new key, so that
+    # we can retrieve it back later after transformation.
+    if config.datamanager.sample_rep is not None:
+        if config.datamanager.sample_rep not in adata.obsm_keys():
+            raise ValueError(
+                f"Representation {config.datamanager.sample_rep!r} not found in "
+                f"adata.obsm; available keys: {list(adata.obsm_keys())}."
+            )
+        X_original_rep = adata.obsm[config.datamanager.sample_rep]
+    else:
+        X_original_rep = adata.X
+
+    # ``obsm`` requires dense arrays, and every transform expects a 2-D
+    # ``np.ndarray``. Densify once here so both the persistence call and the
+    # transform application see a consistent representation.
+    if issparse(X_original_rep):
+        X_original_rep = X_original_rep.toarray()
+    else:
+        X_original_rep = np.asarray(X_original_rep)
+    adata.obsm[ORIGINAL_REP_KEY] = X_original_rep
+
+    # We then apply the transformation and store the resulting transformed
+    # values back where they came from, so that they can still be read from
+    # the rest of the script.
+    X_transformed = transform.transform(X_original_rep)
+    if config.datamanager.sample_rep is not None:
+        adata.obsm[config.datamanager.sample_rep] = X_transformed
+    else:
+        adata.X = X_transformed
+
+    # Prepare data manager.
+    # The ``DataManager`` is never materialized directly here: it lives
+    # in the ``datamodule``, of which it is an attribute.
+    logger.info("Initializing datamanager.")
+    dm_cfg = DataManagerConfig(
+        sample_rep=config.datamanager.sample_rep,
+        conditions=config.datamanager.conditions,
+        conditions_reps=config.datamanager.conditions_reps,
+        conditions_covariates=config.datamanager.conditions_covariates,
+        control_values_dict=config.datamanager.control_values_dict,
+        matched_pairs=config.datamanager.matched_pairs,
+        split_by=config.datamanager.split_by,
+        condition_state_key=config.datamanager.condition_state_key,
+        target_categorical_covs_dict=config.datamanager.target_categorical_covs_dict,
+        target_continuous_covs=config.datamanager.target_continuous_covs,
+        groups=config.datamanager.groups,
+        groups_reps=config.datamanager.groups_reps,
+        groups_encoding=config.datamanager.groups_encoding,
+        rep_lin=config.datamanager.rep_lin,
+        source_rep_quad=config.datamanager.source_rep_quad,
+        target_rep_quad=config.datamanager.target_rep_quad,
+        use_linear=config.datamanager.use_linear,
+    )
+
+    # Initialize datamodule.
+    # We set the datamodule-specific generator for reproducibility.
+    # The datamodule configuration takes the datamanager_cfg and
+    # provides a builder for the ``pl.DataModule`` wrapper.
+    logger.info(f"Initializing datamodule with seed {config.run.loader_seed}")
+    datamodule_rng = np.random.default_rng(config.run.loader_seed)
+    datamodule_cfg = FlowDataModuleConfig(
+        manager=dm_cfg,
+        train_split=config.datamodule.train_split,
+        n_train_steps=config.datamodule.n_train_steps,
+        batch_size=config.datamodule.batch_size,
+        dtype=config.datamodule.dtype,
+        loader_kwargs=resolve_omegaconf_to_dictionary(config.datamodule.loader_kwargs),
+    )
+    datamodule = datamodule_cfg.build(adata, rng=datamodule_rng)
+
+    # Initialize neural network.
+    # The dimensionalities are automatically inferred from the
+    # data_dims object, linked to the datamodule.
+    logger.info("Initializing neural velocity field.")
+    module_cfg = MLPVelocityConfig(
+        encode_state=config.module.encode_state,
+        encode_time=config.module.encode_time,
+        time_features_id=config.module.time_features_id,
+        num_time_features=config.module.num_time_features,
+        max_period=config.module.max_period,
+        state_encoder_output_dim=config.module.state_encoder_output_dim,
+        time_encoder_output_dim=config.module.time_encoder_output_dim,
+        state_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.state_encoder_mlp_kwargs),
+        time_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.time_encoder_mlp_kwargs),
+        vf_decoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.vf_decoder_mlp_kwargs),
+        conditioning_id=config.module.conditioning_id,
+        conditioning_kwargs=resolve_omegaconf_to_dictionary(config.module.conditioning_kwargs),
+        condition_encoder_input_layers=config.module.condition_encoder_input_layers,
+        condition_encoder_output_dim=config.module.condition_encoder_output_dim,
+        condition_encoder_pooling_mode=config.module.condition_encoder_pooling_mode,
+        condition_encoder_pooling_kwargs=resolve_omegaconf_to_dictionary(
+            config.module.condition_encoder_pooling_kwargs
+        ),
+        condition_encoder_pooling_proj_dim=config.module.condition_encoder_pooling_proj_dim,
+        condition_encoder_pooling_proj_bias=config.module.condition_encoder_pooling_proj_bias,
+        condition_encoder_covariates_not_pooled=config.module.condition_encoder_covariates_not_pooled,
+        condition_encoder_output_layers_kwargs=resolve_omegaconf_to_dictionary(
+            config.module.condition_encoder_output_layers_kwargs
+        ),
+        source_encoder_mlp_kwargs=resolve_omegaconf_to_dictionary(config.module.source_encoder_mlp_kwargs),
+        source_encoder_output_dim=config.module.source_encoder_output_dim,
+    )
+    module = module_cfg.build(datamodule.data_dims)
+
+    # Initialize probability path, time sampler and noise sampler.
+    logger.info("Initializing probability path.")
+    probability_path_cfg = get_probability_path_cfg(config)
+    logger.info("Initializing time sampler.")
+    time_sampler_cfg = get_time_sampler_cfg(config)
+    logger.info("Initializing noise sampler.")
+    noise_sampler_cfg = get_noise_sampler_cfg(config)
+
+    # Initialize training module.
+    logger.info("Initializing base training method.")
+    base_training_cfg = CFMTrainingConfig(
+        probability_path=probability_path_cfg,
+        time_sampler=time_sampler_cfg,
+        noise_sampler=noise_sampler_cfg,
+        generate_from_noise=config.training.generate_from_noise,
+    )
+
+    # Initialize coupling configuration and matched training configurations.
+    logger.info("Initializing coupling module.")
+    coupling_cfg = get_coupling_cfg(config)
+    logger.info("Initializing matched wrapper.")
+    training_cfg = MatchedTrainingConfig(
+        method=base_training_cfg,
+        coupling=coupling_cfg,
+    )
+
+    logger.info("Building training method.")
+    training_method = training_cfg.build(
+        module,
+        dims=datamodule.data_dims,
+    )
+
+    # Initialize inference module.
+    logger.info("Initializing inference method.")
+    inference_cfg = ODEInferenceConfig(
+        probability_path=probability_path_cfg,
+        time_sampler=time_sampler_cfg,
+        noise_sampler=noise_sampler_cfg,
+        generate_from_noise=config.inference.generate_from_noise,
+        solver_kwargs=resolve_omegaconf_to_dictionary(config.inference.solver_kwargs),
+        return_trajectory=config.inference.return_trajectory,
+        n_steps=config.inference.n_steps,
+        n_samples=config.inference.n_samples,
+    )
+    logger.info("Building inference method.")
+    inference_method = inference_cfg.build(module, dims=datamodule.data_dims)
+
+    # Prepare optimizer and scheduler.
+    logger.info("Initializing optimizer.")
+    optimizer_cfg = OptimizerConfig(
+        name=config.optimizer.name,
+        kwargs=resolve_omegaconf_to_dictionary(config.optimizer.kwargs),
+    )
+    logger.info("Building optimizer.")
+    optimizer = optimizer_cfg.build(module.parameters())
+    lr_scheduler = None
+
+    # Initialize metrics used to evaluate model's predictions during validation.
+    logger.info("Initializing metrics.")
+    edist = EnergyDistance(dist_sync_on_step=config.metrics.edist.dist_sync_on_step)
+    mmd = MaximumMeanDiscrepancy(
+        gammas=config.metrics.mmd.gammas,
+        dist_sync_on_step=config.metrics.mmd.dist_sync_on_step,
+    )
+    metrics = {
+        EDIST_KEY: edist,
+        MMD_KEY: mmd,
+    }
+
+    # Initialize prediction transformations.
+    # TODO: wire these to ``config.transforms.{pred,target}`` when that section
+    # exists; leaving them ``None`` runs the plan without post-hoc transforms.
+    pred_transform = None  # TODO
+
+    # Initialize target transformations.
+    target_transform = None  # TODO
+
+    # Initialize training plan.
+    logger.info("Initializing training plan.")
+    plan = TrainingPlan(
+        training_method,
+        optimizer,
+        lr_scheduler=lr_scheduler,
+        lr_scheduler_interval=config.training_plan.lr_scheduler_interval,
+        inference_method=inference_method,
+        metrics=metrics,
+        val_names=datamodule.val_names,
+        pred_transform=pred_transform,
+        target_transform=target_transform,
+        seed=config.training_plan.seed,
+    )
+
+    # Prepare wandb and csv loggers.
+    logger.info("Initializing wandb logger.")
+    wandb_logger = WandbLogger(
+        name=config.loggers.wandb.name,
+        save_dir=config.loggers.wandb.save_dir,
+        offline=config.loggers.wandb.offline,
+        id=config.loggers.wandb.id,
+        anonymous=config.loggers.wandb.anonymous,
+        version=config.loggers.wandb.version,
+        project=config.loggers.wandb.project,
+        log_model=config.loggers.wandb.log_model,
+        experiment=config.loggers.wandb.experiment,
+        prefix=config.loggers.wandb.prefix,
+        **resolve_omegaconf_to_dictionary(config.loggers.wandb.init_kwargs),
+    )
+    logger.info("Initializing csv logger.")
+    csv_logger = CSVLogger(
+        config.loggers.csv.save_dir,
+        name=config.loggers.csv.name,
+        version=config.loggers.csv.version,
+        prefix=config.loggers.csv.prefix,
+        flush_logs_every_n_steps=config.loggers.csv.flush_logs_every_n_steps,
+    )
+    training_loggers = [wandb_logger, csv_logger]
+
+    # Prepare callbacks.
+    logger.info("Initializing early stopping callback.")
+    early_stopping = EarlyStopping(
+        monitor=config.callbacks.early_stopping.monitor,
+        min_delta=config.callbacks.early_stopping.min_delta,
+        patience=config.callbacks.early_stopping.patience,
+        verbose=config.callbacks.early_stopping.verbose,
+        mode=config.callbacks.early_stopping.mode,
+        strict=config.callbacks.early_stopping.strict,
+        check_finite=config.callbacks.early_stopping.check_finite,
+        stopping_threshold=config.callbacks.early_stopping.stopping_threshold,
+        divergence_threshold=config.callbacks.early_stopping.divergence_threshold,
+        check_on_train_epoch_end=config.callbacks.early_stopping.check_on_train_epoch_end,
+    )
+    logger.info("Initializing gradient accumulation callback.")
+    grad_accumulation = GradientAccumulationScheduler(scheduling=config.callbacks.grad_accumulation.scheduling)
+    logger.info("Initializing learning rate monitor callback.")
+    lr_monitor = LearningRateMonitor(
+        logging_interval=config.callbacks.lr_monitor.logging_interval,
+        log_momentum=config.callbacks.lr_monitor.log_momentum,
+    )
+    logger.info("Initializing model checkpoint callback.")
+    model_checkpoint = ModelCheckpoint(
+        dirpath=config.callbacks.model_checkpoint.dirpath,
+        filename=config.callbacks.model_checkpoint.filename,
+        monitor=config.callbacks.model_checkpoint.monitor,
+        verbose=config.callbacks.model_checkpoint.verbose,
+        save_last=config.callbacks.model_checkpoint.save_last,
+        save_top_k=config.callbacks.model_checkpoint.save_top_k,
+        save_weights_only=config.callbacks.model_checkpoint.save_weights_only,
+        mode=config.callbacks.model_checkpoint.mode,
+        auto_insert_metric_name=config.callbacks.model_checkpoint.auto_insert_metric_name,
+        every_n_train_steps=config.callbacks.model_checkpoint.every_n_train_steps,
+        train_time_interval=config.callbacks.model_checkpoint.train_time_interval,
+        every_n_epochs=config.callbacks.model_checkpoint.every_n_epochs,
+        save_on_train_epoch_end=config.callbacks.model_checkpoint.save_on_train_epoch_end,
+    )
+    callbacks = [early_stopping, grad_accumulation, lr_monitor, model_checkpoint]
+
+    # Configuring the training plugins.
+    plugins = None  # TODO
+
+    # Initialize ``lightning.pytorch.Trainer`` object.
+    logger.info("Initializing trainer.")
+    trainer = Trainer(
+        accelerator=config.trainer.accelerator,
+        strategy=config.trainer.strategy,
+        devices=config.trainer.devices,
+        num_nodes=config.trainer.num_nodes,
+        precision=config.trainer.precision,
+        logger=training_loggers,
+        callbacks=callbacks,
+        fast_dev_run=config.trainer.fast_dev_run,
+        max_epochs=config.trainer.max_epochs,
+        min_epochs=config.trainer.min_epochs,
+        max_steps=config.trainer.max_steps,
+        min_steps=config.trainer.min_steps,
+        max_time=config.trainer.max_time,
+        limit_train_batches=config.trainer.limit_train_batches,
+        limit_val_batches=config.trainer.limit_val_batches,
+        limit_test_batches=config.trainer.limit_test_batches,
+        limit_predict_batches=config.trainer.limit_predict_batches,
+        overfit_batches=config.trainer.overfit_batches,
+        val_check_interval=config.trainer.val_check_interval,
+        check_val_every_n_epoch=config.trainer.check_val_every_n_epoch,
+        num_sanity_val_steps=config.trainer.num_sanity_val_steps,
+        log_every_n_steps=config.trainer.log_every_n_steps,
+        enable_checkpointing=config.trainer.enable_checkpointing,
+        enable_progress_bar=config.trainer.enable_progress_bar,
+        enable_model_summary=config.trainer.enable_model_summary,
+        gradient_clip_val=config.trainer.gradient_clip_val,
+        gradient_clip_algorithm=config.trainer.gradient_clip_algorithm,
+        deterministic=config.trainer.deterministic,
+        benchmark=config.trainer.benchmark,
+        inference_mode=config.trainer.inference_mode,
+        use_distributed_sampler=config.trainer.use_distributed_sampler,
+        profiler=config.trainer.profiler,  # TODO: this can be an object, resolve it somehow.
+        detect_anomaly=config.trainer.detect_anomaly,
+        barebones=config.trainer.barebones,
+        plugins=plugins,
+        sync_batchnorm=config.trainer.sync_batchnorm,
+        reload_dataloaders_every_n_epochs=config.trainer.reload_dataloaders_every_n_epochs,
+        default_root_dir=config.trainer.default_root_dir,
+        enable_autolog_hparams=config.trainer.enable_autolog_hparams,
+        model_registry=config.trainer.model_registry,
+    )
+
+    logger.info("Fitting the model.")
+    trainer.fit(plan, datamodule=datamodule, ckpt_path=config.trainer.ckpt_path)
+
+    # Build run config and save to disk.
+    logger.info("Initializing run configuration for reproducibility.")
+    run_cfg = RunConfig(
+        data=datamodule_cfg,
+        training=training_cfg,
+        inference=inference_cfg,
+        splitter=splitter_cfg,
+        loader_seed=config.run.loader_seed,
+        splitter_seed=config.run.splitter_seed,
+        method_seed=config.run.method_seed,
+        module=module_cfg,
+        optimizer=optimizer_cfg,
+    )
+    logger.info(f"Saving run {config.save.run_dir}.")
+    save_run(config.save.run_dir, run_cfg, module, allow_overwrite=config.run.allow_overwrite)
+
+    # Persist the fitted transform alongside the run. Kept separate from
+    # ``save_run`` because ``RunConfig`` does not yet carry a ``transform``
+    # field — see ``save_transform``'s docstring in
+    # ``sckitflow.preprocessing.transforms._persistence``.
+    logger.info(f"Saving fitted transform to {config.save.run_dir}.")
+    save_transform(config.save.run_dir, transform_cfg, transform)
+
+    # Capture the edist from the latest validation step.
+    val_edist_key = f"{datamodule.val_names[0]}/{EDIST_KEY}"  # e.g. "val/edist"
+    last_val_edist = trainer.callback_metrics.get(val_edist_key, float("inf"))
+    returned_metric = float(last_val_edist)
+    logger.info(f"Finishing the run with edist of {returned_metric:.4f}")
+    return returned_metric
 
 
 if __name__ == "__main__":

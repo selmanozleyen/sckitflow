@@ -5,12 +5,12 @@ import pandas as pd
 import pytest
 import torch
 
-from sckitflow.core._data_utils import prepare_latent_train
-from sckitflow.core._samplers import (
+from sckitflow._samplers import (
     IsotropicGaussianNoiseSamplerConfig,
     SamplerConfig,
     UniformTimeSamplerConfig,
 )
+from sckitflow.core._data_utils import prepare_latent_train
 from sckitflow.core.methods.training._cfm import CFMTraining, CFMTrainingConfig
 from sckitflow.core.probability_paths import (
     BaseProbabilityPath,

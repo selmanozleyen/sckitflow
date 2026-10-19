@@ -1,4 +1,4 @@
-"""Tests for :mod:`sckitflow.core._samplers`.
+"""Tests for :mod:`sckitflow._samplers`.
 
 ``SamplerConfig`` mirrors ``CouplingConfig``: ``fn`` is a ``ClassVar`` so the
 class itself is what the scfit registry serializes, and ``build`` returns the
@@ -13,7 +13,7 @@ import pytest
 import torch
 from scfit.registry import component
 
-from sckitflow.core._samplers import (
+from sckitflow._samplers import (
     IsotropicGaussianNoiseSamplerConfig,
     SamplerConfig,
     TimeSamplerConfig,

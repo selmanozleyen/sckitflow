@@ -587,6 +587,11 @@ class TestPairLeaf:
         with pytest.raises(ValueError, match="varies within a leaf"):
             _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
 
+    def test_condition_covariates_disagreeing_on_rows_raise(self):
+        step = {"target_condition_data": {"a": torch.zeros(2, 1), "b": torch.zeros(3, 1)}}
+        with pytest.raises(ValueError, match="disagree on their rows"):
+            _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))
+
     def test_target_states_are_not_passed_to_prediction(self):
         step = {"source_state": torch.randn(2, 4), "target_state": torch.randn(7, 4), "target_condition_data": {}}
         paired, _ = _pair_leaf(step, {"opt": torch.zeros(3, 1)}, torch.device("cpu"))

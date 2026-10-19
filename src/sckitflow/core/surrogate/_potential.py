@@ -14,16 +14,6 @@ from sckitflow.data._loader import EvalLoader
 __all__ = ["SurrogatePotential"]
 
 
-def _rows(container: Any) -> int | None:
-    """Leading dimension of a tensor or of the first tensor in a mapping, `None` when empty."""
-    if container is None:
-        return None
-    if isinstance(container, torch.Tensor):
-        return container.shape[0]
-    tensors = [v for v in get_tensor_dict_from_data(container).values() if v is not None]
-    return tensors[0].shape[0] if tensors else None
-
-
 def _one_group_row(groups: Any) -> dict[str, torch.Tensor]:
     """The single row standing for a leaf's group data, which is constant within a leaf."""
     rows = get_tensor_dict_from_data(groups)
@@ -58,8 +48,14 @@ def _pair_leaf(
     extra = {
         k: v for k, v in get_tensor_dict_from_data(step_data.get("target_condition_data")).items() if k not in optimized
     }
-    S = _rows(step_data.get("source_state"))
-    T = _rows(extra) if extra else None
+    source = step_data.get("source_state")
+    S = None if source is None else source.shape[0]
+    T = None
+    if extra:
+        counts = {k: v.shape[0] for k, v in extra.items()}
+        if len(set(counts.values())) > 1:
+            raise ValueError(f"Condition covariates disagree on their rows within a leaf: {counts}.")
+        T = next(iter(counts.values()))
     n = next(iter(cond_dict.values())).shape[0]
     groups = step_data.get("target_group_data")
     if groups is not None and T is None:

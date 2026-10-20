@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Added
 
+- A dataset split across files only needs each representation where the cells reading it are: the loaders route the files holding targets and those holding sources to separate scfit sources, so e.g. `source_rep_quad` can live only in the controls' file. A file missing a representation its cells need raises an error naming the file, the side and the schema field
 - `sckitflow.core.surrogate.SurrogatePotential`: a differentiable potential of continuous condition covariates through a trained inference method, averaged over the groups of its context data (`adata`), which it reads once per device onto the inference module's device. It takes a `readout` and a `potential`; `MeanSamplesReadoutConfig` and `SquaredErrorPotentialConfig` build the common ones
 - Basic tool, preprocessing and plotting functions
 - `docs/scripts/fit_cfm.py` trains a run from one YAML spec; install with the `scripts` extra

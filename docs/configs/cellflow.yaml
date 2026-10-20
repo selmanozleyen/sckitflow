@@ -15,7 +15,7 @@ data:
   groups: [cell_line]             # controls are drawn from the same cell line
   groups_reps:
     cell_line: cell_line          # adata.uns["cell_line"][name] -> embedding
-  split_by: split                 # written by the experiment beforehand, e.g. a splitter.combination
+  split_by: split                 # written by the experiment beforehand
 
 module:
   type: velocity_field.mlp

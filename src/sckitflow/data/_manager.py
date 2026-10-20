@@ -41,7 +41,7 @@ def _plain(dims: DataDimensions) -> dict[str, Any]:
     return {k: v for k, v in vars(dims).items() if k != "feature_names"}
 
 
-# The split column a `Splitter` writes by default -- only used to catch an adata that carries a split the
+# The conventional split column name -- only used to catch an adata that carries a split the
 # schema never declared (see `DataManager._resolve_split`).
 _DEFAULT_SPLIT_KEY = "split"
 
@@ -125,7 +125,7 @@ class DataManager:
     **One owner per question.** Anything the schema declares is declared once, here, not re-passed per call:
     :meth:`get_dataloaders` takes no ``split_by``, and the split has exactly one source -- a ``split_by``
     column it requires to be present. The split itself is an experiment's decision, made before the data
-    reaches a run (e.g. by a :mod:`~sckitflow.data.splitters` splitter writing the column). A declared column
+    reaches a run (e.g. by a pipeline step writing the column). A declared column
     that is missing raises, and an *undeclared* ``"split"`` column raises rather than
     quietly training on held-out observations. Only inference-time overrides are per call
     (:meth:`get_eval_loader`'s ``control_values_dict`` / ``matched_keys``), because predicting over
@@ -487,7 +487,7 @@ class DataManager:
                 if self._split_by not in adata.obs.columns:
                     raise KeyError(
                         f"split_by={self._split_by!r} was declared on this DataManager but is not in the .obs of "
-                        f"AnnData {i} (columns: {list(adata.obs.columns)}). Run the splitter that produces it first."
+                        f"AnnData {i} (columns: {list(adata.obs.columns)}). Write the split column first."
                     )
             return adatas, self._split_by
         # Neither declared: one loader over everything. Guard the previous default (`split_by="split"`), so
@@ -752,7 +752,7 @@ class DataManagerConfig(Component):
 
     split_by: str | None = None
     """The `.obs` column holding the split labels, written before the data reaches a run (e.g. by a
-    :mod:`~sckitflow.data.splitters` splitter). Its presence is checked when loaders are built. ``None``
+    pipeline step). Its presence is checked when loaders are built. ``None``
     means there is no split and every non-control group trains."""
 
     condition_state_key: str | None = None

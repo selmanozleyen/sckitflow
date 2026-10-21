@@ -80,7 +80,7 @@ _SOURCE_LIN_TERM = "source_coupling_lin"
 _SOURCE_QUAD_TERM = "source_coupling_quad"
 
 
-def _state_loc(sample_rep: str | None) -> str:
+def _get_loc(sample_rep: str | None) -> str:
     """The scfit rep loc for the state representation: ``.X`` (``None``) or an ``obsm`` key."""
     return "X" if sample_rep is None else f"obsm/{sample_rep}"
 
@@ -145,7 +145,7 @@ def _get_coupling_locs(coupling_schema: CouplingDataSchema | None) -> tuple[dict
 
     # Linear term, both source and target
     if coupling_schema.use_linear:
-        loc_lin = _state_loc(coupling_schema.rep_lin)
+        loc_lin = _get_loc(coupling_schema.rep_lin)
         source_coupling_locs[loc_lin] = _SOURCE_LIN_TERM
         target_coupling_locs[loc_lin] = _TARGET_LIN_TERM
 
@@ -225,9 +225,9 @@ class _StepDataBridge:
         self._device = device
         self._device_type = device.split(":")[0] if device is not None else None
         self._assert_device = assert_device
-        self._state_loc = _state_loc(target_sample_rep)
+        self._starget_state_loc = _get_loc(target_sample_rep)
         # The sources' state: their own rep when the schema gives them one, else the targets'.
-        self._source_state_loc = _state_loc(source_sample_rep) if source_sample_rep is not None else self._state_loc
+        self._source_state_loc = _get_loc(source_sample_rep) if source_sample_rep is not None else self._starget_state_loc
         # group_by = group columns + categorical condition columns (continuous covs are streamed reps).
         self._group_cols: tuple[str, ...] = (*groups_schema.groups, *condition_schema.all_condition_cols)
         # Fixed matching (`matched_keys`) rides as one derived column shared by a target group and the source
@@ -245,7 +245,7 @@ class _StepDataBridge:
         # Which schema field asks for each rep, so a missing one is reported by the name the user set.
         self._rep_fields: dict[str, list[str]] = {}
         for loc, field in [
-            (self._state_loc, "target_sample_rep"),
+            (self._starget_state_loc, "target_sample_rep"),
             (self._source_state_loc, "source_sample_rep" if source_sample_rep is not None else "target_sample_rep"),
             *((loc, "continuous_conditions") for loc in self._cond_cont_locs),
             *((loc, "response covariates") for loc in self._resp_cont_locs),
@@ -409,7 +409,7 @@ class _StepDataBridge:
         batch, in ``target_condition_data``, and the source is row-aligned to the same count, ``n_obs``. ``has_state=False`` omits the target state (metadata-only prediction), and
         ``n_rows`` is the caller's row count for that case -- see :meth:`_batch_size`.
         """
-        target_state = _as_tensor(batch[_PRIMARY][self._state_loc]) if has_state else None
+        target_state = _as_tensor(batch[_PRIMARY][self._starget_state_loc]) if has_state else None
         source_state = _as_tensor(batch[_CONTROL][self._source_state_loc]) if _CONTROL in batch else None
         batch_size = self._batch_size(batch, target_state, n_rows)
         source_state = self._align_source(source_state, batch_size)
@@ -664,7 +664,7 @@ class Loader(_StepDataBridge):
 
         # Merge representations to avoid duplicates.
         primary_reps = _merge_reps(
-            (self._state_loc,),
+            (self._starget_state_loc,),
             self._cond_cont_locs,
             self._resp_cont_locs,
             self._target_coupling_locs,
@@ -813,7 +813,7 @@ class EvalLoader(_StepDataBridge):
         )
         self._has_state = require_target_state
         self._max_per_group = max_per_group
-        state_reps = (self._state_loc,) if require_target_state else ()
+        state_reps = (self._starget_state_loc,) if require_target_state else ()
         # No coupling reps: this loader never streams coupling (see class docstring).
         primary_reps = _merge_reps(
             state_reps,

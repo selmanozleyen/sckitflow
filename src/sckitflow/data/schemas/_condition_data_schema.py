@@ -2,12 +2,9 @@ from collections.abc import Collection, Mapping
 from typing import Any
 
 import pandas as pd
-from anndata import AnnData
 
 from sckitflow._utils import check_sequence_query_against_reference
-from sckitflow.data._mixins import BatchMixin
 from sckitflow.data.containers._categorical import CategoricalData
-from sckitflow.data.containers._mixed_type import MixedTypeData
 from sckitflow.data.schemas._base_schema import StrictDataSchema
 
 __all__ = ["ConditionDataSchema"]
@@ -176,35 +173,6 @@ class ConditionDataSchema(StrictDataSchema):
             allow_missing_from_reference=False,
         )
 
-    def _verify_categorical_covariates(self, adata: AnnData) -> None:
-        """Verifies the categorical condition covariates setting on the input `AnnData`.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        for condition_realm, condition_rep in self._categorical_reps.items():
-            condition_cols = self._categorical_conditions[condition_realm]
-            for col in condition_cols:
-                self._check_key_found_in_adata_field(adata, col, "obs")
-            self._check_key_found_in_adata_field(adata, condition_rep, "uns")
-
-    def _verify_continuous_covariates(self, adata: AnnData) -> None:
-        """Verifies the continuous condition covariates on the input `AnnData`.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        for covariate in self._continuous_conditions:
-            self._check_key_found_in_adata_field(adata, covariate, "obsm")
-
-    def _get_categorical_covariates(self, adata: AnnData) -> CategoricalData | None:
-        """Retrieves the categorical condition covariates from the input `AnnData`.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        return self.categorical_data(adata.obs, adata.uns)
-
     def categorical_data(self, obs: pd.DataFrame, uns: Mapping[str, Any]) -> CategoricalData | None:
         """The categorical condition covariates of ``obs`` rows, looked up in the ``uns`` tables.
 
@@ -219,39 +187,6 @@ class ConditionDataSchema(StrictDataSchema):
             repr_dict=repr_dict,
             categorical_reps_map=self.categorical_reps_map,
         )
-
-    def _get_continuous_covariates(self, adata: AnnData) -> BatchMixin | None:
-        """Retrieves the continuous condition covariates from the input `AnnData`.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        if not self.has_continuous_covariates:
-            return None
-        return BatchMixin(
-            {covariate_name: adata.obsm[covariate_name] for covariate_name in self._continuous_conditions}
-        )
-
-    def _verify_schema(self, adata: AnnData) -> None:
-        """Verifies that input data satisfies the requirements defined by the schema.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        self._verify_categorical_covariates(adata)
-        self._verify_continuous_covariates(adata)
-
-    def _get_data(self, adata: AnnData) -> MixedTypeData | None:
-        """Retrieves the schema-resolved condition information from the input data.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        categorical_covariates = self._get_categorical_covariates(adata)
-        continuous_covariates = self._get_continuous_covariates(adata)
-        if categorical_covariates is None and continuous_covariates is None:
-            return None
-        return MixedTypeData(categorical_covariates=categorical_covariates, continuous_covariates=continuous_covariates)
 
     @property
     def all_condition_cols(self) -> tuple[str]:

@@ -111,7 +111,8 @@ def test_a_side_quad_needs_one_width_across_its_files():
     other = pert.copy()
     other.obsm["X_tgt"] = np.ones((other.n_obs, 5), "float32")
     with pytest.raises(
-        ValueError, match=r"target_quad_dim differs across the AnnData holding targets: AnnData 1: 3, AnnData 2: 5"
+        ValueError,
+        match=r"`target_rep_quad` \(X_tgt\) has different widths across the AnnData reading it: AnnData 1: 3, AnnData 2: 5",
     ):
         _manager().get_data_dimensionalities([ctrl, pert, other])
 
@@ -129,5 +130,5 @@ def test_the_linear_term_width_is_checked_with_the_dimensions():
     ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
     pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
     dm = DataManagerConfig(**{**_manager().config.model_dump(), "rep_lin": "K", "use_linear": True}).build()
-    with pytest.raises(ValueError, match=r"linear coupling term \(`rep_lin`\) has different widths"):
+    with pytest.raises(ValueError, match=r"`rep_lin` \(K\) has different widths.*`use_linear=False`"):
         dm.get_data_dimensionalities([ctrl, pert])

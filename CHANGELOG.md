@@ -30,3 +30,8 @@ and this project adheres to [Semantic Versioning][].
 
 - Flow method configs take only configs: live probability paths and raw sampler callables are rejected
 - Time and noise samplers are separate families (`TimeSamplerConfig`, `NoiseSamplerConfig`)
+
+### Fixed
+
+- Gromov-Wasserstein and fused Gromov-Wasserstein couplings default to `scale_cost="mean"`, like the linear ones: unscaled float32 costs made entropic GW underflow to an all-zero plan. A batch whose plan is all zero still falls back to random pairs, but now warns (`RuntimeWarning`) instead of only logging
+- Pure Gromov-Wasserstein matching (`use_linear=False`) no longer fails on the missing linear term ([#145](https://github.com/theislab/sckitflow/issues/145))

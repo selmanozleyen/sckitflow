@@ -18,7 +18,8 @@ from sckitflow.core.coupling._coupling import _sanitize_coupling_matrix, _scale_
 
 # The coupling functions take their settings without defaults; the configs hold those.
 LIN = {"num_iter_max": None, "reg": 0.5, "reg_m": 1.0}
-QUAD = {"scale_cost": 1.0, "epsilon": 1.0, "max_iter": 1000, "tol": 1e-9, "alpha": 0.5}
+# loose tolerances: at POT's defaults (inner stopThr=1e-9) float32 never converges and every solve hits the caps
+QUAD = {"scale_cost": 1.0, "epsilon": 1.0, "max_iter": 100, "tol": 1e-5, "alpha": 0.5, "inner_stop_thr": 1e-5}
 
 
 @pytest.fixture
@@ -277,6 +278,13 @@ def test_sampled_pairs_follow_the_plan(plan):
     src, tgt = _select_indices(plan, 40000, generator=torch.Generator().manual_seed(0))
     counts = torch.zeros_like(plan).index_put_((src, tgt), torch.ones_like(src, dtype=plan.dtype), accumulate=True)
     torch.testing.assert_close(counts / counts.sum(), plan, atol=0.008, rtol=0)
+
+
+def test_sampling_takes_plans_past_multinomials_limit():
+    plan = torch.zeros(4097, 4097)  # 2**24 + 8193 entries
+    plan[4096, 4095] = 1.0
+    src, tgt = _select_indices(plan, 5, generator=torch.Generator().manual_seed(0))
+    assert src.tolist() == [4096] * 5 and tgt.tolist() == [4095] * 5
 
 
 def _match_on(device):

@@ -283,11 +283,11 @@ def test_match_unchanged_without_source_coupling():
         raise AssertionError("match_fn must not be called")
 
     data = new_step_data(target_coupling_lin=torch.zeros(3, 2))
-    assert Matcher(match_fn).match(data, generator=torch.Generator()) is data
+    assert Matcher(match_fn).match(data, generator=torch.Generator()) == (data, {})
 
 
 def test_match_unchanged_when_indices_none(coupled):
-    assert Matcher(lambda **_: (None, None)).match(coupled, generator=torch.Generator()) is coupled
+    assert Matcher(lambda **_: (None, None)).match(coupled, generator=torch.Generator()) == (coupled, {})
 
 
 def test_match_subscripts_and_passes_generator(coupled):
@@ -298,7 +298,8 @@ def test_match_subscripts_and_passes_generator(coupled):
         seen.update(source_lin=source_lin, target_lin=target_lin, generator=generator)
         return torch.tensor([2, 0]), torch.tensor([1, 1])
 
-    out = Matcher(match_fn).match(coupled, generator=generator)
+    out, metrics = Matcher(match_fn).match(coupled, generator=generator)
+    assert metrics == {}  # this match_fn returns no plan
     assert seen["generator"] is generator
     assert seen["source_lin"] is coupled["source_coupling_lin"]
     assert seen["target_lin"] is coupled["target_coupling_lin"]
@@ -340,3 +341,13 @@ def test_matched_training_method_forwards_placement(module, dims, coupled):
     matched = MatchedTrainingMethod(inner, Matcher(lambda **_: (None, None)))
     assert matched.dtype is torch.float64
     assert matched.device.type == "cpu"
+
+
+@pytest.mark.parametrize(("plan", "fallback"), [(torch.full((3, 3), 1 / 9), 0.0), (torch.zeros(3, 3), 1.0)])
+def test_match_logs_when_the_plan_falls_back(coupled, plan, fallback):
+    def match_fn(*, source_lin, target_lin, source_quad, target_quad, generator, return_matrix=False):
+        idxs = torch.tensor([0, 1]), torch.tensor([1, 0])
+        return (*idxs, plan) if return_matrix else idxs
+
+    _, metrics = Matcher(match_fn).match(coupled, generator=torch.Generator())
+    assert isinstance(metrics["coupling_fallback"], torch.Tensor) and metrics["coupling_fallback"].item() == fallback

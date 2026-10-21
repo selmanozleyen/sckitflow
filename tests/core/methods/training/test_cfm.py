@@ -197,7 +197,9 @@ def test_placement_tracks_the_module(dims):
 def test_compute_loss_returns_scalar_and_metrics(make_cfm, step_data):
     loss, meta = make_cfm().compute_loss(step_data, generator=gen())
     assert loss.ndim == 0
-    assert meta["loss"] == pytest.approx(loss.item())
+    assert not meta["loss"].requires_grad and meta["loss"].item() == pytest.approx(
+        loss.item()
+    )  # a tensor: no sync per step
 
 
 def test_compute_loss_calls_module_with_t_xt_cond_source(make_cfm, step_data, dummy_module):

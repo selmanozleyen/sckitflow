@@ -47,6 +47,9 @@ class MatchFn(Protocol):
         generator: torch.Generator,
     ) -> MatchFnOut: ...
 
+    # The built-in couplings also take ``return_matrix=True`` and then return the plan third; `Matcher` uses it to
+    # log ``coupling_fallback``.
+
 
 class SamplerFn(Protocol):
     """Samples a tensor of `shape` from `generator`, on the given device and dtype.

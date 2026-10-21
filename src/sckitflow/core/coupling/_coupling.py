@@ -33,9 +33,18 @@ def _sanitize_coupling_matrix(
         A numerically stable coupling matrix.
     """
     # Branchless, so the check stays on device: a non-finite or all-zero plan falls back to uniform, and the batch
-    # is then matched at random. Scale the cost (`scale_cost='mean'`) or raise `epsilon` if that happens.
-    ok = torch.isfinite(coupling_matrix).all() & (coupling_matrix.sum().abs() >= eps)
-    return torch.where(ok, coupling_matrix, torch.full_like(coupling_matrix, 1 / coupling_matrix.numel()))
+    # is then matched at random (logged as `coupling_fallback`). Scale the cost (`scale_cost='mean'`) or raise
+    # `epsilon` if that happens.
+    return torch.where(
+        degenerate_plan(coupling_matrix, eps),
+        torch.full_like(coupling_matrix, 1 / coupling_matrix.numel()),
+        coupling_matrix,
+    )
+
+
+def degenerate_plan(coupling_matrix: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Whether a plan is non-finite or all zero, so matching falls back to random pairs; a 0-d bool tensor on device."""
+    return ~torch.isfinite(coupling_matrix).all() | (coupling_matrix.sum().abs() < eps)
 
 
 def _scale_distance_matrix(
@@ -111,9 +120,11 @@ def _select_indices(
     # checking for numerical errors in the coupling matrix
     coupling_matrix = _sanitize_coupling_matrix(coupling_matrix=coupling_matrix)
 
-    # sampling indices, on the plan's device; `multinomial` normalizes the weights itself
-    # ponytail: `multinomial` takes at most 2**24 categories (a 4096 x 4096 plan); sample rows then columns past that
-    choices = torch.multinomial(coupling_matrix.flatten(), size, replacement=True, generator=generator)
+    # inverse CDF over the flattened plan, as ott-jax's `sample_joint`: on the plan's device, any plan size
+    # (`torch.multinomial` stops at 2**24 categories, a 4096 x 4096 plan)
+    cdf = coupling_matrix.flatten().cumsum(0)
+    u = torch.rand(size, generator=generator, device=cdf.device, dtype=cdf.dtype) * cdf[-1]
+    choices = torch.searchsorted(cdf, u, right=True).clamp_(max=cdf.numel() - 1)
     return choices // coupling_matrix.shape[1], choices % coupling_matrix.shape[1]
 
 
@@ -124,7 +135,8 @@ def independent_coupling(
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
     generator: torch.Generator,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    return_matrix: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices.
 
     :param source: A tensor of values containing the data coming from the source distribution.
@@ -154,10 +166,15 @@ def independent_coupling(
         raise ValueError("Independent coupling requires a source and a target representation, None found.")
     n = min(source.shape[0], target.shape[0])
     device = generator.device
-    return (
+    idxs = (
         torch.randperm(source.shape[0], generator=generator, device=device)[:n],
         torch.randperm(target.shape[0], generator=generator, device=device)[:n],
     )
+    if return_matrix:  # the plan it samples from: uniform
+        return *idxs, torch.full(
+            (source.shape[0], target.shape[0]), 1 / (source.shape[0] * target.shape[0]), device=device
+        )
+    return idxs
 
 
 @overload

@@ -85,7 +85,7 @@ class CFMTraining(AbstractFlowMethod):
         # ---- Predict velocity field and compute loss ----
         vt = self.module(t, xt, condition_dict=cond, source=source)
         loss = torch.nn.functional.mse_loss(vt, ut)
-        return loss, {"loss": loss.item()}
+        return loss, {"loss": loss.detach()}  # a tensor: Lightning reads it back per logging interval, not per step
 
 
 @component("training_method.cfm", builds=CFMTraining)

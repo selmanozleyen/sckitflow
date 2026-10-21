@@ -59,7 +59,7 @@ def _spec(*, generate_from_noise: bool = True, module: dict | None = None) -> Mo
         training=MatchedTrainingConfig(
             method=CFMTrainingConfig(generate_from_noise=generate_from_noise),
             # scaled costs: unscaled float32 squared distances make entropic GW underflow to a degenerate plan
-            coupling=GromovWassersteinCouplingConfig(scale_cost="mean", epsilon=0.1),
+            coupling=GromovWassersteinCouplingConfig(scale_cost="mean", epsilon=0.1, inner_stop_thr=1e-5),
         ),
         inference=ODEInferenceConfig(generate_from_noise=generate_from_noise, n_samples=1, n_steps=3),
     )

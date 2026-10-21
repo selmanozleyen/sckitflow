@@ -25,6 +25,9 @@ class DataDimensions:
     source_quad_dim: int | None
     target_lin_dim: int | None
     target_quad_dim: int | None
+    source_state_dim: int | None = None
+    """The width of the sources' own state rep (``DataManagerConfig.source_sample_rep``). ``None``: the sources share
+    the targets' state, ``state_dim``."""
 
     @classmethod
     def _get_dims_from_continuous_data(cls, data: BatchMixin) -> dict[str, int]:
@@ -73,7 +76,7 @@ class DataDimensions:
 
     @classmethod
     def init_from_distribution_data(cls, data: DistributionData, feature_names: pd.Index) -> "DataDimensions":
-        state_dim = data.state_data.X.shape[-1]
+        state_dim = data.state_data.X.shape[-1] if data.state_data is not None else None
 
         # Helper closures to handle None-checks cleanly
         def get_cat(container):

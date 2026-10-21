@@ -31,7 +31,7 @@ def _split_files() -> tuple[AnnData, AnnData]:
 
 def _manager():
     return DataManagerConfig(
-        sample_rep="X_pca",
+        target_sample_rep="X_pca",
         categorical_conditions={"drug": ("drug",)},
         categorical_reps={"drug": "drug"},
         control_values_dict={"drug": "control"},
@@ -81,12 +81,12 @@ def test_the_linear_term_needs_one_width():
 
 
 def test_the_state_may_differ_in_width_across_sides():
-    # GENOT generates targets from noise conditioned on an encoded source, so the sides may live in different
+    # A method generating from noise conditioned on an encoded source (e.g. GENOT) lets the sides live in different
     # spaces; whether the state must match is the method's call, not the loader's.
     ctrl, pert = _split_files()
     ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
     pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
-    dm = DataManagerConfig(**{**_manager().config.model_dump(), "sample_rep": "K"}).build()
+    dm = DataManagerConfig(**{**_manager().config.model_dump(), "target_sample_rep": "K"}).build()
     batch = next(iter(dm.get_dataloaders([ctrl, pert], batch_size=8)["train"]))
     assert batch["source_state"].shape[-1] == 4 and batch["target_state"].shape[-1] == 6
 
@@ -114,3 +114,20 @@ def test_a_side_quad_needs_one_width_across_its_files():
         ValueError, match=r"target_quad_dim differs across the AnnData holding targets: AnnData 1: 3, AnnData 2: 5"
     ):
         _manager().get_data_dimensionalities([ctrl, pert, other])
+
+
+def test_the_same_width_with_other_genes_is_refused_not_read_as_another_space():
+    ctrl, pert = _split_files()
+    ctrl.var_names = list(reversed(ctrl.var_names))  # same genes, other order: misaligned, not another space
+    dm = DataManagerConfig(**{**_manager().config.model_dump(), "target_sample_rep": None, "use_linear": False}).build()
+    with pytest.raises(ValueError, match=r"the same width but different feature names.*`source_sample_rep`"):
+        dm.get_data_dimensionalities([ctrl, pert])
+
+
+def test_the_linear_term_width_is_checked_with_the_dimensions():
+    ctrl, pert = _split_files()
+    ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
+    pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
+    dm = DataManagerConfig(**{**_manager().config.model_dump(), "rep_lin": "K", "use_linear": True}).build()
+    with pytest.raises(ValueError, match=r"linear coupling term \(`rep_lin`\) has different widths"):
+        dm.get_data_dimensionalities([ctrl, pert])

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning][].
 
 ### Changed
 
+- `DataManager.get_data_dimensionalities` sizes each representation from its shape in the files whose cells read it, and the condition and group encodings by encoding one group the way the loaders do, so the dimensions and the batches come from one code path. The in-memory containers that only fed the dimensions (`DistributionData`, `StateData`, `MixedTypeData`, `CouplingData`), `DataManager.get_distribution_data` and the schemas' `get_data` are removed
+- `DataManagerConfig.condition_state_key` and `target_categorical_covs_dict` are removed: only the dimensions honoured them, never the loaders, so a model sized with them trained on differently shaped batches
+
 - `DataManagerConfig.sample_rep` is renamed `target_sample_rep`, next to the new `source_sample_rep`; the loaders' `sample_rep` argument likewise
 
 - `RunConfig` / `Run` / `save_run` / `load_run` are replaced by `ModelConfig` / `Model` (the data schema, module, training and inference methods) with `Model.save_pretrained` / `Model.from_pretrained` in the Hugging Face Hub layout of `scfit.pretrained` (`config.json` plus `module/model.safetensors`); `from_pretrained` also takes a Hub repo id. How a training run goes (optimizer, seeds, batch size, steps) is the experiment's: `FlowDataModuleConfig` and `OptimizerConfig` are removed. A model reads back under the package versions that saved it

@@ -31,7 +31,7 @@ def _split_files() -> tuple[AnnData, AnnData]:
 
 def _manager():
     return DataManagerConfig(
-        sample_rep="X_pca",
+        target_sample_rep="X_pca",
         categorical_conditions={"drug": ("drug",)},
         categorical_reps={"drug": "drug"},
         control_values_dict={"drug": "control"},
@@ -86,7 +86,7 @@ def test_the_state_may_differ_in_width_across_sides():
     ctrl, pert = _split_files()
     ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
     pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
-    dm = DataManagerConfig(**{**_manager().config.model_dump(), "sample_rep": "K"}).build()
+    dm = DataManagerConfig(**{**_manager().config.model_dump(), "target_sample_rep": "K"}).build()
     batch = next(iter(dm.get_dataloaders([ctrl, pert], batch_size=8)["train"]))
     assert batch["source_state"].shape[-1] == 4 and batch["target_state"].shape[-1] == 6
 
@@ -119,7 +119,7 @@ def test_a_side_quad_needs_one_width_across_its_files():
 def test_the_same_width_with_other_genes_is_refused_not_read_as_another_space():
     ctrl, pert = _split_files()
     ctrl.var_names = list(reversed(ctrl.var_names))  # same genes, other order: misaligned, not another space
-    dm = DataManagerConfig(**{**_manager().config.model_dump(), "sample_rep": None, "use_linear": False}).build()
+    dm = DataManagerConfig(**{**_manager().config.model_dump(), "target_sample_rep": None, "use_linear": False}).build()
     with pytest.raises(ValueError, match=r"the same width but different feature names.*`source_sample_rep`"):
         dm.get_data_dimensionalities([ctrl, pert])
 

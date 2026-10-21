@@ -113,7 +113,7 @@ def mean_mse_surrogate(inferer, ystar, datamodule, adata, **kwargs):
 def build_datamodule(
     adata,
     *,
-    sample_rep=None,
+    target_sample_rep=None,
     categorical_conditions=None,
     categorical_reps=None,
     continuous_conditions=None,
@@ -124,7 +124,7 @@ def build_datamodule(
     batch_size=64,
 ) -> FlowDataModule:
     config = DataManagerConfig(
-        sample_rep=sample_rep,
+        target_sample_rep=target_sample_rep,
         categorical_conditions=categorical_conditions,
         categorical_reps=categorical_reps,
         continuous_conditions=continuous_conditions,

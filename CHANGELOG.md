@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning][].
 
 ### Changed
 
+- `DataManagerConfig.sample_rep` is renamed `target_sample_rep`, next to the new `source_sample_rep`; the loaders' `sample_rep` argument likewise. A config still using `sample_rep` is refused with an error naming the new field
+
 - `RunConfig` / `Run` / `save_run` / `load_run` are replaced by `ModelConfig` / `Model` (the data schema, module, training and inference methods) with `Model.save_pretrained` / `Model.from_pretrained` in the Hugging Face Hub layout of `scfit.pretrained` (`config.json` plus `module/model.safetensors`); `from_pretrained` also takes a Hub repo id. How a training run goes (optimizer, seeds, batch size, steps) is the experiment's: `FlowDataModuleConfig` and `OptimizerConfig` are removed. A model reads back under the package versions that saved it
 - `FlowDataModule` holds its `adata` for its whole life: `attach`, `set_predict_data`, `predict_dataloader` and its `control_adata` are removed. `load_from_checkpoint(path, adata)` builds it with the data, and `predict_adata` builds its eval loader per call.
 - Every `AnnData` argument of the data stack (`DataManager`, `FlowDataModule`, the loaders, `predict_adata`) also takes a list of them, read as one dataset; they must agree on dims and feature names, and the `.uns` tables the schema reads are merged across them (an entry in several must match). Requires scfit 0.0.11

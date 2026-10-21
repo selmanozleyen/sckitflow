@@ -7,7 +7,7 @@ everything lives; nothing is inferred from the data.
 
 | What | Where | Schema field | Requirement |
 | --- | --- | --- | --- |
-| State | `.X`, or `.obsm[sample_rep]` | `sample_rep` | One float matrix, the same width for every cell. |
+| State | `.X`, or `.obsm[target_sample_rep]` | `target_sample_rep` | One float matrix, the same width for every cell. |
 | Condition | `.obs[col]` | `categorical_conditions` | Per condition level, one or more columns. Several columns form a set, e.g. `drug: [drug1, drug2]` for combinations. |
 | Condition embeddings | `.uns[rep]` | `categorical_reps` | A dict from every value in those columns to a vector, `(d,)` or `(1, d)`, all of one width. Include the control value when it fills an unused slot, e.g. `drug2 == "control"` for a single drug. |
 | Continuous condition covariates | `.obsm[key]` | `continuous_conditions` | Per-cell arrays. |
@@ -33,7 +33,7 @@ times the state width. Prediction reads them per group.
 
 Wherever an `AnnData` is taken, a list of them is too, read as one dataset: their `.obs` are stacked in list
 order with categories unioned, and the controls of any of them can serve the targets of any other. Every
-file reading the state (`sample_rep`) must agree on its width and feature names, and a split column (`split_by`) must be in each. Each
+file reading the state (`target_sample_rep`) must agree on its width and feature names, and a split column (`split_by`) must be in each. Each
 `.uns` table the schema reads must be in at least one of them: its entries are merged, an entry in several
 must be the same in each, and every value looked up must have one. A list of zarr stores is opened lazily with `scfit.data.open_source(paths,
 keys=..., cols=..., uns=...)`, listing every store explicitly. A store holding only controls is just one more
@@ -41,7 +41,7 @@ entry. A store only needs the representations of the cells it holds: the target 
 targets and the source side the stores holding sources, so e.g. `source_rep_quad` can live only with the controls. The
 sources may even have their own state rep, e.g. ATAC controls flowing into RNA targets: name it with
 `source_sample_rep` (it cannot be told from the data, since two reps may have the same width). The files holding
-sources then need only that rep, the files holding targets only `sample_rep`. A flow cannot start from it, so it
+sources then need only that rep, the files holding targets only `target_sample_rep`. A flow cannot start from it, so it
 needs `generate_from_noise=True` and a source encoder (`source_encoder_mlp_kwargs`), as GENOT does; the matching
 needs a shared `rep_lin` or the quadratic terms alone (`use_linear=False`). A saved model reloads with data
 holding target cells, which fix the targets' state.

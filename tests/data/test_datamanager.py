@@ -675,6 +675,6 @@ class TestSeveralAnnData:
         parts[1].var_names = [f"other_{i}" for i in range(parts[1].n_vars)]
         with pytest.raises(
             ValueError,
-            match=r"AnnData 1 and AnnData 0 differ in their state \(`sample_rep`\): the same width but different feature names",
+            match=r"AnnData 1 and AnnData 0 differ in their state \(`target_sample_rep`\): the same width but different feature names",
         ):
             _make_manager().get_data_dimensionalities(parts)

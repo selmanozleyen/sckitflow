@@ -83,7 +83,7 @@ splitter:
 # -----------------------------------------------------------------------------
 # DataManager (`DataManagerConfig`)
 #
-#   sample_rep             .obsm key used as the sample representation (e.g. "X_pca")
+#   target_sample_rep             .obsm key used as the sample representation (e.g. "X_pca")
 #   conditions             obs columns defining the conditional variables
 #   conditions_reps        per-condition representation overrides
 #   conditions_covariates  per-condition extra covariate columns
@@ -100,7 +100,7 @@ splitter:
 #                                 linear-vs-quadratic representation flags
 # -----------------------------------------------------------------------------
 datamanager:
-  sample_rep: "X_pca"
+  target_sample_rep: "X_pca"
   categorical_conditions: {}
   categorical_reps: {}
   continuous_conditions: []
@@ -131,8 +131,8 @@ datamodule:
 # -----------------------------------------------------------------------------
 # Transform (`get_transform_cfg`)
 #
-# Applies a preprocessing transform to `datamanager.sample_rep` (or `.X` when
-# `sample_rep is null`). Fitted **on the training split only** to avoid leakage,
+# Applies a preprocessing transform to `datamanager.target_sample_rep` (or `.X` when
+# `target_sample_rep is null`). Fitted **on the training split only** to avoid leakage,
 # then applied to the full dataset. The pre-transform matrix is preserved under
 # `adata.obsm["original_rep"]`. The fitted transform is persisted to
 # `save.run_dir` as `transform.json` + `transform_params.npz`.

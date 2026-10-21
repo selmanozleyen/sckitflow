@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from anndata import AnnData
+from pydantic import model_validator
 from scfit.data import obs_columns
 from scfit.registry import Component, component
 
@@ -115,7 +116,7 @@ class DataManager:
     """The schema: everything sckitflow needs to know about an ``AnnData`` before it can read one.
 
     Its job is to answer, from configuration alone, three questions a batch cannot answer for itself --
-    **what** each observation's state and covariates are (``sample_rep``, ``conditions``, ``groups``, the
+    **what** each observation's state and covariates are (``target_sample_rep`` / ``source_sample_rep``, ``conditions``, ``groups``, the
     ``*_covs``), **which observations flow into which** (``control_values_dict``, or ``matched_keys`` for fixed
     pairs), and **which observations are held out** (the ``split_by`` column). The loaders then read only what
     the schema declared.
@@ -152,7 +153,7 @@ class DataManager:
 
         self._split_by = config.split_by
 
-        self._state_data_schema = StateDataSchema(sample_rep=config.sample_rep)
+        self._state_data_schema = StateDataSchema(sample_rep=config.target_sample_rep)
         self._condition_data_schema = ConditionDataSchema(
             categorical_conditions=config.categorical_conditions,
             categorical_reps=config.categorical_reps,
@@ -190,7 +191,7 @@ class DataManager:
         return {
             "condition_schema": self._condition_data_schema,
             "groups_schema": self._groups_data_schema,
-            "sample_rep": self._state_data_schema.sample_rep,
+            "target_sample_rep": self._state_data_schema.sample_rep,
             "source_sample_rep": self.config.source_sample_rep,
             "response_covs": self._target_data_schema.continuous_covs,
         }
@@ -327,7 +328,7 @@ class DataManager:
         """Registers the data dimensionalities from the input data according to the current schema.
 
         Several AnnData are read as one dataset (see :meth:`_parts`). Each reads only what its cells need: the
-        targets' state (``sample_rep``) and quadratic rep where the targets are, the sources' where the sources
+        targets' state (``target_sample_rep``) and quadratic rep where the targets are, the sources' where the sources
         are. Every file reading a rep must agree on its width (and the state on its feature names), and on every
         other dimension.
 
@@ -339,11 +340,11 @@ class DataManager:
         dims = [self._dims_of(a, sides=r) for a, r in zip(parts, roles, strict=True)]
         own_space = self.config.source_sample_rep is not None
 
-        # The targets' state space: one width and feature names in every file reading `sample_rep`.
+        # The targets' state space: one width and feature names in every file reading `target_sample_rep`.
         reading = [i for i, r in enumerate(roles) if r[1] or not own_space]
         if not reading:
             raise ValueError(
-                "None of the AnnData holds target cells, so the targets' state space (`sample_rep`) is unknown. "
+                "None of the AnnData holds target cells, so the targets' state space (`target_sample_rep`) is unknown. "
                 "Pass data holding target cells as well."
             )
         first = dims[reading[0]]
@@ -355,7 +356,7 @@ class DataManager:
             else:
                 continue
             raise ValueError(
-                f"AnnData {i} and AnnData {reading[0]} differ in their state (`sample_rep`): {diff}. The state is "
+                f"AnnData {i} and AnnData {reading[0]} differ in their state (`target_sample_rep`): {diff}. The state is "
                 "one space; align the files to it. If the sources have their own state on purpose, name it with "
                 "`source_sample_rep`."
             )
@@ -803,16 +804,25 @@ class DataManagerConfig(Component):
     What it expects of the ``AnnData``, and how controls are held, is described in ``docs/data_format.md``.
     """
 
-    sample_rep: str | None = None
-    """String identifier for the state representation. When provided, it should appear as key in
-    `.obsm` attribute of annotated data objects. Otherwise, the representation will fall back to
-    `.X`."""
+    @model_validator(mode="before")
+    @classmethod
+    def _renamed(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "sample_rep" in data:
+            raise ValueError(
+                "`sample_rep` was renamed `target_sample_rep` (the sources' own rep, if any, is `source_sample_rep`); "
+                "rename it in the config."
+            )
+        return data
+
+    target_sample_rep: str | None = None
+    """The ``obsm`` key of the targets' state representation, the space the flow lives in; ``None`` uses ``.X``.
+    The sources read it too unless they have their own (``source_sample_rep``)."""
 
     source_sample_rep: str | None = None
     """The ``obsm`` key of the sources' own state rep, e.g. ATAC controls flowing into RNA targets. The files holding
-    sources need only it, the files holding targets only ``sample_rep``; any width. A flow cannot start from it, so
+    sources need only it, the files holding targets only ``target_sample_rep``; any width. A flow cannot start from it, so
     it needs ``generate_from_noise=True`` and a source encoder (as GENOT). ``None``: the sources' state is
-    ``sample_rep`` too."""
+    ``target_sample_rep`` too."""
 
     categorical_conditions: dict[str, tuple[str, ...]] | None = None
     """Mapping from each condition level to the corresponding columns, used to initialize the

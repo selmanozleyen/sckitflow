@@ -2,6 +2,7 @@
 
 import logging
 
+import anndata as ad
 import lightning as pl
 import numpy as np
 import pytest
@@ -43,7 +44,7 @@ def _two_spaces(source_width: int = 4):
 def _spec(*, generate_from_noise: bool = True, module: dict | None = None) -> ModelConfig:
     return ModelConfig(
         data=DataManagerConfig(
-            sample_rep="X_rna",
+            target_sample_rep="X_rna",
             source_sample_rep="X_atac",
             categorical_conditions={"drug": ("drug",)},
             categorical_reps={"drug": "drug"},
@@ -116,3 +117,45 @@ def test_reloading_needs_target_cells(tmp_path):
     _spec().build([ctrl, pert]).save_pretrained(tmp_path)
     with pytest.raises(ValueError, match="None of the AnnData holds target cells"):
         Model.from_pretrained(tmp_path, ctrl)
+
+
+def test_each_side_has_its_own_width_under_one_key():
+    """The same obsm keys, holding a different width per side: state and quadratic term per side, a shared linear term."""
+    n, d0, d1, shared, b = 100, 23, 28, 14, 8
+    rng = np.random.default_rng(0)
+    x0, x1 = rng.normal(size=(n, d0)), rng.normal(size=(n, d1))
+    uns = {"source": {"control": np.array([1, 0]), "target": np.array([0, 1])}}
+    adata0 = ad.AnnData(
+        X=x0, obs={"source": "control"}, obsm={"X_rep": x0, "X_lin": x0[:, :shared], "X_quad": x0[:, shared:]}, uns=uns
+    )
+    adata1 = ad.AnnData(
+        X=x1, obs={"source": "target"}, obsm={"X_rep": x1, "X_lin": x1[:, :shared], "X_quad": x1[:, shared:]}, uns=uns
+    )
+    dm = DataManagerConfig(
+        categorical_conditions={"source": ["source"]},
+        categorical_reps={"source": "source"},
+        control_values_dict={"source": "control"},
+        target_sample_rep="X_rep",
+        source_sample_rep="X_rep",
+        rep_lin="X_lin",
+        source_rep_quad="X_quad",
+        target_rep_quad="X_quad",
+        use_linear=True,
+    ).build()
+
+    step_data = next(iter(dm.get_dataloaders([adata0, adata1], batch_size=b)["train"]))
+    assert step_data["source_state"].shape == (b, d0)
+    assert step_data["target_state"].shape == (b, d1)
+    assert step_data["source_coupling_lin"].shape == (b, shared)
+    assert step_data["target_coupling_lin"].shape == (b, shared)
+    assert step_data["source_coupling_quad"].shape == (b, d0 - shared)
+    assert step_data["target_coupling_quad"].shape == (b, d1 - shared)
+
+    dims = dm.get_data_dimensionalities([adata0, adata1])  # and a model can be built on it
+    assert (dims.state_dim, dims.source_state_dim) == (d1, d0)
+    assert (dims.source_quad_dim, dims.target_quad_dim, dims.source_lin_dim) == (d0 - shared, d1 - shared, shared)
+
+
+def test_the_old_name_is_refused_with_the_new_one():
+    with pytest.raises(ValueError, match="`sample_rep` was renamed `target_sample_rep`"):
+        DataManagerConfig(sample_rep="X_pca")

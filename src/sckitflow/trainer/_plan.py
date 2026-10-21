@@ -97,8 +97,8 @@ class TrainingPlan(pl.LightningModule):
         # `global_step` counts optimizer steps, so `batch_idx` tells apart the micro-batches of one step
         # under gradient accumulation and `global_rank` the ranks; Lightning restores both on resume.
         key = (TRAIN, self.global_rank, self.global_step, batch_idx)
-        generator, rng = generators(self.seed, *key, device=self.device)
-        loss, metrics = self.training_method.compute_loss(batch, generator=generator, rng=rng)
+        generator = generators(self.seed, *key, device=self.device)
+        loss, metrics = self.training_method.compute_loss(batch, generator=generator)
         self.log_dict(metrics, on_step=True, prog_bar=True)
         return loss
 
@@ -107,7 +107,7 @@ class TrainingPlan(pl.LightningModule):
         if self.inference_method is None or self.metrics is None:
             return
 
-        generator, _ = generators(self.seed, VALIDATE, dataloader_idx, batch_idx, device=self.device)
+        generator = generators(self.seed, VALIDATE, dataloader_idx, batch_idx, device=self.device)
         preds = self.inference_method.predict(batch, generator=generator, **self._predict_kwargs)
         # score every sample, not their mean: the metrics compare distributions, and a mean over samples shrinks one
         samples = getattr(preds, "raw_samples", None)
@@ -145,7 +145,7 @@ class TrainingPlan(pl.LightningModule):
         if self.inference_method is None:
             raise ValueError("this plan has no inference method: pass one to `TrainingPlan(...)`.")
         step_data, leaf = batch
-        generator, _ = generators(self.seed, PREDICT, dataloader_idx, batch_idx, device=self.device)
+        generator = generators(self.seed, PREDICT, dataloader_idx, batch_idx, device=self.device)
         preds = self.inference_method.predict(step_data, generator=generator, **self._predict_kwargs)
         return prediction_record(self.trainer.predict_dataloaders, step_data, leaf, preds)
 

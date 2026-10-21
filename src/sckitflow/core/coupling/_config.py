@@ -111,6 +111,8 @@ class _QuadraticCouplingConfig(CouplingConfig):
     epsilon: float = 1.0
     max_iter: int = 1000
     tol: float = 1e-9
+    inner_num_iter_max: int | None = None
+    inner_stop_thr: float | None = None
 
 
 @component("coupling.pot.gromov_wasserstein")

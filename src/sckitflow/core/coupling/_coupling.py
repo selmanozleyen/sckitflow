@@ -1,33 +1,27 @@
-import logging
-import warnings
 from functools import partial
 from typing import Literal, overload
 
-import numpy as np
 import ot as pot
 import torch
 
 from sckitflow.core._types import (
     CostFN,
     LinCouplingMethod,
-    NumpyArray,
     QuadCouplingMethod,
     ScaleMethod,
     TensorLike,
 )
 from sckitflow.core._utils import to_torch_tensor
 
-logger = logging.getLogger(__name__)
-
 
 def _sanitize_coupling_matrix(
-    coupling_matrix: NumpyArray,
+    coupling_matrix: torch.Tensor,
     eps: float = 1e-8,
-) -> NumpyArray:
+) -> torch.Tensor:
     """Checks a coupling matrix for numerical issues and applies safe fallbacks.
 
     :param coupling_matrix: Coupling matrix to be checked for numerical stability.
-    :type coupling_matrix: class:`jax.numpy.ndarray`
+    :type coupling_matrix: class:`torch.Tensor`
 
     :param eps: Threshold below which the sum of the coupling matrix is considered
         numerically zero.
@@ -35,26 +29,13 @@ def _sanitize_coupling_matrix(
 
     Returns
     -------
-    jax.numpy.ndarray
+    torch.Tensor
         A numerically stable coupling matrix.
     """
-    # Non-finite check (use NumPy for robustness with logging)
-    if not np.all(np.isfinite(coupling_matrix)):
-        msg = f"Non-finite values found in `coupling_matrix` {coupling_matrix=}\n"
-        logger.warning(msg)
-
-    # Degenerate sum → fallback to uniform. It keeps a long run going, but the batch is then matched at random,
-    # so it must not pass as a log line.
-    if np.abs(coupling_matrix.sum()) < eps:
-        warnings.warn(
-            "The optimal transport solver returned an all-zero plan, so this batch is matched uniformly at random. "
-            "Scale the cost (`scale_cost='mean'`) or raise `epsilon`.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        coupling_matrix = np.ones_like(coupling_matrix) / coupling_matrix.size
-
-    return coupling_matrix
+    # Branchless, so the check stays on device: a non-finite or all-zero plan falls back to uniform, and the batch
+    # is then matched at random. Scale the cost (`scale_cost='mean'`) or raise `epsilon` if that happens.
+    ok = torch.isfinite(coupling_matrix).all() & (coupling_matrix.sum().abs() >= eps)
+    return torch.where(ok, coupling_matrix, torch.full_like(coupling_matrix, 1 / coupling_matrix.numel()))
 
 
 def _scale_distance_matrix(
@@ -94,16 +75,13 @@ def _scale_distance_matrix(
         msg = f"Unknown scale_method: {scale_method}"
         raise ValueError(msg)
 
-    if denom == 0:
-        msg = "Scaling denominator is zero; cannot scale distance matrix."
-        raise ValueError(msg)
-
+    # a zero denominator is not checked, as that would sync with the host; the non-finite plan it gives falls back to uniform
     return distance_matrix / denom
 
 
 def _select_indices(
-    coupling_matrix: NumpyArray, size: int, *, rng: np.random.Generator
-) -> tuple[NumpyArray, NumpyArray]:
+    coupling_matrix: torch.Tensor, size: int, *, generator: torch.Generator
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Samples matching indices from a coupling matrix.
 
     Draws index pairs i.i.d. from the normalized coupling matrix, with replacement, and returns the
@@ -112,17 +90,17 @@ def _select_indices(
 
     :param coupling_matrix: Optimal transport coupling matrix encoding
         matching probabilities between source and target samples.
-    :type coupling_matrix: class:`numpy.ndarray`
+    :type coupling_matrix: class:`torch.Tensor`
 
     :param size: Number of index pairs to sample from the coupling matrix.
     :type size: int
 
-    :param rng: Generator the matched indices are drawn from.
-    :type rng: class:`numpy.random.Generator`
+    :param generator: Generator the matched indices are drawn from, on the inputs' device.
+    :type generator: class:`torch.Generator`
 
     Returns
     -------
-    tuple[numpy.ndarray, numpy.ndarray]
+    tuple[torch.Tensor, torch.Tensor]
         A tuple containing:
 
         - An array of sampled source indices.
@@ -133,18 +111,10 @@ def _select_indices(
     # checking for numerical errors in the coupling matrix
     coupling_matrix = _sanitize_coupling_matrix(coupling_matrix=coupling_matrix)
 
-    # retrieving coupling probabilities
-    coupling_probs = coupling_matrix.flatten()
-    coupling_probs = coupling_probs / coupling_probs.sum()
-    # sampling indices
-    choices = rng.choice(
-        coupling_matrix.shape[0] * coupling_matrix.shape[1],
-        p=coupling_probs,
-        size=size,
-        replace=True,
-    )
-    source_idxs, target_idxs = np.divmod(choices, coupling_matrix.shape[1])
-    return source_idxs, target_idxs
+    # sampling indices, on the plan's device; `multinomial` normalizes the weights itself
+    # ponytail: `multinomial` takes at most 2**24 categories (a 4096 x 4096 plan); sample rows then columns past that
+    choices = torch.multinomial(coupling_matrix.flatten(), size, replacement=True, generator=generator)
+    return choices // coupling_matrix.shape[1], choices % coupling_matrix.shape[1]
 
 
 def independent_coupling(
@@ -153,8 +123,8 @@ def independent_coupling(
     target_lin: TensorLike | None,
     source_quad: TensorLike | None = None,
     target_quad: TensorLike | None = None,
-    rng: np.random.Generator,
-) -> tuple[NumpyArray, NumpyArray]:
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices.
 
     :param source: A tensor of values containing the data coming from the source distribution.
@@ -163,12 +133,12 @@ def independent_coupling(
     :param target: A tensor of values containing the data coming from the target distribution.
     :type target: class:`TensorLike`
 
-    :param rng: Generator the permutations are drawn from.
-    :type rng: class:`numpy.random.Generator`
+    :param generator: Generator the permutations are drawn from.
+    :type generator: class:`torch.Generator`
 
     Returns
     -------
-    tuple[numpy.ndarray, numpy.ndarray]
+    tuple[torch.Tensor, torch.Tensor]
         A tuple containing:
 
         - An array of randomly permuted indices into the source tensor.
@@ -183,7 +153,11 @@ def independent_coupling(
     if source is None or target is None:
         raise ValueError("Independent coupling requires a source and a target representation, None found.")
     n = min(source.shape[0], target.shape[0])
-    return rng.permutation(source.shape[0])[:n], rng.permutation(target.shape[0])[:n]
+    device = generator.device
+    return (
+        torch.randperm(source.shape[0], generator=generator, device=device)[:n],
+        torch.randperm(target.shape[0], generator=generator, device=device)[:n],
+    )
 
 
 @overload
@@ -200,10 +174,10 @@ def ot_linear_coupling(
     num_iter_max: int | None,
     reg: float | None = None,
     reg_m: float | None = None,
-    rng: np.random.Generator,
+    generator: torch.Generator,
     m: float | None = None,
     stop_thr: float | None = None,
-) -> tuple[NumpyArray, NumpyArray]: ...
+) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 
 @overload
@@ -220,10 +194,10 @@ def ot_linear_coupling(
     num_iter_max: int | None,
     reg: float | None = None,
     reg_m: float | None = None,
-    rng: np.random.Generator,
+    generator: torch.Generator,
     m: float | None = None,
     stop_thr: float | None = None,
-) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 
 
 def ot_linear_coupling(
@@ -239,10 +213,10 @@ def ot_linear_coupling(
     num_iter_max: int | None,
     reg: float | None = None,
     reg_m: float | None = None,
-    rng: np.random.Generator,
+    generator: torch.Generator,
     m: float | None = None,
     stop_thr: float | None = None,
-) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Matches the :param:`source` and :param:`target` groups and returns the respective indices
     using an optimal transport-based linear coupling.
 
@@ -274,8 +248,8 @@ def ot_linear_coupling(
     :param return_matrix: If ``True``, also return the optimal transport coupling matrix.
     :type return_matrix: bool
 
-    :param rng: Generator the matched indices are drawn from.
-    :type rng: class:`numpy.random.Generator`
+    :param generator: Generator the matched indices are drawn from, on the inputs' device.
+    :type generator: class:`torch.Generator`
 
     :param m: Transported mass, used only by ``"partial"``. ``None`` is the solver's default.
     :type m: float, optional
@@ -288,10 +262,10 @@ def ot_linear_coupling(
 
     Returns
     -------
-    tuple[numpy.ndarray, numpy.ndarray]
+    tuple[torch.Tensor, torch.Tensor]
         A tuple containing the indices of matched samples in the source and target tensors.
 
-    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
         If ``return_matrix`` is ``True``, also returns the optimal transport coupling matrix
         computed between the source and target distributions.
     """  # noqa
@@ -299,9 +273,6 @@ def ot_linear_coupling(
         raise ValueError("Linear coupling requires linear source and target representations, None found.")
     cost_fn = cost_fn or (lambda source, target: torch.cdist(source, target) ** 2)
 
-    # computing weights
-    src_weights = pot.unif(source_lin.shape[0])
-    tgt_weights = pot.unif(target_lin.shape[0])
     # moving arrays to torch tensors
     source_lin = to_torch_tensor(source_lin)
     target_lin = to_torch_tensor(target_lin)
@@ -312,7 +283,11 @@ def ot_linear_coupling(
     # computing cost matrix
     distance_matrix = cost_fn(source_lin, target_lin)
     # normalization of cost
-    distance_matrix = _scale_distance_matrix(distance_matrix, scale_method=scale_cost)
+    distance_matrix = _scale_distance_matrix(distance_matrix, scale_method=scale_cost).detach()
+    # uniform weights on the cost's device and dtype, so POT's torch backend solves there
+    n_src, n_tgt = distance_matrix.shape
+    src_weights = distance_matrix.new_full((n_src,), 1 / n_src)
+    tgt_weights = distance_matrix.new_full((n_tgt,), 1 / n_tgt)
 
     if method != "exact" and reg is None:
         msg = f"{method=} requires `reg` to be a `float`, `None` found"
@@ -334,8 +309,10 @@ def ot_linear_coupling(
         raise ValueError(msg)
 
     # computing coupling matrix
-    coupling_matrix = ot_fn(src_weights, tgt_weights, distance_matrix.detach().cpu().numpy())
-    source_idxs, target_idxs = _select_indices(coupling_matrix=coupling_matrix, size=source_lin.shape[0], rng=rng)
+    coupling_matrix = ot_fn(src_weights, tgt_weights, distance_matrix)
+    source_idxs, target_idxs = _select_indices(
+        coupling_matrix=coupling_matrix, size=source_lin.shape[0], generator=generator
+    )
     if return_matrix:
         return source_idxs, target_idxs, coupling_matrix
     return source_idxs, target_idxs
@@ -352,12 +329,14 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = ...,
     method: QuadCouplingMethod,
     scale_cost: ScaleMethod,
-    rng: np.random.Generator,
+    generator: torch.Generator,
     epsilon: float,
     max_iter: int,
     tol: float,
     alpha: float | None = None,
-) -> tuple[NumpyArray, NumpyArray]: ...
+    inner_num_iter_max: int | None = None,
+    inner_stop_thr: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 
 @overload
@@ -371,12 +350,14 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = ...,
     method: QuadCouplingMethod,
     scale_cost: ScaleMethod,
-    rng: np.random.Generator,
+    generator: torch.Generator,
     epsilon: float,
     max_iter: int,
     tol: float,
     alpha: float | None = None,
-) -> tuple[NumpyArray, NumpyArray, NumpyArray]: ...
+    inner_num_iter_max: int | None = None,
+    inner_stop_thr: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 
 
 def ot_quadratic_coupling(
@@ -389,12 +370,14 @@ def ot_quadratic_coupling(
     cost_fn: CostFN | None = None,
     method: QuadCouplingMethod,
     scale_cost: ScaleMethod,
-    rng: np.random.Generator,
+    generator: torch.Generator,
     epsilon: float,
     max_iter: int,
     tol: float,
     alpha: float | None = None,
-) -> tuple[NumpyArray, NumpyArray] | tuple[NumpyArray, NumpyArray, NumpyArray]:
+    inner_num_iter_max: int | None = None,
+    inner_stop_thr: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Matches source and target groups using an optimal transport-based quadratic coupling (Gromov-Wasserstein or fused Gromov-Wasserstein) and returns the respective indices.
 
     The solve is delegated to POT, so the solvers' behaviour and defaults follow the installed POT version.
@@ -430,8 +413,8 @@ def ot_quadratic_coupling(
         ``"entropic_fused_gromov_wasserstein"``.
     :type method: class:`QuadCouplingMethod`
 
-    :param rng: Generator the matched indices are drawn from.
-    :type rng: class:`numpy.random.Generator`
+    :param generator: Generator the matched indices are drawn from, on the inputs' device.
+    :type generator: class:`torch.Generator`
 
     :param epsilon: Entropic regularization.
     :type epsilon: float
@@ -445,12 +428,19 @@ def ot_quadratic_coupling(
     :param tol: Stopping tolerance.
     :type tol: float
 
+    :param inner_num_iter_max: POT's ``numItermax`` of the inner Sinkhorn solves. ``None`` is the solver's default.
+    :type inner_num_iter_max: int, optional
+
+    :param inner_stop_thr: POT's ``stopThr`` of the inner Sinkhorn solves. ``None`` is the solver's default, which
+        float32 may never reach, running every solve to ``numItermax``.
+    :type inner_stop_thr: float, optional
+
     Returns
     -------
-    tuple[numpy.ndarray, numpy.ndarray]
+    tuple[torch.Tensor, torch.Tensor]
         A tuple containing the indices of matched samples in the source and target distributions.
 
-    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
         If ``return_matrix`` is ``True``, also returns the quadratic optimal transport coupling
         matrix computed between the source and target distributions.
     """
@@ -488,7 +478,8 @@ def ot_quadratic_coupling(
         distance_matrix=distance_matrix_target_quad, scale_method=scale_cost
     )
 
-    opts = {"epsilon": epsilon, "max_iter": max_iter, "tol": tol}
+    inner = {"numItermax": inner_num_iter_max, "stopThr": inner_stop_thr}
+    opts = {"epsilon": epsilon, "max_iter": max_iter, "tol": tol, **{k: v for k, v in inner.items() if v is not None}}
     if method == "entropic_gromov_wasserstein":
         ot_fn = partial(pot.gromov.entropic_gromov_wasserstein, **opts)
         # computing coupling matrix
@@ -513,9 +504,10 @@ def ot_quadratic_coupling(
     else:
         msg = f"{method=} is not found, please specify a custom `method` in `ot_fn`"
         raise ValueError(msg)
+    coupling_matrix = coupling_matrix.detach()
     source_idxs, target_idxs = _select_indices(
-        coupling_matrix=coupling_matrix.detach().cpu().numpy(), size=source_quad.shape[0], rng=rng
+        coupling_matrix=coupling_matrix, size=source_quad.shape[0], generator=generator
     )
     if return_matrix:
-        return source_idxs, target_idxs, coupling_matrix.detach().cpu().numpy()
+        return source_idxs, target_idxs, coupling_matrix
     return source_idxs, target_idxs

@@ -1,6 +1,5 @@
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 import pytest
 import torch
@@ -94,10 +93,6 @@ def dummy_noise_sampler(shape, *, generator, device=None, dtype=None):
 
 def gen(seed=0):
     return torch.Generator().manual_seed(seed)
-
-
-def rng(seed=0):
-    return np.random.default_rng(seed)
 
 
 @pytest.fixture
@@ -200,13 +195,13 @@ def test_placement_tracks_the_module(dims):
 
 # -------------------- Basic flow --------------------
 def test_compute_loss_returns_scalar_and_metrics(make_cfm, step_data):
-    loss, meta = make_cfm().compute_loss(step_data, generator=gen(), rng=rng())
+    loss, meta = make_cfm().compute_loss(step_data, generator=gen())
     assert loss.ndim == 0
     assert meta["loss"] == pytest.approx(loss.item())
 
 
 def test_compute_loss_calls_module_with_t_xt_cond_source(make_cfm, step_data, dummy_module):
-    make_cfm().compute_loss(step_data, generator=gen(), rng=rng())
+    make_cfm().compute_loss(step_data, generator=gen())
     call = dummy_module.last_call
     assert call["t"].shape == (2,)
     assert call["x"].shape == (2, 4)
@@ -223,14 +218,14 @@ def test_compute_loss_handles_none_source(make_cfm, dummy_module):
         "target_group_data": {},
     }
     cfm = make_cfm(generate_from_noise=True)
-    loss, _ = cfm.compute_loss(step_data, generator=gen(), rng=rng())
+    loss, _ = cfm.compute_loss(step_data, generator=gen())
     assert torch.isfinite(loss)
     assert dummy_module.last_call["source"] is None
 
 
 # -------------------- Conditioning --------------------
 def test_compute_loss_merges_condition_and_group_data(make_cfm, step_data, dummy_module):
-    make_cfm().compute_loss(step_data, generator=gen(), rng=rng())
+    make_cfm().compute_loss(step_data, generator=gen())
     cond = dummy_module.last_call["condition_dict"]
     torch.testing.assert_close(cond["c1"], step_data["target_condition_data"]["c1"])
     torch.testing.assert_close(cond["g1"], step_data["target_group_data"]["g1"])
@@ -240,7 +235,7 @@ def test_compute_loss_merges_condition_and_group_data(make_cfm, step_data, dummy
 def test_probability_path_receives_latent_target_and_generator(make_cfm, step_data):
     path = dummy_probability_path()
     g = gen()
-    make_cfm(probability_path=path).compute_loss(step_data, generator=g, rng=rng())
+    make_cfm(probability_path=path).compute_loss(step_data, generator=g)
 
     xt_args = path.compute_xt.call_args.args
     assert [a.shape for a in xt_args] == [(2,), (2, 4), (2, 4)]
@@ -269,7 +264,7 @@ def test_loss_matches_mse_between_predicted_and_target_velocity(step_data, dims)
         ),
         dims=dims,
     )
-    loss, _ = cfm.compute_loss(step_data, generator=gen(), rng=rng())
+    loss, _ = cfm.compute_loss(step_data, generator=gen())
     assert loss.item() == pytest.approx(1.0)
 
 
@@ -279,7 +274,7 @@ def test_prepare_latent_train_called_with_dims_placement_and_flags(make_cfm, ste
     g = gen()
     with patch(f"{MODULE}.prepare_latent_train") as mock_prep:
         mock_prep.return_value = torch.zeros(2, dims.state_dim)
-        cfm.compute_loss(step_data, generator=g, rng=rng())
+        cfm.compute_loss(step_data, generator=g)
 
     args, kwargs = mock_prep.call_args
     # Positional: source, noise_sampler, dims; the batch size is the target's.
@@ -301,7 +296,7 @@ def test_loss_dtype_follows_batch(make_cfm, step_data):
         k: {kk: vv.double() for kk, vv in v.items()} if isinstance(v, dict) else v.double()
         for k, v in step_data.items()
     }
-    loss, _ = make_cfm().compute_loss(step_data, generator=gen(), rng=rng())
+    loss, _ = make_cfm().compute_loss(step_data, generator=gen())
     assert loss.dtype == torch.float64
 
 
@@ -319,7 +314,7 @@ def test_compute_loss_depends_only_on_generator(step_data, dims, generate_from_n
 
     def loss(seed, global_seed):
         torch.manual_seed(global_seed)
-        return cfm.compute_loss(step_data, generator=gen(seed), rng=rng())[0]
+        return cfm.compute_loss(step_data, generator=gen(seed))[0]
 
     torch.testing.assert_close(loss(0, 1), loss(0, 2))
     assert not torch.allclose(loss(0, 1), loss(1, 1))

@@ -8,7 +8,6 @@ its time / noise samplers.
 import abc
 from typing import Any, Protocol, runtime_checkable
 
-import numpy as np
 import torch
 from scfit.registry import Component
 
@@ -58,7 +57,7 @@ class SupportsTraining(Protocol):
     def dims(self) -> DataDimensions: ...
 
     def compute_loss(
-        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
+        self, step_data: StepData, *, generator: torch.Generator
     ) -> tuple[torch.Tensor, dict[str, Any]]: ...
 
 
@@ -240,7 +239,7 @@ class BaseMatcher(abc.ABC):
         self._match_fn = match_fn
 
     @abc.abstractmethod
-    def match(self, step_data: StepData, *, rng: np.random.Generator) -> StepData: ...
+    def match(self, step_data: StepData, *, generator: torch.Generator) -> StepData: ...
 
     @property
     def match_fn(self) -> MatchFn:
@@ -255,8 +254,8 @@ class Matcher(BaseMatcher):
     copy aligned on the matched indices.
     """
 
-    def match(self, step_data: StepData, *, rng: np.random.Generator) -> StepData:
-        """Matches the input state data using the underlying `match_fn`, drawing from ``rng``.
+    def match(self, step_data: StepData, *, generator: torch.Generator) -> StepData:
+        """Matches the input state data using the underlying `match_fn`, drawing from ``generator``.
 
         Returns `step_data` unchanged when neither `source_coupling_lin` nor
         `source_coupling_quad` are present, or when `match_fn` returns either
@@ -275,7 +274,7 @@ class Matcher(BaseMatcher):
             target_lin=target_lin,
             source_quad=source_quad,
             target_quad=target_quad,
-            rng=rng,
+            generator=generator,
         )
 
         if src_idxs is None or tgt_idxs is None:
@@ -303,11 +302,9 @@ class MatchedTrainingMethod:
         self._method = method
         self._matcher = matcher
 
-    def compute_loss(
-        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
-    ) -> tuple[torch.Tensor, dict[str, Any]]:
-        matched = self._matcher.match(step_data, rng=rng)
-        return self._method.compute_loss(matched, generator=generator, rng=rng)
+    def compute_loss(self, step_data: StepData, *, generator: torch.Generator) -> tuple[torch.Tensor, dict[str, Any]]:
+        matched = self._matcher.match(step_data, generator=generator)
+        return self._method.compute_loss(matched, generator=generator)
 
     @property
     def method(self) -> SupportsTraining:

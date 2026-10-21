@@ -47,8 +47,7 @@ def _loss(method: CFMTraining, seed: int) -> torch.Tensor:
         "target_condition_data": None,
         "target_group_data": None,
     }
-    generator, rng = generators(seed, 0)
-    return method.compute_loss(batch, generator=generator, rng=rng)[0]
+    return method.compute_loss(batch, generator=generators(seed, 0))[0]
 
 
 def test_loss_depends_only_on_the_passed_generator(dims):
@@ -65,8 +64,8 @@ def test_loss_depends_only_on_the_passed_generator(dims):
 
 
 def test_streams_are_independent_and_repeatable():
-    a, _ = generators(0, 0, 5)
-    b, _ = generators(0, 0, 5)
-    c, _ = generators(0, 0, 6)
+    a = generators(0, 0, 5)
+    b = generators(0, 0, 5)
+    c = generators(0, 0, 6)
     x, y, z = (torch.rand(4, generator=g) for g in (a, b, c))
     assert torch.equal(x, y) and not torch.equal(x, z)

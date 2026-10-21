@@ -9,13 +9,6 @@ from torch import Tensor
 if TYPE_CHECKING:
     from sckitflow.core.nn._vf import BaseVelocityField
 
-try:
-    from numpy.typing import NDArray
-
-    NumpyArray = NDArray[np.float32 | np.float64]
-except (ImportError, TypeError):
-    NumpyArray = np.ndarray
-
 from sckitflow.data import mixins
 from sckitflow.data.containers import BaseData
 
@@ -51,7 +44,7 @@ class MatchFn(Protocol):
         target_lin: TensorLike | None,
         source_quad: TensorLike | None,
         target_quad: TensorLike | None,
-        rng: np.random.Generator,
+        generator: torch.Generator,
     ) -> MatchFnOut: ...
 
 

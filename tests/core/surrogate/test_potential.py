@@ -594,7 +594,7 @@ class TestPopulations:
         potential, inferer, _ = make_potential(n_leaves=2)
         potential(make_cond_dict())
         seeds = [generator.initial_seed() for _, generator in inferer.calls]
-        assert seeds == [generators(potential.seed, i)[0].initial_seed() for i in range(2)]
+        assert seeds == [generators(potential.seed, i).initial_seed() for i in range(2)]
 
     def test_populations_differ(self):
         potential, _, _ = make_potential(n=3)

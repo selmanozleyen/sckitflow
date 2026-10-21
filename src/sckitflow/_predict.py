@@ -286,7 +286,7 @@ def predict_adata(
     try:
         for i, (step_data, leaf) in enumerate(tqdm(loader, total=len(loader), desc="Predicting")):
             reference = next((t for t in (step_data["target_state"], step_data["source_state"]) if t is not None), None)
-            generator, _ = generators(seed, PREDICT, 0, i, device=None if reference is None else reference.device)
+            generator = generators(seed, PREDICT, 0, i, device=None if reference is None else reference.device)
             preds = inference_method.predict(step_data, generator=generator, **predict_kwargs)
             records.append(prediction_record(loader, step_data, leaf, preds))
     finally:

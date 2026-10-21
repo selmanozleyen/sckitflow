@@ -232,7 +232,7 @@ class SurrogatePotential(torch.nn.Module):
             potentials = []
             for i, (step_data, leaf) in enumerate(leaves):
                 # population 0 keeps the single-population stream, so `forward` draws what it always drew
-                generator, _ = generators(self._seed, i, *((population,) if population else ()), device=device)
+                generator = generators(self._seed, i, *((population,) if population else ()), device=device)
                 paired_step_data, _ = _pair_leaf(step_data, cond_dict)
                 y = self._readout(self.inferer.predict(paired_step_data, generator=generator))
                 if y.shape[-1] != self.ystar.shape[-1]:

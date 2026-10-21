@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import torch
 from scfit.registry import component
 
@@ -47,10 +46,8 @@ class CFMTraining(AbstractFlowMethod):
         self.config = CFMTrainingConfig() if config is None else config
         super().__init__(module, self.config, dims=dims)
 
-    def compute_loss(
-        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
-    ) -> tuple[torch.Tensor, dict[str, Any]]:
-        """The flow-matching loss. Noise, time and path samples are drawn from ``generator``; ``rng`` is unused."""
+    def compute_loss(self, step_data: StepData, *, generator: torch.Generator) -> tuple[torch.Tensor, dict[str, Any]]:
+        """The flow-matching loss. Noise, time and path samples are drawn from ``generator``."""
         # ---- Get source and target states from step data ----
         target = step_data["target_state"]
         source = step_data["source_state"]

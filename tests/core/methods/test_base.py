@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import pydantic
 import pytest
@@ -74,8 +73,8 @@ class Trainer:
         self.dtype = next(iter(module.parameters())).dtype
         self.calls = []
 
-    def compute_loss(self, step_data, *, generator, rng):
-        self.calls.append((step_data, generator, rng))
+    def compute_loss(self, step_data, *, generator):
+        self.calls.append((step_data, generator))
         return torch.tensor(1.0), {}
 
 
@@ -266,7 +265,7 @@ def test_protocol_requires_dims(module, dims):
         def module(self):
             return module
 
-        def compute_loss(self, step_data, *, generator, rng):
+        def compute_loss(self, step_data, *, generator):
             return torch.tensor(0.0), {}
 
     assert not isinstance(NoDims(), SupportsTraining)
@@ -284,23 +283,23 @@ def test_match_unchanged_without_source_coupling():
         raise AssertionError("match_fn must not be called")
 
     data = new_step_data(target_coupling_lin=torch.zeros(3, 2))
-    assert Matcher(match_fn).match(data, rng=np.random.default_rng(0)) is data
+    assert Matcher(match_fn).match(data, generator=torch.Generator()) is data
 
 
 def test_match_unchanged_when_indices_none(coupled):
-    assert Matcher(lambda **_: (None, None)).match(coupled, rng=np.random.default_rng(0)) is coupled
+    assert Matcher(lambda **_: (None, None)).match(coupled, generator=torch.Generator()) is coupled
 
 
-def test_match_subscripts_and_passes_rng(coupled):
-    rng = np.random.default_rng(0)
+def test_match_subscripts_and_passes_generator(coupled):
+    generator = torch.Generator()
     seen = {}
 
-    def match_fn(source_lin, target_lin, source_quad, target_quad, rng):
-        seen.update(source_lin=source_lin, target_lin=target_lin, rng=rng)
+    def match_fn(source_lin, target_lin, source_quad, target_quad, generator):
+        seen.update(source_lin=source_lin, target_lin=target_lin, generator=generator)
         return torch.tensor([2, 0]), torch.tensor([1, 1])
 
-    out = Matcher(match_fn).match(coupled, rng=rng)
-    assert seen["rng"] is rng
+    out = Matcher(match_fn).match(coupled, generator=generator)
+    assert seen["generator"] is generator
     assert seen["source_lin"] is coupled["source_coupling_lin"]
     assert seen["target_lin"] is coupled["target_coupling_lin"]
     torch.testing.assert_close(out["source_state"], torch.tensor([[2.0], [0.0]]))
@@ -312,14 +311,13 @@ def test_matched_training_method(module, dims, coupled):
     inner = Trainer(module, dims)
     matcher = Matcher(lambda **_: (torch.tensor([1]), torch.tensor([2])))
     matched = MatchedTrainingMethod(inner, matcher)
-    generator, rng = torch.Generator().manual_seed(0), np.random.default_rng(0)
+    generator = torch.Generator().manual_seed(0)
 
-    loss, _ = matched.compute_loss(coupled, generator=generator, rng=rng)
+    loss, _ = matched.compute_loss(coupled, generator=generator)
 
     assert loss.item() == 1.0
-    ((data, seen_generator, seen_rng),) = inner.calls
+    ((data, seen_generator),) = inner.calls
     assert seen_generator is generator
-    assert seen_rng is rng
     torch.testing.assert_close(data["source_state"], torch.tensor([[1.0]]))
     torch.testing.assert_close(data["target_state"], torch.tensor([[5.0]]))
     assert matched.method is inner

@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 from anndata import AnnData
-from pydantic import model_validator
 from scfit.data import obs_columns
 from scfit.registry import Component, component
 
@@ -803,16 +802,6 @@ class DataManagerConfig(Component):
 
     What it expects of the ``AnnData``, and how controls are held, is described in ``docs/data_format.md``.
     """
-
-    @model_validator(mode="before")
-    @classmethod
-    def _renamed(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "sample_rep" in data:
-            raise ValueError(
-                "`sample_rep` was renamed `target_sample_rep` (the sources' own rep, if any, is `source_sample_rep`); "
-                "rename it in the config."
-            )
-        return data
 
     target_sample_rep: str | None = None
     """The ``obsm`` key of the targets' state representation, the space the flow lives in; ``None`` uses ``.X``.

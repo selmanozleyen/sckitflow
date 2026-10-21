@@ -154,8 +154,3 @@ def test_each_side_has_its_own_width_under_one_key():
     dims = dm.get_data_dimensionalities([adata0, adata1])  # and a model can be built on it
     assert (dims.state_dim, dims.source_state_dim) == (d1, d0)
     assert (dims.source_quad_dim, dims.target_quad_dim, dims.source_lin_dim) == (d0 - shared, d1 - shared, shared)
-
-
-def test_the_old_name_is_refused_with_the_new_one():
-    with pytest.raises(ValueError, match="`sample_rep` was renamed `target_sample_rep`"):
-        DataManagerConfig(sample_rep="X_pca")

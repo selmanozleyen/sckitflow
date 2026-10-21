@@ -63,11 +63,7 @@ def test_missing_rep_names_the_file_role_and_field():
         _manager().get_dataloaders([ctrl, pert], batch_size=8)
 
 
-@pytest.mark.parametrize(
-    ("schema", "field"),
-    [({"sample_rep": "K"}, "sample_rep"), ({"rep_lin": "K"}, "rep_lin")],
-)
-def test_a_space_both_sides_share_needs_one_width(schema, field):
+def test_the_linear_term_needs_one_width():
     ctrl, pert = _split_files()
     ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
     pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
@@ -77,14 +73,22 @@ def test_a_space_both_sides_share_needs_one_width(schema, field):
             "source_rep_quad": None,
             "target_rep_quad": None,
             "use_linear": True,
-            "rep_lin": None,
-            **schema,
+            "rep_lin": "K",
         }
     ).build()
-    with pytest.raises(
-        ValueError, match=rf"obsm/K \({field}.*\) is 4 wide in AnnData 0 \(sources\), 6 wide in AnnData 1"
-    ):
+    with pytest.raises(ValueError, match=r"obsm/K \(rep_lin\) is 4 wide in AnnData 0 \(sources\), 6 wide in AnnData 1"):
         dm.get_dataloaders([ctrl, pert], batch_size=8)
+
+
+def test_the_state_may_differ_in_width_across_sides():
+    # GENOT generates targets from noise conditioned on an encoded source, so the sides may live in different
+    # spaces; whether the state must match is the method's call, not the loader's.
+    ctrl, pert = _split_files()
+    ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
+    pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
+    dm = DataManagerConfig(**{**_manager().config.model_dump(), "sample_rep": "K"}).build()
+    batch = next(iter(dm.get_dataloaders([ctrl, pert], batch_size=8)["train"]))
+    assert batch["source_state"].shape[-1] == 4 and batch["target_state"].shape[-1] == 6
 
 
 def test_quadratic_terms_may_differ_in_width():

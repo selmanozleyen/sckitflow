@@ -474,12 +474,14 @@ class _StepDataBridge:
         return sources
 
     def _check_shared_widths(self, sources: dict[str, list[AnnData]]) -> None:
-        """The state and the linear coupling term are one space for both sides, so one width across every file.
+        """The linear coupling term compares sources with targets directly, so one width across every file.
 
         Within a side scfit already requires it; this compares across the sides, which read separate sources.
-        The quadratic terms are exempt: each side's is only compared within itself.
+        The quadratic terms are exempt (each side's is only compared within itself), and so is the state: whether
+        it must match depends on the method -- flowing from the sources needs one space, generating from noise
+        conditioned on an encoded source (GENOT) does not -- so the method checks it, not the loader.
         """
-        shared = {self._state_loc, *(loc for loc, t in self._source_coupling_locs.items() if t == _SOURCE_LIN_TERM)}
+        shared = {loc for loc, t in self._source_coupling_locs.items() if t == _SOURCE_LIN_TERM}
         index = {id(a): i for i, a in enumerate(self._adatas)}
         for loc in shared:
             widths = {
@@ -490,9 +492,10 @@ class _StepDataBridge:
             if len(set(widths.values())) > 1:
                 where = ", ".join(f"{w} wide in AnnData {i} ({role}s)" for (role, i), w in sorted(widths.items()))
                 raise ValueError(
-                    f"{loc} ({' / '.join(self._rep_fields.get(loc, ['rep']))}) is {where}. Sources and targets "
-                    "meet in this space, so it needs one width in every file; align the files to it (e.g. one PCA "
-                    "fitted over all of them)."
+                    f"{loc} ({' / '.join(self._rep_fields.get(loc, ['rep']))}) is {where}. The linear coupling "
+                    "term compares sources with targets directly, so it needs one width in every file; align the "
+                    "files to it (e.g. one PCA fitted over all of them), or match the sides across spaces with the "
+                    "quadratic terms alone (`use_linear=False`)."
                 )
 
     def _files_holding(self, stream: Stream, role: str) -> list[AnnData]:

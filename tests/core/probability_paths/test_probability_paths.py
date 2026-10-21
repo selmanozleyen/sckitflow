@@ -1,7 +1,10 @@
+import inspect
+
 import pytest
 import torch
 
 from sckitflow._runtime import set_backend
+from sckitflow.core import probability_paths
 from sckitflow.core.probability_paths._probability_paths import (
     BaseProbabilityPath,
     LinearDiracProbabilityPath,
@@ -79,3 +82,44 @@ def test_noise_comes_only_from_the_generator(probability_path_cls: type[BaseProb
     torch.manual_seed(1)  # the global RNG must not matter
     other = path.compute_xt(t, x0, x1, generator=torch.Generator().manual_seed(1))
     assert torch.equal(same[0], same[1]) and not torch.equal(same[0], other)
+
+
+ALL_PATHS = [
+    cls
+    for name in probability_paths.__all__
+    if isinstance(cls := getattr(probability_paths, name), type)
+    and issubclass(cls, BaseProbabilityPath)
+    and not inspect.isabstract(cls)
+]
+
+
+def _path_and_data(cls: type[BaseProbabilityPath]) -> tuple[BaseProbabilityPath, torch.Tensor, torch.Tensor]:
+    g = torch.Generator().manual_seed(0)
+    x0, x1 = torch.randn(5, 3, generator=g, dtype=torch.float64), torch.randn(5, 3, generator=g, dtype=torch.float64)
+    return cls(0.7) if not cls.is_deterministic else cls(), x0, x1
+
+
+def test_all_paths_collected() -> None:
+    assert len(ALL_PATHS) == 4
+
+
+@pytest.mark.parametrize("probability_path_cls", ALL_PATHS)
+def test_mean_hits_endpoints(probability_path_cls: type[BaseProbabilityPath]) -> None:
+    path, x0, x1 = _path_and_data(probability_path_cls)
+    t = torch.ones(5, 1, dtype=torch.float64)
+    torch.testing.assert_close(path.compute_mu_t(0 * t, x0, x1), x0)
+    torch.testing.assert_close(path.compute_mu_t(t, x0, x1), x1)
+
+
+@pytest.mark.parametrize("probability_path_cls", ALL_PATHS)
+def test_velocity_generates_path(probability_path_cls: type[BaseProbabilityPath]) -> None:
+    path, x0, x1 = _path_and_data(probability_path_cls)
+    eps = torch.randn(5, 3, generator=torch.Generator().manual_seed(1), dtype=torch.float64)
+
+    def xt_of(t: torch.Tensor) -> torch.Tensor:
+        t = t.expand(5, 3)
+        return path.compute_mu_t(t, x0, x1) + path.compute_sigma_t(t) * eps
+
+    t = torch.tensor([[0.1], [0.3], [0.5], [0.7], [0.9]], dtype=torch.float64)
+    xt, dxt_dt = torch.func.jvp(xt_of, (t,), (torch.ones_like(t),))
+    torch.testing.assert_close(path.compute_ut(t, xt, x0, x1), dxt_dt)

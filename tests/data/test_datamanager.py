@@ -673,5 +673,8 @@ class TestSeveralAnnData:
     def test_parts_with_different_features_are_refused(self, adata_small: AnnData):
         parts = self._parts(adata_small)
         parts[1].var_names = [f"other_{i}" for i in range(parts[1].n_vars)]
-        with pytest.raises(ValueError, match="AnnData 1 disagrees"):
+        with pytest.raises(
+            ValueError,
+            match=r"AnnData 1 and AnnData 0 differ in their state \(`target_sample_rep`\): the same width but different feature names",
+        ):
             _make_manager().get_data_dimensionalities(parts)

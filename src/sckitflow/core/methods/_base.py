@@ -199,6 +199,13 @@ class AbstractFlowMethod(AbstractMethod):
         self._time_sampler = (config.time_sampler or UniformTimeSamplerConfig()).build()
         self._noise_sampler = (config.noise_sampler or IsotropicGaussianNoiseSamplerConfig()).build()
         self._generate_from_noise = config.generate_from_noise
+        if dims.source_state_dim is not None and not self._generate_from_noise:
+            raise ValueError(
+                f"The sources have their own state rep (`source_sample_rep`, {dims.source_state_dim} features; the "
+                f"targets' has {dims.state_dim}), so the flow cannot start from them (`generate_from_noise=False`). "
+                "Generate from noise conditioned on the encoded source instead, as GENOT does: set "
+                "`generate_from_noise=True` and give the velocity field a source encoder (`source_encoder_mlp_kwargs`)."
+            )
 
     @property
     def probability_path(self) -> BaseProbabilityPath:

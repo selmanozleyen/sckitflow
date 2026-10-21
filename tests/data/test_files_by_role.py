@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from anndata import AnnData
 
-from sckitflow.data import DataManagerConfig
+from sckitflow.data import DataManagerConfig, FlowDataModule
 from sckitflow.data._group_encoders import LabelEncoderConfig
 from sckitflow.data.sim import get_dummy_adata
 
@@ -95,3 +95,22 @@ def test_quadratic_terms_may_differ_in_width():
     ctrl, pert = _split_files()  # X_src is 4 wide, X_tgt 3 wide: Gromov-Wasserstein compares each side within itself
     batch = next(iter(_manager().get_dataloaders([ctrl, pert], batch_size=8)["train"]))
     assert batch["source_coupling_quad"].shape[-1] == 4 and batch["target_coupling_quad"].shape[-1] == 3
+
+
+def test_datamodule_takes_each_sides_dims_from_its_files():
+    ctrl, pert = _split_files()
+    datamodule = FlowDataModule.from_adata([ctrl, pert], _manager(), batch_size=8, n_train_steps=2)
+    dims = datamodule.data_dims
+    assert (dims.source_quad_dim, dims.target_quad_dim) == (4, 3)
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["source_coupling_quad"].shape[-1] == 4 and batch["target_coupling_quad"].shape[-1] == 3
+
+
+def test_a_side_quad_needs_one_width_across_its_files():
+    ctrl, pert = _split_files()
+    other = pert.copy()
+    other.obsm["X_tgt"] = np.ones((other.n_obs, 5), "float32")
+    with pytest.raises(
+        ValueError, match=r"target_quad_dim differs across the AnnData holding targets: AnnData 1: 3, AnnData 2: 5"
+    ):
+        _manager().get_data_dimensionalities([ctrl, pert, other])

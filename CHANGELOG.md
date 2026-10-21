@@ -30,9 +30,6 @@ and this project adheres to [Semantic Versioning][].
 - `RunConfig.build` and `load_run` take `control_adata`, and `RunConfig.build` takes `metrics`
 
 
-### Fixed
-
-- Pure Gromov-Wasserstein matching (`use_linear=False`) no longer fails on the missing linear term ([#145](https://github.com/theislab/sckitflow/issues/145))
 ### Changed
 
 - Flow method configs take only configs: live probability paths and raw sampler callables are rejected

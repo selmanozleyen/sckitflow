@@ -4,11 +4,10 @@ from sckitflow.data import _dims as dims
 from sckitflow.data import _group_encoders as group_encoders
 from sckitflow.data import _mixins as mixins
 from sckitflow.data import _utils as utils
-from sckitflow.data import containers, schemas, sim, splitters
+from sckitflow.data import containers, schemas, sim
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._manager import DataManager, DataManagerConfig, LoaderKwargs
-from sckitflow.data.splitters import CombinationSplitter, CombinationSplitterConfig, Splitter
 
 __all__ = [
     "FlowDataModule",
@@ -20,15 +19,11 @@ __all__ = [
     "utils",
     "schemas",
     "sim",
-    "splitters",
     "DataManager",
     "DataManagerConfig",
     "Loader",
     "EvalLoader",
     "LoaderKwargs",
-    "Splitter",
-    "CombinationSplitter",
-    "CombinationSplitterConfig",
 ]
 
 _LAZY = frozenset({"Loader", "EvalLoader"})

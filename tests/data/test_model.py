@@ -1,10 +1,10 @@
 import json
 
-import numpy as np
 import pytest
 import torch
 from anndata import AnnData
 from scfit.pretrained import save_pretrained
+from tests.data.shared import with_split
 
 from sckitflow import Model, ModelConfig
 from sckitflow.core.methods.inference._ode import ODEInferenceConfig
@@ -13,13 +13,9 @@ from sckitflow.core.nn._config import MLPVelocityConfig
 from sckitflow.data._datamodule import FlowDataModule
 from sckitflow.data._group_encoders import OneHotEncoderConfig
 from sckitflow.data._manager import DataManagerConfig
-from sckitflow.data.splitters._combination import CombinationSplitterConfig
 
 from .conftest import CELL_LINES
 
-SPLITTER = CombinationSplitterConfig(
-    group_keys=("cell_line", "drug"), always_train_keys=("cell_line",), control_key="drug", test_fraction=0.5
-)
 SCHEMA = DataManagerConfig(
     categorical_conditions={"drug": ("drug",)},
     categorical_reps={"drug": "drug"},
@@ -37,7 +33,7 @@ SPEC = ModelConfig(
 
 def _split(adata: AnnData) -> AnnData:
     """The experiment's split, written before the data reaches the model."""
-    return SPLITTER.build(rng=np.random.default_rng(3)).split(adata, copy=True)
+    return with_split(adata, cols=("cell_line", "drug"), labels=("train", "test"), control_col="drug")
 
 
 def test_model_round_trips(tmp_path, adata_small: AnnData):

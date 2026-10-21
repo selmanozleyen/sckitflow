@@ -1,4 +1,5 @@
 import copy
+import warnings
 
 import lightning.pytorch as pl
 import numpy as np
@@ -247,16 +248,16 @@ def test_checkpoint_restores_datamodule(tmp_path, dims):
     assert restored.val_names == dmod.val_names
 
 
-def _train_keys(dims: DataDimensions, seed: int = 0, **trainer_kwargs) -> list[tuple[int, float]]:
-    """The torch seed and first numpy draw of every training micro-batch."""
+def _train_keys(dims: DataDimensions, seed: int = 0, **trainer_kwargs) -> list[int]:
+    """The torch seed of every training micro-batch."""
     module = _module()
     method = CFMTraining(module, dims=dims)
     keys = []
     compute_loss = method.compute_loss
 
-    def spy(batch, *, generator, rng):
-        keys.append((generator.initial_seed(), copy.deepcopy(rng).random()))
-        return compute_loss(batch, generator=generator, rng=rng)
+    def spy(batch, *, generator):
+        keys.append(generator.initial_seed())
+        return compute_loss(batch, generator=generator)
 
     method.compute_loss = spy
     plan = TrainingPlan(method, torch.optim.SGD(module.parameters(), lr=0.1), seed=seed)
@@ -266,17 +267,42 @@ def _train_keys(dims: DataDimensions, seed: int = 0, **trainer_kwargs) -> list[t
     return keys
 
 
+@pytest.mark.parametrize("fallback", [0.0, 1.0])
+def test_fallbacks_warn_once_per_epoch(dims, fallback):
+    module = _module()
+    method = CFMTraining(module, dims=dims)
+    compute_loss = method.compute_loss
+
+    def with_fallback(batch, *, generator):
+        loss, metrics = compute_loss(batch, generator=generator)
+        return loss, {**metrics, "coupling_fallback": torch.tensor(fallback)}
+
+    method.compute_loss = with_fallback
+    plan = TrainingPlan(method, torch.optim.SGD(module.parameters(), lr=0.1))
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", RuntimeWarning)
+        _trainer(max_steps=3, limit_val_batches=0).fit(plan, datamodule=_datamodule(_adata(), split_by="split"))
+    fell_back = [str(w.message) for w in record if "fell back to random pairs" in str(w.message)]
+    assert fell_back == (
+        [
+            "3 of 3 training batches in epoch 0 fell back to random pairs: the OT plan was non-finite or all zero. Scale the cost (`scale_cost='mean'`) or raise `epsilon`."
+        ]
+        if fallback
+        else []
+    )
+
+
 def test_accumulated_micro_batches_draw_apart(dims):
     keys = _train_keys(dims, accumulate_grad_batches=2)
     assert len(keys) == 4
-    assert len({s for s, _ in keys}) == len({x for _, x in keys}) == 4
+    assert len(set(keys)) == 4
 
 
 def test_ranks_draw_apart(dims, monkeypatch):
     rank0 = _train_keys(dims)
     monkeypatch.setattr(TrainingPlan, "global_rank", property(lambda self: 1))
     rank1 = _train_keys(dims)
-    assert not {s for s, _ in rank0} & {s for s, _ in rank1}
+    assert not set(rank0) & set(rank1)
 
 
 def test_same_seed_same_draws(dims):

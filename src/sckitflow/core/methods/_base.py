@@ -6,9 +6,9 @@ its time / noise samplers.
 """
 
 import abc
+import inspect
 from typing import Any, Protocol, runtime_checkable
 
-import numpy as np
 import torch
 from scfit.registry import Component
 
@@ -20,6 +20,7 @@ from sckitflow._samplers import (
 )
 from sckitflow.core._data_utils import subscript_step_data
 from sckitflow.core._types import MatchFn, PredictionData, SamplerFn, StepData
+from sckitflow.core.coupling._coupling import degenerate_plan
 from sckitflow.core.probability_paths._config import ProbabilityPathConfig
 from sckitflow.core.probability_paths._probability_paths import (
     BaseProbabilityPath,
@@ -58,7 +59,7 @@ class SupportsTraining(Protocol):
     def dims(self) -> DataDimensions: ...
 
     def compute_loss(
-        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
+        self, step_data: StepData, *, generator: torch.Generator
     ) -> tuple[torch.Tensor, dict[str, Any]]: ...
 
 
@@ -240,7 +241,7 @@ class BaseMatcher(abc.ABC):
         self._match_fn = match_fn
 
     @abc.abstractmethod
-    def match(self, step_data: StepData, *, rng: np.random.Generator) -> StepData: ...
+    def match(self, step_data: StepData, *, generator: torch.Generator) -> tuple[StepData, dict[str, Any]]: ...
 
     @property
     def match_fn(self) -> MatchFn:
@@ -253,10 +254,18 @@ class Matcher(BaseMatcher):
     Returns ``step_data`` unchanged when no source coupling data is present
     or when ``match_fn`` yields no indices; otherwise returns a subscripted
     copy aligned on the matched indices.
+
+    When ``match_fn`` takes ``return_matrix`` (the built-in couplings do), the metrics hold
+    ``coupling_fallback``: 1 when the plan was degenerate and the batch was matched at random, as a
+    device tensor, so checking it costs no host sync.
     """
 
-    def match(self, step_data: StepData, *, rng: np.random.Generator) -> StepData:
-        """Matches the input state data using the underlying `match_fn`, drawing from ``rng``.
+    def __init__(self, match_fn: MatchFn) -> None:
+        super().__init__(match_fn)
+        self._returns_plan = "return_matrix" in inspect.signature(match_fn).parameters
+
+    def match(self, step_data: StepData, *, generator: torch.Generator) -> tuple[StepData, dict[str, Any]]:
+        """Matches the input state data using the underlying `match_fn`, drawing from ``generator``.
 
         Returns `step_data` unchanged when neither `source_coupling_lin` nor
         `source_coupling_quad` are present, or when `match_fn` returns either
@@ -268,20 +277,22 @@ class Matcher(BaseMatcher):
         target_quad = step_data["target_coupling_quad"]
 
         if source_lin is None and source_quad is None:
-            return step_data
+            return step_data, {}
 
-        src_idxs, tgt_idxs = self.match_fn(
+        kwargs = {"return_matrix": True} if self._returns_plan else {}
+        src_idxs, tgt_idxs, *plan = self.match_fn(
             source_lin=source_lin,
             target_lin=target_lin,
             source_quad=source_quad,
             target_quad=target_quad,
-            rng=rng,
+            generator=generator,
+            **kwargs,
         )
 
         if src_idxs is None or tgt_idxs is None:
-            return step_data
-
-        return subscript_step_data(step_data, src_idxs=src_idxs, tgt_idxs=tgt_idxs)
+            return step_data, {}
+        metrics = {"coupling_fallback": degenerate_plan(plan[0]).float()} if plan else {}
+        return subscript_step_data(step_data, src_idxs=src_idxs, tgt_idxs=tgt_idxs), metrics
 
 
 # -------------------- Matched training --------------------
@@ -303,11 +314,10 @@ class MatchedTrainingMethod:
         self._method = method
         self._matcher = matcher
 
-    def compute_loss(
-        self, step_data: StepData, *, generator: torch.Generator, rng: np.random.Generator
-    ) -> tuple[torch.Tensor, dict[str, Any]]:
-        matched = self._matcher.match(step_data, rng=rng)
-        return self._method.compute_loss(matched, generator=generator, rng=rng)
+    def compute_loss(self, step_data: StepData, *, generator: torch.Generator) -> tuple[torch.Tensor, dict[str, Any]]:
+        matched, match_metrics = self._matcher.match(step_data, generator=generator)
+        loss, metrics = self._method.compute_loss(matched, generator=generator)
+        return loss, {**metrics, **match_metrics}
 
     @property
     def method(self) -> SupportsTraining:

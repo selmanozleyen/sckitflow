@@ -31,18 +31,22 @@ def test_the_dimensions_read_shapes_not_data():
         obsm={"X_pca": _unreadable(n, 8), "X_quad": _unreadable(n, 3), "dose": _unreadable(n, 1)},
         uns={"drug": {d: np.ones(5) for d in ("control", "a", "b")}},
     )
-    dims = DataManagerConfig(
-        target_sample_rep="X_pca",
-        categorical_conditions={"drug": ("drug",)},
-        categorical_reps={"drug": "drug"},
-        continuous_conditions=("dose",),
-        control_values_dict={"drug": "control"},
-        groups=("cell_line",),
-        groups_encoding={"cell_line": OneHotEncoderConfig(categories=("x", "y"))},
-        rep_lin="X_pca",
-        source_rep_quad="X_quad",
-        target_rep_quad="X_quad",
-    ).build().get_data_dimensionalities(adata)
+    dims = (
+        DataManagerConfig(
+            target_sample_rep="X_pca",
+            categorical_conditions={"drug": ("drug",)},
+            categorical_reps={"drug": "drug"},
+            continuous_conditions=("dose",),
+            control_values_dict={"drug": "control"},
+            groups=("cell_line",),
+            groups_encoding={"cell_line": OneHotEncoderConfig(categories=("x", "y"))},
+            rep_lin="X_pca",
+            source_rep_quad="X_quad",
+            target_rep_quad="X_quad",
+        )
+        .build()
+        .get_data_dimensionalities(adata)
+    )
 
     assert dims.state_dim == 8 and dims.source_lin_dim == dims.target_lin_dim == 8
     assert dims.source_quad_dim == dims.target_quad_dim == 3

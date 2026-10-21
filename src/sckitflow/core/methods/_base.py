@@ -201,10 +201,11 @@ class AbstractFlowMethod(AbstractMethod):
         self._generate_from_noise = config.generate_from_noise
         if dims.source_state_dim is not None and not self._generate_from_noise:
             raise ValueError(
-                f"The sources' states are {dims.source_state_dim} wide and the targets' {dims.state_dim}, so the "
-                "flow cannot start from the sources (`generate_from_noise=False`). To map between the two spaces, "
-                "generate from noise conditioned on the encoded source (GENOT): set `generate_from_noise=True` and "
-                "give the velocity field a source encoder (`source_encoder_mlp_kwargs`)."
+                f"The sources live in their own state space (`source_sample_rep`, {dims.source_state_dim} features; "
+                f"the targets' has {dims.state_dim}), so the flow cannot start from them (`generate_from_noise="
+                "False`). To map between the two spaces, generate from noise conditioned on the encoded source "
+                "(GENOT): set `generate_from_noise=True` and give the velocity field a source encoder "
+                "(`source_encoder_mlp_kwargs`)."
             )
 
     @property

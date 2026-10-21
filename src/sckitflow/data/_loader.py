@@ -208,6 +208,7 @@ class _StepDataBridge:
         groups_schema: GroupsDataSchema,
         coupling_schema: CouplingDataSchema | None = None,
         sample_rep: str | None = None,
+        source_sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         pair_key: str | None = None,
         dtype: torch.dtype | None = None,
@@ -225,6 +226,8 @@ class _StepDataBridge:
         self._device_type = device.split(":")[0] if device is not None else None
         self._assert_device = assert_device
         self._state_loc = _state_loc(sample_rep)
+        # The sources' state: their own rep when they live in another space (GENOT), else the targets'.
+        self._source_state_loc = _state_loc(source_sample_rep) if source_sample_rep is not None else self._state_loc
         # group_by = group columns + categorical condition columns (continuous covs are streamed reps).
         self._group_cols: tuple[str, ...] = (*groups_schema.groups, *condition_schema.all_condition_cols)
         # Fixed matching (`matched_keys`) rides as one derived column shared by a target group and the source
@@ -243,6 +246,7 @@ class _StepDataBridge:
         self._rep_fields: dict[str, list[str]] = {}
         for loc, field in [
             (self._state_loc, "sample_rep"),
+            (self._source_state_loc, "source_sample_rep" if source_sample_rep is not None else "sample_rep"),
             *((loc, "continuous_conditions") for loc in self._cond_cont_locs),
             *((loc, "response covariates") for loc in self._resp_cont_locs),
             *((loc, _COUPLING_FIELD[t]) for loc, t in self._source_coupling_locs.items()),
@@ -406,7 +410,7 @@ class _StepDataBridge:
         ``n_rows`` is the caller's row count for that case -- see :meth:`_batch_size`.
         """
         target_state = _as_tensor(batch[_PRIMARY][self._state_loc]) if has_state else None
-        source_state = _as_tensor(batch[_CONTROL][self._state_loc]) if _CONTROL in batch else None
+        source_state = _as_tensor(batch[_CONTROL][self._source_state_loc]) if _CONTROL in batch else None
         batch_size = self._batch_size(batch, target_state, n_rows)
         source_state = self._align_source(source_state, batch_size)
 
@@ -452,7 +456,7 @@ class _StepDataBridge:
             return Stream(
                 _CONTROL,  # its own source: only the AnnData holding source cells (see `_sources_by_role`)
                 group_by=group_by,
-                reps=_merge_reps((self._state_loc,), self._source_coupling_locs),
+                reps=_merge_reps((self._source_state_loc,), self._source_coupling_locs),
                 weights=control_weights,
                 match_on=list(match_cols),
                 in_memory=in_memory,
@@ -569,6 +573,10 @@ class Loader(_StepDataBridge):
     :param sample_rep: The ``obsm`` key holding the state representation, or ``None`` for ``.X``.
     :type sample_rep: class: `str | None`
 
+    :param source_sample_rep: The ``obsm`` key holding the sources' state when they live in another space than
+        the targets (GENOT); ``None`` reads them from ``sample_rep`` too.
+    :type source_sample_rep: class: `str | None`
+
     :param response_covs: Continuous response covariate ``obsm`` keys, streamed per-obs into
         ``target_response_data``.
     :type response_covs: class: `Collection[str]`
@@ -619,6 +627,7 @@ class Loader(_StepDataBridge):
         groups_schema: GroupsDataSchema,
         coupling_schema: CouplingDataSchema | None = None,
         sample_rep: str | None = None,
+        source_sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         split_by: str | None = None,
         primary_weights: dict[tuple, float] | None = None,
@@ -640,6 +649,7 @@ class Loader(_StepDataBridge):
             groups_schema=groups_schema,
             coupling_schema=coupling_schema,
             sample_rep=sample_rep,
+            source_sample_rep=source_sample_rep,
             response_covs=response_covs,
             pair_key=pair_key,
             dtype=dtype,
@@ -741,6 +751,10 @@ class EvalLoader(_StepDataBridge):
     :param sample_rep: The ``obsm`` key holding the state representation, or ``None`` for ``.X``.
     :type sample_rep: class: `str | None`
 
+    :param source_sample_rep: The ``obsm`` key holding the sources' state when they live in another space than
+        the targets (GENOT); ``None`` reads them from ``sample_rep`` too.
+    :type source_sample_rep: class: `str | None`
+
     :param response_covs: Continuous response covariate ``obsm`` keys; see :class:`Loader`.
     :type response_covs: class: `Collection[str]`
 
@@ -772,6 +786,7 @@ class EvalLoader(_StepDataBridge):
         condition_schema: ConditionDataSchema,
         groups_schema: GroupsDataSchema,
         sample_rep: str | None = None,
+        source_sample_rep: str | None = None,
         response_covs: Collection[str] = (),
         primary_weights: dict[tuple, float] | None = None,
         control_weights: dict[tuple, float] | None = None,
@@ -789,6 +804,7 @@ class EvalLoader(_StepDataBridge):
             condition_schema=condition_schema,
             groups_schema=groups_schema,
             sample_rep=sample_rep,
+            source_sample_rep=source_sample_rep,
             response_covs=response_covs,
             pair_key=pair_key,
             dtype=dtype,

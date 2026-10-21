@@ -32,14 +32,16 @@ times the state width. Prediction reads them per group.
 ## Several AnnData
 
 Wherever an `AnnData` is taken, a list of them is too, read as one dataset: their `.obs` are stacked in list
-order with categories unioned, and the controls of any of them can serve the targets of any other. They must
-agree on the state width and on the feature names, and a split column (`split_by`) must be in each. Each
+order with categories unioned, and the controls of any of them can serve the targets of any other. Every
+file reading the state (`sample_rep`) must agree on its width and feature names, and a split column (`split_by`) must be in each. Each
 `.uns` table the schema reads must be in at least one of them: its entries are merged, an entry in several
 must be the same in each, and every value looked up must have one. A list of zarr stores is opened lazily with `scfit.data.open_source(paths,
 keys=..., cols=..., uns=...)`, listing every store explicitly. A store holding only controls is just one more
 entry. A store only needs the representations of the cells it holds: the target side reads the stores holding
 targets and the source side the stores holding sources, so e.g. `source_rep_quad` can live only with the controls. The
-sources may even live in another state space than the targets (a different width or features, e.g. ATAC
-controls and RNA targets): the dimensions then record it as `source_state_dim`, which only a flow generating from
-noise conditioned on an encoded source (GENOT: `generate_from_noise=True` with `source_encoder_mlp_kwargs`) can
-learn. The matching then needs a shared `rep_lin`, or the quadratic terms alone (`use_linear=False`).
+sources may even live in another state space than the targets, e.g. ATAC controls and RNA targets: name their
+state with `source_sample_rep` (it cannot be told from the data, since two spaces may have the same width). The
+files holding sources then need only that rep, the files holding targets only `sample_rep`. Only a flow generating
+from noise conditioned on an encoded source can learn such a map (GENOT: `generate_from_noise=True` with
+`source_encoder_mlp_kwargs`), and the matching needs a shared `rep_lin` or the quadratic terms alone
+(`use_linear=False`). A saved model reloads with data holding target cells, which fix the targets' space.

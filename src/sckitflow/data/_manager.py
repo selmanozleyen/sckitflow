@@ -191,6 +191,7 @@ class DataManager:
             "condition_schema": self._condition_data_schema,
             "groups_schema": self._groups_data_schema,
             "sample_rep": self._state_data_schema.sample_rep,
+            "source_sample_rep": self.config.source_sample_rep,
             "response_covs": self._target_data_schema.continuous_covs,
         }
 
@@ -262,8 +263,9 @@ class DataManager:
         require_target_state: bool = True,
         *,
         sides: tuple[bool, bool] = (True, True),
+        state: bool = True,
     ) -> DistributionData:
-        state_data: StateData | None = self._get_state_data(adata) if require_target_state else None
+        state_data: StateData | None = self._get_state_data(adata) if require_target_state and state else None
         condition_data: MixedTypeData = self._get_condition_data(adata)
         response_data: MixedTypeData = self._get_target_data(adata)
         groups_data: CategoricalData = self._get_groups_data(adata)
@@ -324,8 +326,10 @@ class DataManager:
     ) -> DataDimensions:
         """Registers the data dimensionalities from the input data according to the current schema.
 
-        Several AnnData are read as one dataset (see :meth:`_parts`) and must agree on every dimension and on
-        their feature names.
+        Several AnnData are read as one dataset (see :meth:`_parts`). Each reads only what its cells need: the
+        targets' state (``sample_rep``) and quadratic rep where the targets are, the sources' where the sources
+        are. Every file reading a rep must agree on its width (and the state on its feature names), and on every
+        other dimension.
 
         :param adata: The annotated data object(s) which to extract the dimensionalities from.
         :type adata: class: `AnnData | Sequence[AnnData]`
@@ -333,45 +337,60 @@ class DataManager:
         parts = self._parts(adata)
         roles = self._roles(parts)
         dims = [self._dims_of(a, sides=r) for a, r in zip(parts, roles, strict=True)]
-        # A side's quadratic dim comes from the files holding that side, and must agree across them.
-        per_side = {"source_quad_dim": 0, "target_quad_dim": 1}
-        merged = {}
+        own_space = self.config.source_sample_rep is not None
+
+        # The targets' state space: one width and feature names in every file reading `sample_rep`.
+        reading = [i for i, r in enumerate(roles) if r[1] or not own_space]
+        if not reading:
+            raise ValueError(
+                "None of the AnnData holds target cells, so the targets' state space (`sample_rep`) is unknown. "
+                "Pass data holding target cells as well."
+            )
+        first = dims[reading[0]]
+        for i in reading[1:]:
+            if dims[i].state_dim != first.state_dim:
+                diff = f"{dims[i].state_dim} vs {first.state_dim} features"
+            elif not dims[i].feature_names.equals(first.feature_names):
+                diff = "the same width but different feature names"
+            else:
+                continue
+            raise ValueError(
+                f"AnnData {i} and AnnData {reading[0]} differ in their state (`sample_rep`): {diff}. The state is "
+                "one space; align the files to it. If the sources live in another space on purpose (GENOT), give "
+                "them their own rep with `source_sample_rep`."
+            )
+
+        merged: dict[str, Any] = {}
+        # Per-side widths: each from the files holding that side, one width across them.
+        per_side = {"source_quad_dim": 0, "target_quad_dim": 1, "source_state_dim": 0}
         for field, side in per_side.items():
             widths = {i: getattr(d, field) for i, (d, r) in enumerate(zip(dims, roles, strict=True)) if r[side]}
             if len(set(widths.values())) > 1:
                 raise ValueError(
                     f"{field} differs across the AnnData holding {('sources', 'targets')[side]}: "
                     + ", ".join(f"AnnData {i}: {w}" for i, w in widths.items())
-                    + ". A side's quadratic rep needs one width in every file holding that side."
+                    + ". A side's rep needs one width in every file holding that side."
                 )
             merged[field] = next(iter(widths.values()), None)
-        # The state space is per side too: the targets' sets `state_dim` / `feature_names`, the sources' may differ
-        # (a map between spaces; see `DataDimensions.source_state_dim`). Within a side it is one space.
-        holding = {
-            side: [i for i, r in enumerate(roles) if r[s]] or list(range(len(dims)))
-            for s, side in enumerate(("sources", "targets"))
-        }
-        for side, idx in holding.items():
-            first = dims[idx[0]]
-            for i in idx[1:]:
-                if dims[i].state_dim != first.state_dim or not dims[i].feature_names.equals(first.feature_names):
-                    raise ValueError(
-                        f"AnnData {i} and AnnData {idx[0]} both hold {side} but differ in their state "
-                        f"({dims[i].state_dim} vs {first.state_dim} features, or different feature names). The "
-                        f"{side} share one state space; align those files to it."
-                    )
-        target, source = dims[holding["targets"][0]], dims[holding["sources"][0]]
-        same_space = source.state_dim == target.state_dim and source.feature_names.equals(target.feature_names)
-        merged["source_state_dim"] = None if same_space else source.state_dim
+
+        # The linear coupling term compares sources with targets directly: one width everywhere.
+        lin = {(d.source_lin_dim, d.target_lin_dim) for d in dims}
+        if len(lin) > 1:
+            raise ValueError(
+                f"The linear coupling term (`rep_lin`) has different widths across the AnnData ({sorted(lin)}). It "
+                "compares sources with targets directly, so it needs one width in every file; align the files "
+                "to it, or match across spaces with the quadratic terms alone (`use_linear=False`)."
+            )
+
         # Everything else must agree across every file.
-        own = {*per_side, "state_dim", "source_state_dim"}
+        own = {*per_side, "state_dim", "source_lin_dim", "target_lin_dim"}
         base = _plain(dims[0])
         for i, other in enumerate(dims[1:], start=1):
             plain = _plain(other)
             differ = [f"{k} ({base[k]} vs {plain[k]})" for k in base if k not in own and plain[k] != base[k]]
             if differ:
                 raise ValueError(f"AnnData {i} disagrees with AnnData 0 on {', '.join(differ)}.")
-        return dataclasses.replace(target, **merged)
+        return dataclasses.replace(first, **merged)
 
     def _roles(self, parts: list[AnnData]) -> list[tuple[bool, bool]]:
         """Per AnnData, whether it holds sources and whether it holds targets, as the loaders route them."""
@@ -388,9 +407,19 @@ class DataManager:
         return roles
 
     def _dims_of(self, adata: AnnData, *, sides: tuple[bool, bool] = (True, True)) -> DataDimensions:
-        data: DistributionData = self._get_distribution_data(adata, sides=sides)
-        n_features = data.state_data.X.shape[1]
-        return self._get_data_dimensionalities(data, self._get_feature_names(adata, n_features))
+        """One file's dimensions, reading only the reps of the sides it holds (``sides`` = sources, targets)."""
+        reads_state = sides[1] or self.config.source_sample_rep is None
+        data: DistributionData = self._get_distribution_data(adata, sides=sides, state=reads_state)
+        n_features = data.state_data.X.shape[1] if data.state_data is not None else 0
+        dims = self._get_data_dimensionalities(data, self._get_feature_names(adata, n_features))
+        if self.config.source_sample_rep is not None and sides[0]:
+            if self.config.source_sample_rep not in adata.obsm:
+                raise ValueError(
+                    f"AnnData holding source cells lacks obsm[{self.config.source_sample_rep!r}] "
+                    "(`source_sample_rep`), the sources' state."
+                )
+            dims = dataclasses.replace(dims, source_state_dim=int(adata.obsm[self.config.source_sample_rep].shape[1]))
+        return dims
 
     def _parts(self, adata: AnnDataLike) -> list[AnnData]:
         """``adata`` as a list read as one dataset, each part carrying the merged ``.uns`` tables the schema reads.
@@ -778,6 +807,11 @@ class DataManagerConfig(Component):
     """String identifier for the state representation. When provided, it should appear as key in
     `.obsm` attribute of annotated data objects. Otherwise, the representation will fall back to
     `.X`."""
+
+    source_sample_rep: str | None = None
+    """The ``obsm`` key of the sources' state when they live in another space than the targets, e.g. ATAC
+    controls and RNA targets (GENOT). Only the files holding sources need it, and only the files holding targets
+    need ``sample_rep``. ``None``: one space, read from ``sample_rep``."""
 
     categorical_conditions: dict[str, tuple[str, ...]] | None = None
     """Mapping from each condition level to the corresponding columns, used to initialize the

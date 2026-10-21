@@ -18,19 +18,19 @@ and this project adheres to [Semantic Versioning][].
 - The split is no longer part of a run: `RunConfig.splitter` / `splitter_seed` and `DataManager(splitter=...)` are removed. Write the split column beforehand (a `sckitflow.data.splitters` splitter does) and declare it with `split_by`.
 - `control_adata` is removed everywhere (`DataManager.get_dataloaders` / `get_eval_loader`, the loaders, `predict_adata`). Controls are drawn from the streamed data by the schema, and the loader holds just them in memory.
 
-### Fixed
-
-- Pure Gromov-Wasserstein matching (`use_linear=False`) no longer fails on the missing linear term ([#145](https://github.com/theislab/sckitflow/issues/145))
-
 ### Added
 
-- GENOT across state spaces: sources and targets may have different state widths. `DataDimensions.source_state_dim` records the sources' width, the velocity field sizes its source encoder from it, and a flow method that starts from the sources (`generate_from_noise=False`) refuses two spaces with an error pointing to GENOT
+- GENOT across state spaces: `DataManagerConfig.source_sample_rep` names the sources' state when they live in another space than the targets (`DataDimensions.source_state_dim` records its width). The velocity field reads it through its source encoder, which is then required, and a flow method starting from the sources (`generate_from_noise=False`) refuses it with an error pointing to GENOT
 - A dataset split across files only needs each representation where the cells reading it are: the loaders route the files holding targets and those holding sources to separate scfit sources, so e.g. `source_rep_quad` can live only in the controls' file. A file missing a representation its cells need raises an error naming the file, the side and the schema field
 - `sckitflow.core.surrogate.SurrogatePotential`: a differentiable potential of continuous condition covariates through a trained inference method, averaged over the groups of its context data (`adata`), which it reads once per device onto the inference module's device. It takes a `readout` and a `potential`; `MeanSamplesReadoutConfig` and `SquaredErrorPotentialConfig` build the common ones
 - Basic tool, preprocessing and plotting functions
 - `docs/scripts/fit_cfm.py` trains a run from one YAML spec; install with the `scripts` extra
 - `RunConfig.build` and `load_run` take `control_adata`, and `RunConfig.build` takes `metrics`
 
+
+### Fixed
+
+- Pure Gromov-Wasserstein matching (`use_linear=False`) no longer fails on the missing linear term ([#145](https://github.com/theislab/sckitflow/issues/145))
 ### Changed
 
 - Flow method configs take only configs: live probability paths and raw sampler callables are rejected

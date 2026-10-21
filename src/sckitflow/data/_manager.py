@@ -345,16 +345,33 @@ class DataManager:
                     + ". A side's quadratic rep needs one width in every file holding that side."
                 )
             merged[field] = next(iter(widths.values()), None)
+        # The state space is per side too: the targets' sets `state_dim` / `feature_names`, the sources' may differ
+        # (a map between spaces; see `DataDimensions.source_state_dim`). Within a side it is one space.
+        holding = {
+            side: [i for i, r in enumerate(roles) if r[s]] or list(range(len(dims)))
+            for s, side in enumerate(("sources", "targets"))
+        }
+        for side, idx in holding.items():
+            first = dims[idx[0]]
+            for i in idx[1:]:
+                if dims[i].state_dim != first.state_dim or not dims[i].feature_names.equals(first.feature_names):
+                    raise ValueError(
+                        f"AnnData {i} and AnnData {idx[0]} both hold {side} but differ in their state "
+                        f"({dims[i].state_dim} vs {first.state_dim} features, or different feature names). The "
+                        f"{side} share one state space; align those files to it."
+                    )
+        target, source = dims[holding["targets"][0]], dims[holding["sources"][0]]
+        same_space = source.state_dim == target.state_dim and source.feature_names.equals(target.feature_names)
+        merged["source_state_dim"] = None if same_space else source.state_dim
         # Everything else must agree across every file.
+        own = {*per_side, "state_dim", "source_state_dim"}
         base = _plain(dims[0])
         for i, other in enumerate(dims[1:], start=1):
             plain = _plain(other)
-            differ = [f"{k} ({base[k]} vs {plain[k]})" for k in base if k not in per_side and plain[k] != base[k]]
-            if not other.feature_names.equals(dims[0].feature_names):
-                differ.append("feature_names")
+            differ = [f"{k} ({base[k]} vs {plain[k]})" for k in base if k not in own and plain[k] != base[k]]
             if differ:
                 raise ValueError(f"AnnData {i} disagrees with AnnData 0 on {', '.join(differ)}.")
-        return dataclasses.replace(dims[0], **merged)
+        return dataclasses.replace(target, **merged)
 
     def _roles(self, parts: list[AnnData]) -> list[tuple[bool, bool]]:
         """Per AnnData, whether it holds sources and whether it holds targets, as the loaders route them."""

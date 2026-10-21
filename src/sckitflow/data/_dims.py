@@ -25,6 +25,14 @@ class DataDimensions:
     source_quad_dim: int | None
     target_lin_dim: int | None
     target_quad_dim: int | None
+    source_state_dim: int | None = None
+    """The sources' state width when it differs from the targets' (``state_dim``): a map between spaces, which only
+    a flow generating from noise conditioned on an encoded source (GENOT) can learn. ``None``: one space."""
+
+    @property
+    def source_dim(self) -> int:
+        """The sources' state width."""
+        return self.state_dim if self.source_state_dim is None else self.source_state_dim
 
     @classmethod
     def _get_dims_from_continuous_data(cls, data: BatchMixin) -> dict[str, int]:

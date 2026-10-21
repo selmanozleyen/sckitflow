@@ -461,8 +461,9 @@ def ot_quadratic_coupling(
     source_quad = to_torch_tensor(source_quad)
     target_quad = to_torch_tensor(target_quad)
 
-    source_lin = to_torch_tensor(source_lin)
-    target_lin = to_torch_tensor(target_lin)
+    # No linear term under pure Gromov-Wasserstein (`use_linear=False`).
+    source_lin = to_torch_tensor(source_lin) if source_lin is not None else None
+    target_lin = to_torch_tensor(target_lin) if target_lin is not None else None
 
     if source_lin is not None and target_lin is not None:
         distance_matrix_lin = cost_fn(source_lin, target_lin)

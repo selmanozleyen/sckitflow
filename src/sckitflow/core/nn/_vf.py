@@ -77,6 +77,7 @@ class MLPVelocity(BaseVelocityField):
         self,
         state_dim: int,
         *,
+        source_state_dim: int | None = None,
         encode_state: bool = True,
         encode_time: bool = True,
         time_features_id: TimeFeaturesId | None = None,
@@ -108,6 +109,10 @@ class MLPVelocity(BaseVelocityField):
         :param state_dim: The dimensionality of the state space where the
             dynamics is defined.
         :type state_dim: class: `int`
+
+        :param source_state_dim: The sources' state width when they live in another space than the targets
+            (GENOT); sizes the source encoder's input. ``None``: the sources share ``state_dim``.
+        :type source_state_dim: class: `int | None`
 
         :param encode_state: (Optional) Whether to initilize an :class: `MLP` for
             encoding the states. Defaults to `True`.
@@ -234,6 +239,7 @@ class MLPVelocity(BaseVelocityField):
         """
         super().__init__()
         self._state_dim = state_dim
+        self._source_state_dim = source_state_dim
         self._encode_state = encode_state
         self._encode_time = encode_time
         self._time_features_id = time_features_id
@@ -307,12 +313,12 @@ class MLPVelocity(BaseVelocityField):
     def _source_encoder_input_dim(self) -> int:
         """Returns the input dimensionality for the source encoder.
 
-        When not explicitly specified in :attr: `self._source_encoder_mlp_kwargs`, it will be
-        automatically retrieved from :attr: `self._state_dim`
+        When not explicitly specified in :attr: `self._source_encoder_mlp_kwargs`, it is the sources' state width:
+        ``source_state_dim`` when the sources live in another space than the targets, else ``state_dim``.
         """
         input_dim = self._source_encoder_mlp_kwargs.get("input_dim", None)
         if input_dim is None:
-            return self._state_dim
+            return self._state_dim if self._source_state_dim is None else self._source_state_dim
         return input_dim
 
     @property

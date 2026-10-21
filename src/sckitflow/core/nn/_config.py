@@ -165,4 +165,4 @@ class MLPVelocityConfig(ModuleConfig):
                 for key, layers in self.condition_encoder_input_layers.items()
             }
             kwargs["condition_encoder_continuous_covariates"] = list(dims.condition_continuous_dims or ())
-        return MLPVelocity(dims.state_dim, **kwargs)
+        return MLPVelocity(dims.state_dim, source_state_dim=dims.source_state_dim, **kwargs)

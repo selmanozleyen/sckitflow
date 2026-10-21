@@ -38,4 +38,8 @@ agree on the state width and on the feature names, and a split column (`split_by
 must be the same in each, and every value looked up must have one. A list of zarr stores is opened lazily with `scfit.data.open_source(paths,
 keys=..., cols=..., uns=...)`, listing every store explicitly. A store holding only controls is just one more
 entry. A store only needs the representations of the cells it holds: the target side reads the stores holding
-targets and the source side the stores holding sources, so e.g. `source_rep_quad` can live only with the controls.
+targets and the source side the stores holding sources, so e.g. `source_rep_quad` can live only with the controls. The
+sources may even live in another state space than the targets (a different width or features, e.g. ATAC
+controls and RNA targets): the dimensions then record it as `source_state_dim`, which only a flow generating from
+noise conditioned on an encoded source (GENOT: `generate_from_noise=True` with `source_encoder_mlp_kwargs`) can
+learn. The matching then needs a shared `rep_lin`, or the quadratic terms alone (`use_linear=False`).

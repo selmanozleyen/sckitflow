@@ -106,9 +106,9 @@ def _select_indices(
 ) -> tuple[NumpyArray, NumpyArray]:
     """Samples matching indices from a coupling matrix.
 
-    Draws index pairs from the provided coupling matrix according to the
-    normalized coupling probabilities and returns the corresponding source
-    and target indices.
+    Draws index pairs i.i.d. from the normalized coupling matrix, with replacement, and returns the
+    corresponding source and target indices. Drawing without replacement would not follow the plan: each draw
+    renormalizes the remaining mass, pulling pair frequencies toward uniform.
 
     :param coupling_matrix: Optimal transport coupling matrix encoding
         matching probabilities between source and target samples.
@@ -141,7 +141,7 @@ def _select_indices(
         coupling_matrix.shape[0] * coupling_matrix.shape[1],
         p=coupling_probs,
         size=size,
-        replace=False,
+        replace=True,
     )
     source_idxs, target_idxs = np.divmod(choices, coupling_matrix.shape[1])
     return source_idxs, target_idxs

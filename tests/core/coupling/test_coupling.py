@@ -15,6 +15,7 @@ from sckitflow.core.coupling import (
     ot_linear_coupling,
     ot_quadratic_coupling,
 )
+from sckitflow.core.coupling._coupling import _select_indices
 
 # The coupling functions take their settings without defaults; the configs hold those.
 LIN = {"num_iter_max": None, "reg": 0.5, "reg_m": 1.0}
@@ -247,3 +248,20 @@ def test_an_all_zero_plan_warns_that_the_batch_is_random():
     match = GromovWassersteinCouplingConfig(scale_cost=1.0, epsilon=1.0).build()
     with pytest.warns(RuntimeWarning, match="matched uniformly at random"):
         match(source_quad=source, target_quad=target, rng=np.random.default_rng(0))
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        np.array([[0.45, 0.05], [0.05, 0.45]]),
+        np.array([[0.20, 0.10, 0.03], [0.02, 0.25, 0.05], [0.10, 0.05, 0.20]]),
+        np.array([[0.30, 0.03], [0.05, 0.22], [0.15, 0.25]]),
+    ],
+)
+def test_sampled_pairs_follow_the_plan(plan):
+    rng = np.random.default_rng(0)
+    counts = np.zeros_like(plan)
+    for _ in range(20000):
+        src, tgt = _select_indices(plan, plan.shape[0], rng=rng)
+        np.add.at(counts, (src, tgt), 1)
+    np.testing.assert_allclose(counts / counts.sum(), plan, atol=0.008)

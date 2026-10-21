@@ -109,7 +109,9 @@ class TrainingPlan(pl.LightningModule):
 
         generator, _ = generators(self.seed, VALIDATE, dataloader_idx, batch_idx, device=self.device)
         preds = self.inference_method.predict(batch, generator=generator, **self._predict_kwargs)
-        preds = getattr(preds, "X", preds)
+        # score every sample, not their mean: the metrics compare distributions, and a mean over samples shrinks one
+        samples = getattr(preds, "raw_samples", None)
+        preds = getattr(preds, "X", preds) if samples is None else samples.reshape(-1, samples.shape[-1])
         targets = batch["target_state"]
         if self._pred_transform is not None:
             preds = self._pred_transform(preds)

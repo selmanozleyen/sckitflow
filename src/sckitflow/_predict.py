@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import fields
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,8 @@ from sckitflow.data._dims import DataDimensions
 from sckitflow.data._utils import AnnDataLike
 
 __all__ = ["prediction_record", "predictions_to_adata", "predict_adata"]
+
+SAMPLE_COL = "sample_idx"
 
 
 def _predict_empty(data_dims: DataDimensions, return_raw: bool) -> AnnData | tuple[AnnData, None]:
@@ -119,16 +121,34 @@ def _aggregate_nodes_pred(
     all_preds: list[PredictionData],
     all_obs: list[pd.DataFrame],
     all_obsm: dict[str, list[np.ndarray]],
+    *,
     return_raw: bool = False,
+    aggregate: Literal["samples", "mean"] = "samples",
 ) -> AnnData | tuple[AnnData, PredictionData]:
     merged_pred = concatenate_predictions(all_preds)
 
     X_np = _to_numpy(merged_pred.X)
 
     obs_final = pd.concat(all_obs, axis=0, ignore_index=True)
-    obs_final.index = obs_final.index.astype(str)
 
     obsm_final = {k: np.concatenate(v, axis=0) for k, v in all_obsm.items()}
+
+    samples = obsm_final.get("raw_samples")
+    if aggregate == "samples" and samples is not None and samples.ndim == 3:
+        # one row per (input row, sample), row-major: each input row's samples are adjacent
+        del obsm_final["raw_samples"]
+        n_obs, n_samples = samples.shape[:2]
+        X_np = samples.reshape(n_obs * n_samples, -1)
+        obs_final = obs_final.iloc[np.repeat(np.arange(n_obs), n_samples)].reset_index(drop=True)
+        obs_final[SAMPLE_COL] = np.tile(np.arange(n_samples), n_obs)
+        for key, val in obsm_final.items():
+            if key == "trajectory" and val.ndim == 4:  # (B, T, N, D) -> (B * N, T, D)
+                obsm_final[key] = val.transpose(0, 2, 1, 3).reshape(n_obs * n_samples, val.shape[1], val.shape[3])
+            else:
+                obsm_final[key] = np.repeat(val, n_samples, axis=0)
+    elif aggregate not in ("samples", "mean"):
+        raise ValueError(f"`aggregate` must be 'samples' or 'mean', got {aggregate!r}.")
+    obs_final.index = obs_final.index.astype(str)
 
     pred_adata = AnnData(X=X_np, obs=obs_final, var=pd.DataFrame(index=data_dims.feature_names), obsm=obsm_final)
 
@@ -180,6 +200,7 @@ def predictions_to_adata(
     records: list[dict[str, Any]],
     *,
     return_raw: bool = False,
+    aggregate: Literal["samples", "mean"] = "samples",
 ) -> AnnData | tuple[AnnData, PredictionData]:
     """Reassembles one ``AnnData`` from what a prediction run produced.
 
@@ -188,6 +209,7 @@ def predictions_to_adata(
         predicted group, as
         :meth:`~sckitflow.trainer.TrainingPlan.predict_step` returns them.
     :param return_raw: Also return the concatenated raw `PredictionData`.
+    :param aggregate: How to lay out several samples per input row; see `predict_adata`.
     """
     if not records:
         return _predict_empty(data_dims, return_raw)
@@ -204,6 +226,7 @@ def predictions_to_adata(
         [r["obs"] for r in records],
         all_obsm,
         return_raw=return_raw,
+        aggregate=aggregate,
     )
 
 
@@ -214,6 +237,7 @@ def predict_adata(
     adata: AnnDataLike,
     *,
     return_raw: bool = False,
+    aggregate: Literal["samples", "mean"] = "samples",
     max_per_group: int | None = None,
     require_target_state: bool = True,
     control_values_dict: dict[str, str] | None = None,
@@ -233,6 +257,10 @@ def predict_adata(
     :param inference_method: The method whose ``predict`` is called per group.
     :param adata: The input adata carrying the metadata to predict over, or several read as one dataset.
     :param return_raw: If ``True``, also return the concatenated `PredictionData`.
+    :param aggregate: With several samples per input row (``n_samples``), ``"samples"`` returns one row per
+        (input row, sample), the row's obs repeated and the sample's index in ``obs["sample_idx"]``.
+        ``"mean"`` returns one row per input row holding the mean over samples, with every sample in
+        ``obsm["raw_samples"]``. With one sample per row both give the same output.
     :param max_per_group: Per-group cap on observations.
     :param require_target_state: Whether ``adata`` must carry a target state representation.
     :param control_values_dict: Mapping from each condition level to its control value.
@@ -264,4 +292,4 @@ def predict_adata(
     finally:
         inference_method.module.train(was_training)
 
-    return predictions_to_adata(datamodule.data_dims, records, return_raw=return_raw)
+    return predictions_to_adata(datamodule.data_dims, records, return_raw=return_raw, aggregate=aggregate)

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning][].
 - Every `AnnData` argument of the data stack (`DataManager`, `FlowDataModule`, the loaders, `predict_adata`) also takes a list of them, read as one dataset; they must agree on dims and feature names, and the `.uns` tables the schema reads are merged across them (an entry in several must match). Requires scfit 0.0.11
 - The split is no longer part of a run: `RunConfig.splitter` / `splitter_seed` and `DataManager(splitter=...)` are removed. Write the split column beforehand and declare it with `split_by`.
 - `control_adata` is removed everywhere (`DataManager.get_dataloaders` / `get_eval_loader`, the loaders, `predict_adata`). Controls are drawn from the streamed data by the schema, and the loader holds just them in memory.
+- `predict_adata` returns every sample by default: with `n_samples` > 1 there is one row per (input row, sample), its obs repeated and the sample's index in `obs["sample_idx"]`. `aggregate="mean"` gives the old output, the mean over samples in `.X` and every sample in `obsm["raw_samples"]`
 
 ### Removed
 
@@ -45,3 +46,4 @@ and this project adheres to [Semantic Versioning][].
 - OT couplings sample matched pairs from the plan with replacement. Drawing without replacement pulled pair frequencies toward uniform (off-diagonal pairs of `[[.45, .05], [.05, .45]]` came out ~35% too often)
 - `TrainingPlan` keys its training generators by rank, optimizer step and batch index: with `accumulate_grad_batches > 1` every micro-batch of a step drew the same time, noise and matching randomness, and every DDP rank drew the same noise. `predict_adata` now keys its generators like `TrainingPlan.predict_step`, so both give the same predictions for a seed
 - `VariancePreservingDiracProbabilityPath` ran from target to source: its mean was `cos(πt/2)·x1 + sin(πt/2)·x0`. It now runs from `x0` at `t=0` to `x1` at `t=1`, with the velocity to match
+- With `n_samples` > 1, validation scored the mean over each row's samples, a distribution with 1 / `n_samples` of the predicted variance. It now scores every sample

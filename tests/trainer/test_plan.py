@@ -281,3 +281,67 @@ def test_ranks_draw_apart(dims, monkeypatch):
 
 def test_same_seed_same_draws(dims):
     assert _train_keys(dims, seed=3) == _train_keys(dims, seed=3) != _train_keys(dims, seed=4)
+
+
+class _Spy(torch.nn.Module):
+    """A metric that records what validation scores."""
+
+    def __init__(self):
+        super().__init__()
+        self.preds = []
+
+    def update(self, preds, targets):
+        self.preds.append(preds)
+
+
+def _noise_inference(dims: DataDimensions, n_samples: int) -> ODEInference:
+    """A zero velocity field generating from noise: every sample is its standard normal noise."""
+    module = _module()
+    for p in module.parameters():
+        torch.nn.init.zeros_(p)
+    return ODEInference(module, ODEInferenceConfig(generate_from_noise=True, n_samples=n_samples, n_steps=2), dims=dims)
+
+
+def test_validation_scores_every_sample(dims):
+    """Distributional metrics see the samples, not their mean, whose variance shrinks by 1 / n_samples."""
+    inference = _noise_inference(dims, n_samples=16)
+    plan = TrainingPlan(CFMTraining(inference.module, dims=dims), inference_method=inference, metrics={"spy": _Spy()})
+    dmod = _datamodule(_adata(), split_by="split")
+    dmod.setup("fit")
+    batch = next(iter(dmod.val_dataloader()[0]))
+    plan.validation_step(batch, 0)
+    (preds,) = plan.metrics[plan._val_names[0]]["spy"].preds
+    assert preds.shape == (16 * batch["target_state"].shape[0], 2)
+    assert 0.5 < preds.var().item() < 2
+
+
+@pytest.mark.parametrize("n_samples", [None, 1])
+def test_predict_adata_one_sample_unchanged(paired, dims, n_samples):
+    dmod, adata = paired
+    inference = ODEInference(_module(), ODEInferenceConfig(n_steps=2, n_samples=n_samples), dims=dims)
+    samples = predict_adata(dmod, inference, adata)
+    mean = predict_adata(dmod, inference, adata, aggregate="mean")
+    assert samples.n_obs == mean.n_obs == 30
+    np.testing.assert_array_equal(samples.X, mean.X)
+    pd.testing.assert_frame_equal(samples.obs.drop(columns="sample_idx", errors="ignore"), mean.obs)
+
+
+def test_predict_adata_aggregate(paired, dims):
+    """One row per (row, sample) by default, unshrunk; `aggregate="mean"` is the per-row mean with raw samples."""
+    dmod, adata = paired
+    inference = _noise_inference(dims, n_samples=16)
+    pred, raw = predict_adata(dmod, inference, adata, return_raw=True)
+    mean = predict_adata(dmod, inference, adata, aggregate="mean")
+
+    assert pred.n_obs == 30 * 16 and mean.n_obs == 30
+    assert "raw_samples" not in pred.obsm
+    np.testing.assert_array_equal(pred.obs["sample_idx"], np.tile(np.arange(16), 30))
+    pd.testing.assert_frame_equal(
+        pred.obs.drop(columns="sample_idx").iloc[::16].reset_index(drop=True),
+        mean.obs.reset_index(drop=True),
+    )
+    assert 0.5 < pred.X.var() < 2 and mean.X.var() < 0.2
+
+    np.testing.assert_allclose(mean.X, np.asarray(raw.X))
+    np.testing.assert_allclose(mean.obsm["raw_samples"].reshape(-1, 2), pred.X)
+    np.testing.assert_allclose(pred.X.reshape(30, 16, 2).mean(1), mean.X, rtol=1e-5, atol=1e-6)

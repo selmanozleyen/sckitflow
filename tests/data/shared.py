@@ -37,8 +37,7 @@ def with_split(
     """Attach a deterministic ``split`` column, each ``cols`` combination wholly inside one split.
 
     Round-robins the sorted combinations over ``labels``. Control rows (when ``control_col`` is given)
-    are labelled ``control_label`` instead, mirroring what :class:`CombinationSplitter` produces -- so a
-    control-only split yields no loader. Returns a copy.
+    are labelled ``control_label`` instead, so a control-only split yields no loader. Returns a copy.
     """
     adata = adata.copy()
     combos = list(zip(*(adata.obs[c].astype(str) for c in cols), strict=True))

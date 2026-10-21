@@ -227,7 +227,9 @@ class _StepDataBridge:
         self._assert_device = assert_device
         self._starget_state_loc = _get_loc(target_sample_rep)
         # The sources' state: their own rep when the schema gives them one, else the targets'.
-        self._source_state_loc = _get_loc(source_sample_rep) if source_sample_rep is not None else self._starget_state_loc
+        self._source_state_loc = (
+            _get_loc(source_sample_rep) if source_sample_rep is not None else self._starget_state_loc
+        )
         # group_by = group columns + categorical condition columns (continuous covs are streamed reps).
         self._group_cols: tuple[str, ...] = (*groups_schema.groups, *condition_schema.all_condition_cols)
         # Fixed matching (`matched_keys`) rides as one derived column shared by a target group and the source

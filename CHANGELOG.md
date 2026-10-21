@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Fixed
 
+- `MLP` no longer normalizes or drops out its output layer. With `use_layernorm` (no affine) every output row had mean 0 and variance 1, so a velocity decoder could not express a drift: a flow from noise to data away from zero (e.g. logicle-scale cytometry) stayed at the noise. Saved models with `use_layernorm`, `use_batchnorm` or dropout in an MLP load as before but predict differently
 - Gromov-Wasserstein and fused Gromov-Wasserstein couplings default to `scale_cost="mean"`, like the linear ones: unscaled float32 costs made entropic GW underflow to an all-zero plan. A batch whose plan is all zero still falls back to random pairs, but now warns (`RuntimeWarning`) instead of only logging
 - Pure Gromov-Wasserstein matching (`use_linear=False`) no longer fails on the missing linear term ([#145](https://github.com/theislab/sckitflow/issues/145))
 - OT couplings sample matched pairs from the plan with replacement. Drawing without replacement pulled pair frequencies toward uniform (off-diagonal pairs of `[[.45, .05], [.05, .45]]` came out ~35% too often)

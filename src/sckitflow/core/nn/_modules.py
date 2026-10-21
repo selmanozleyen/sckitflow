@@ -182,6 +182,7 @@ class MLP(torch.nn.Module):
                     self._output_dim,
                     self._final_activation_cls,
                     self._final_activation_cls_kwargs,
+                    final=True,
                 ),
             )
         )
@@ -193,8 +194,13 @@ class MLP(torch.nn.Module):
         output_dim: int,
         activation_cls: type[torch.nn.Module],
         activation_cls_kwargs: dict[str, Any],
+        *,
+        final: bool = False,
     ) -> torch.nn.Module:
         """Initializes a single layer.
+
+        The final layer is the linear map and its activation only: normalizing it would fix every output row's
+        mean and scale (a layer norm without affine makes each row mean 0, variance 1).
 
         :param input_dim: The input dimensionality of the layer.
         :type input_dim: class: `int`
@@ -214,7 +220,7 @@ class MLP(torch.nn.Module):
         layer = [
             ("linear", torch.nn.Linear(input_dim, output_dim, bias=self._bias)),
         ]
-        if self._use_batchnorm:
+        if self._use_batchnorm and not final:
             layer.append(
                 (
                     "batchnorm",
@@ -227,7 +233,7 @@ class MLP(torch.nn.Module):
                     ),
                 )
             )
-        if self._use_layernorm:
+        if self._use_layernorm and not final:
             layer.append(
                 (
                     "layernorm",
@@ -240,7 +246,7 @@ class MLP(torch.nn.Module):
                 )
             )
         layer.append(("activation", activation_cls(**activation_cls_kwargs)))
-        if self._dropout_p > 0.0:
+        if self._dropout_p > 0.0 and not final:
             layer.append(
                 (
                     "dropout",

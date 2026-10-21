@@ -55,18 +55,19 @@ def test_energy_distance_vs_sklearn():
     )
 
 
-def test_energy_distance_subsamples_large_inputs():
+@pytest.mark.parametrize("metric", [EnergyDistance, MaximumMeanDiscrepancy])
+def test_capped_metrics_approximate_the_full_ones(metric):
     rng = np.random.default_rng(0)
     pred, target = torch.tensor(rng.normal(size=(5000, 3))), torch.tensor(rng.normal(1.0, size=(300, 3)))
-    full, capped = EnergyDistance(), EnergyDistance(max_samples=1000)
+    full, capped, small = metric(), metric(max_samples=1000), metric(max_samples=1000)
     full.update(pred, target)
     capped.update(pred, target)
     assert capped.compute() == pytest.approx(full.compute().item(), rel=0.05)
 
-    small = EnergyDistance(max_samples=1000)  # fewer rows than the cap: exact
+    exact = metric()  # fewer rows than the cap: exact
+    exact.update(pred[:500], target)
     small.update(pred[:500], target)
-    exact = _compute_energy_distance_sklearn(pred[:500].numpy(), target.numpy())
-    assert small.compute() == pytest.approx(exact, rel=1e-6)
+    assert small.compute() == exact.compute()
 
 
 def test_maximum_mean_discrepancy_vs_sklearn():

@@ -10,6 +10,14 @@ __all__ = [
 ]
 
 
+def _subsample(x: torch.Tensor, max_samples: int | None) -> torch.Tensor:
+    """At most ``max_samples`` rows of ``x``, drawn at random with a fixed seed."""
+    if max_samples is None or len(x) <= max_samples:
+        return x
+    generator = torch.Generator(device=x.device).manual_seed(0)
+    return x[torch.randperm(len(x), generator=generator, device=x.device)[:max_samples]]
+
+
 def rbf_kernel_torch(x1: torch.Tensor, x2: torch.Tensor, gamma: float = 1.0):
     return torch.exp(-gamma * torch.cdist(x1, x2) ** 2)
 
@@ -29,14 +37,8 @@ class EnergyDistance(Metric):
         self.add_state("energy_distance_raw", default=torch.tensor(0.0, dtype=torch.float32), dist_reduce_fx="sum")
         self.add_state("total", default=torch.tensor(0.0, dtype=torch.float32), dist_reduce_fx="sum")
 
-    def _subsample(self, x: torch.Tensor) -> torch.Tensor:
-        if self.max_samples is None or len(x) <= self.max_samples:
-            return x
-        generator = torch.Generator(device=x.device).manual_seed(0)
-        return x[torch.randperm(len(x), generator=generator, device=x.device)[: self.max_samples]]
-
     def update(self, pred: torch.Tensor, target: torch.Tensor):
-        pred, target = self._subsample(pred), self._subsample(target)
+        pred, target = _subsample(pred, self.max_samples), _subsample(target, self.max_samples)
         sigma_pred = torch.cdist(pred, pred).mean()
         sigma_target = torch.cdist(target, target).mean()
         delta = torch.cdist(pred, target).mean()
@@ -48,8 +50,14 @@ class EnergyDistance(Metric):
 
 
 class MaximumMeanDiscrepancy(Metric):
-    def __init__(self, gammas: list[float] = None, dist_sync_on_step=False):
+    """MMD between predictions and targets with RBF kernels, averaged over gammas and updates.
+
+    :param max_samples: As for :class:`EnergyDistance`.
+    """
+
+    def __init__(self, gammas: list[float] = None, dist_sync_on_step=False, max_samples: int | None = None):
         super().__init__(dist_sync_on_step=dist_sync_on_step)
+        self.max_samples = max_samples
         if gammas is None:
             self.gammas = [2, 1, 0.5, 0.1, 0.01, 0.005]
         else:
@@ -59,7 +67,7 @@ class MaximumMeanDiscrepancy(Metric):
         self.add_state("total", default=torch.tensor(0.0, dtype=torch.float32), dist_reduce_fx="sum")
 
     def update(self, pred: torch.Tensor, target: torch.Tensor):
-        # computing mmd
+        pred, target = _subsample(pred, self.max_samples), _subsample(target, self.max_samples)
         mmds = []
         for gamma in self.gammas:
             xx = rbf_kernel_torch(pred, pred, gamma=gamma).mean()

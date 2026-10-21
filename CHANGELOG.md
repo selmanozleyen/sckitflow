@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Added
 
-- `EnergyDistance(max_samples=...)` scores a fixed random subset of at most that many rows per update: validation scores every sample, and the cost is quadratic in the rows
+- `EnergyDistance(max_samples=...)` and `MaximumMeanDiscrepancy(max_samples=...)` score a fixed random subset of at most that many rows per update: validation scores every sample, and the cost is quadratic in the rows
 
 ### Changed
 

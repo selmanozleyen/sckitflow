@@ -110,7 +110,7 @@ class TestNNModules:
         hidden_dims: Sequence[int],
         layer_config: dict[str, Any],
     ) -> None:
-        use_batchnorm = layer_config.get("use_batchnorm", False)
+        use_batchnorm = layer_config.get("use_batchnorm", False) and bool(hidden_dims)  # the output layer has none
         mlp = MLP(
             self._input_dim,
             self._output_dim,
@@ -155,6 +155,17 @@ class TestNNModules:
         ):
             output_tensor = mlp(input_tensor)
             return None
+
+    @pytest.mark.parametrize("norm", [{"use_layernorm": True}, {"use_batchnorm": True}, {"dropout_p": 0.5}])
+    def test_mlp_output_is_not_normalized(self, norm: dict[str, Any]) -> None:
+        """A velocity decoder must be able to output any mean and scale: the output layer is linear only."""
+        mlp = MLP(self._input_dim, 3, hidden_dims=[8], **norm).eval()
+        assert not {"layernorm", "batchnorm", "dropout"} & dict(mlp._mlp[-1].named_children()).keys()
+        with torch.no_grad():
+            mlp._mlp[-1].linear.bias.fill_(5.0)
+            mlp._mlp[-1].linear.weight.mul_(0.01)
+            out = mlp(torch.randn(16, self._input_dim))
+        assert torch.allclose(out, torch.full_like(out, 5.0), atol=0.5)
 
     @pytest.mark.parametrize("activation_cls", [None, torch.nn.ReLU])
     @pytest.mark.parametrize("final_activation_cls", [None, torch.nn.Identity])

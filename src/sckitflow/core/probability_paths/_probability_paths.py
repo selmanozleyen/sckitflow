@@ -476,12 +476,12 @@ class VariancePreservingDiracProbabilityPath(BaseProbabilityPath):
     The Mean of the Variance Preserving Probability Path is defined as:
 
         .. math::
-            \mu_t(\boldsymbol{x}_0, \boldsymbol{x}_1) = \sin(\frac{1}{2}\pi t)\boldsymbol{x}_0 + \cos(\frac{1}{2}\pi t)\boldsymbol{x}_1
+            \mu_t(\boldsymbol{x}_0, \boldsymbol{x}_1) = \cos(\frac{1}{2}\pi t)\boldsymbol{x}_0 + \sin(\frac{1}{2}\pi t)\boldsymbol{x}_1
 
     The Conditional Velocity Field Generating the Variance Preserving Probability Path is defined as:
 
         .. math::
-            u_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1) = \frac{1}{2}\pi \cos(\frac{1}{2}\pi t)\boldsymbol{x}_0 - \frac{1}{2}\pi\cos(\frac{1}{2}\pi t)\boldsymbol{x}_1
+            u_t(\boldsymbol{x}_t | \boldsymbol{x}_0, \boldsymbol{x}_1) = -\frac{1}{2}\pi \sin(\frac{1}{2}\pi t)\boldsymbol{x}_0 + \frac{1}{2}\pi\cos(\frac{1}{2}\pi t)\boldsymbol{x}_1
 
     It is deterministic and it does not require a Pseudo-Random Numbers Generator to be instantiated.
     """
@@ -515,7 +515,7 @@ class VariancePreservingDiracProbabilityPath(BaseProbabilityPath):
         t = broadcast_to_target_shape(t, x0.shape)
         self._verify_shapes(x0, x1)
         self._verify_shapes(t, x1)
-        return torch.cos(0.5 * PI * t) * x1 + torch.sin(0.5 * PI * t) * x0
+        return torch.cos(0.5 * PI * t) * x0 + torch.sin(0.5 * PI * t) * x1
 
     def compute_sigma_t(
         self,
@@ -557,4 +557,4 @@ class VariancePreservingDiracProbabilityPath(BaseProbabilityPath):
         t = broadcast_to_target_shape(t, x0.shape)
         self._verify_shapes(x0, x1)
         self._verify_shapes(t, x1)
-        return -0.5 * PI * torch.sin(0.5 * PI * t) * x1 + 0.5 * PI * torch.cos(0.5 * PI * t) * x0
+        return -0.5 * PI * torch.sin(0.5 * PI * t) * x0 + 0.5 * PI * torch.cos(0.5 * PI * t) * x1

@@ -146,7 +146,8 @@ class ODEInferenceConfig(FlowMethodConfig, InferenceMethodConfig):
     n_steps: int = Field(default=100, ge=2)
     """Points on the solver's time grid, both ends included."""
     n_samples: PositiveInt | None = None
-    """Samples per batch element. Required when ``generate_from_noise`` is ``True``."""
+    """Samples per batch element. Required when ``generate_from_noise`` is ``True``. With several, the prediction's
+    ``X`` is their mean (a conditional mean, not a sample); every sample stays in ``obsm["raw_samples"]``."""
 
     @model_validator(mode="after")
     def _noise_needs_samples(self) -> ODEInferenceConfig:

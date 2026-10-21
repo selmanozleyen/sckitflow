@@ -165,4 +165,16 @@ class MLPVelocityConfig(ModuleConfig):
                 for key, layers in self.condition_encoder_input_layers.items()
             }
             kwargs["condition_encoder_continuous_covariates"] = list(dims.condition_continuous_dims or ())
-        return MLPVelocity(dims.state_dim, **kwargs)
+        if dims.source_state_dim is not None:
+            # The sources have their own state rep: only a source encoder reads it, sized from the data.
+            if self.source_encoder_mlp_kwargs is None:
+                raise ValueError(
+                    "The sources have their own state rep (`source_sample_rep`), which the velocity field only "
+                    "reads through a source encoder; without one it would ignore them. Set "
+                    "`source_encoder_mlp_kwargs`."
+                )
+            if "input_dim" in self.source_encoder_mlp_kwargs:
+                raise ValueError(
+                    "The source encoder's `input_dim` comes from the data; drop it from `source_encoder_mlp_kwargs`."
+                )
+        return MLPVelocity(dims.state_dim, source_state_dim=dims.source_state_dim, **kwargs)

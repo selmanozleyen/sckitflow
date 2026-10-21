@@ -61,8 +61,8 @@ Key concepts
   ``time_sampler`` and ``noise_sampler`` in the config are ``SamplerConfig``
   objects (portable — the run's spec serializes them). See
   ``sckitflow.core._samplers``.
-- **Transform**: optional pre-processing of the ``sample_rep`` (or ``.X`` when
-  ``sample_rep is None``), fitted on the training split only. Configured via
+- **Transform**: optional pre-processing of the ``target_sample_rep`` (or ``.X`` when
+  ``target_sample_rep is None``), fitted on the training split only. Configured via
   ``config.transform``. Persisted to ``run_dir`` alongside the run.
 - **Inference**: integrates the learned ODE from t=0 to t=1 with ``torchdiffeq``,
   configured via ``ODEInferenceConfig``.
@@ -239,18 +239,18 @@ def main(config: DictConfig) -> float:
     # Fitting the transformation parameters on the training split only.
     transform = transform.fit_adata(
         training_adata,
-        obsm=config.datamanager.sample_rep,
+        obsm=config.datamanager.target_sample_rep,
     )
 
     # Now we need to store the original representation in a new key, so that
     # we can retrieve it back later after transformation.
-    if config.datamanager.sample_rep is not None:
-        if config.datamanager.sample_rep not in adata.obsm_keys():
+    if config.datamanager.target_sample_rep is not None:
+        if config.datamanager.target_sample_rep not in adata.obsm_keys():
             raise ValueError(
-                f"Representation {config.datamanager.sample_rep!r} not found in "
+                f"Representation {config.datamanager.target_sample_rep!r} not found in "
                 f"adata.obsm; available keys: {list(adata.obsm_keys())}."
             )
-        X_original_rep = adata.obsm[config.datamanager.sample_rep]
+        X_original_rep = adata.obsm[config.datamanager.target_sample_rep]
     else:
         X_original_rep = adata.X
 
@@ -267,8 +267,8 @@ def main(config: DictConfig) -> float:
     # values back where they came from, so that they can still be read from
     # the rest of the script.
     X_transformed = transform.transform(X_original_rep)
-    if config.datamanager.sample_rep is not None:
-        adata.obsm[config.datamanager.sample_rep] = X_transformed
+    if config.datamanager.target_sample_rep is not None:
+        adata.obsm[config.datamanager.target_sample_rep] = X_transformed
     else:
         adata.X = X_transformed
 
@@ -277,7 +277,7 @@ def main(config: DictConfig) -> float:
     # in the ``datamodule``, of which it is an attribute.
     logger.info("Initializing datamanager.")
     dm_cfg = DataManagerConfig(
-        sample_rep=config.datamanager.sample_rep,
+        target_sample_rep=config.datamanager.target_sample_rep,
         categorical_conditions=config.datamanager.categorical_conditions,
         categorical_reps=config.datamanager.categorical_reps,
         continuous_conditions=config.datamanager.continuous_conditions,

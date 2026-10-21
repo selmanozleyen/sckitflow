@@ -107,9 +107,9 @@ class TestLoaderStepDataMapping:
             assert np.any(np.all(np.isclose(src, row), axis=1)), "Xcond row not from the selected group"
 
     def test_sample_rep_reads_state_from_obsm(self, loader_adata):
-        """With sample_rep set, target_state comes from that obsm key instead of .X."""
+        """With target_sample_rep set, target_state comes from that obsm key instead of .X."""
         ad = loader_adata
-        sd = next(iter(_loader(ad, _dm(sample_rep="Xrep"))))
+        sd = next(iter(_loader(ad, _dm(target_sample_rep="Xrep"))))
         assert sd["target_state"].shape[1] == REP_DIM
 
     def test_control_link_populates_source_state(self, loader_adata):

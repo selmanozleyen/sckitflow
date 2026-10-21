@@ -1,10 +1,8 @@
 from collections.abc import Collection
 
 import pytest
-from anndata import AnnData
 
 from sckitflow.data._group_encoders import OneHotEncoderConfig
-from sckitflow.data.containers import CategoricalData
 from sckitflow.data.schemas import GroupsDataSchema
 
 from ..shared import verify_categorical_data  # noqa
@@ -78,54 +76,5 @@ class TestGroupsDataSchema:
         _schema = GroupsDataSchema(
             groups=groups,
             groups_reps=groups_reps,
-            groups_encoding=groups_encoding,
-        )
-
-    @pytest.mark.parametrize(
-        "groups",
-        [
-            ["source_split"],
-            [inval_key],
-        ],
-    )
-    @pytest.mark.parametrize(
-        "groups_reps",
-        [None, {"source_split": "source_split"}, {"source_split": inval_key}],
-    )
-    @pytest.mark.parametrize(
-        "encoded",
-        [False, True],
-    )
-    def test_get_data(
-        self,
-        adata: AnnData,
-        uns_keys_to_nunique_prefix_and_dim: dict[str, tuple[int, str, int]],
-        groups: Collection[str] | None,
-        groups_reps: dict[str, str] | None,
-        encoded: bool,
-    ) -> None:
-        groups_encoding = (
-            {"source_split": OneHotEncoderConfig(categories=tuple(adata.obs["source_split"].unique()))}
-            if encoded
-            else None
-        )
-        if not self._is_valid_args(groups, groups_reps, groups_encoding):
-            pytest.skip()
-        schema = GroupsDataSchema(
-            groups=groups,
-            groups_reps=groups_reps,
-            groups_encoding=groups_encoding,
-        )
-        if inval_key in groups or (groups_reps is not None and inval_key in groups_reps.values()):
-            with pytest.raises(KeyError):
-                data = schema.get_data(adata)
-            return None
-        data = schema.get_data(adata)
-        assert isinstance(data, CategoricalData)
-        verify_categorical_data(
-            data,
-            groups,
-            uns_keys_to_nunique_prefix_and_dim,
-            categorical_reps=groups_reps,
             groups_encoding=groups_encoding,
         )

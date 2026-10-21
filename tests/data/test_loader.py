@@ -12,7 +12,6 @@ import torch
 from anndata import AnnData
 from scipy import sparse
 
-from sckitflow.data._dims import DataDimensions
 from sckitflow.data._group_encoders import LabelEncoderConfig, OneHotEncoderConfig
 from sckitflow.data._loader import Loader
 from sckitflow.data._manager import DataManager, DataManagerConfig
@@ -559,7 +558,5 @@ class TestGroupEncoding:
             for split in ("s0", "s1")
         }
         assert not torch.equal(codes["s0"], codes["s1"])
-        dims = DataDimensions.init_from_distribution_data(
-            dm.get_distribution_data(loader_adata), loader_adata.var_names
-        )
+        dims = dm.get_data_dimensionalities(loader_adata)
         assert codes["s0"].shape[-1] == dims.groups_reps_dims["source_split"]

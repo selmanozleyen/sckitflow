@@ -3,11 +3,11 @@ from typing import Any
 import numpy as np
 import torch
 
-from sckitflow.core._types import SamplerFn, StepData, TensorMixin
+from sckitflow.core._types import SamplerFn, StepData
 from sckitflow.core._utils import to_torch_tensor
 from sckitflow.data import mixins
 from sckitflow.data._dims import DataDimensions
-from sckitflow.data.containers import CategoricalData, MixedTypeData
+from sckitflow.data.containers import CategoricalData
 
 __all__ = [
     "batchmixin_to_torch",
@@ -16,7 +16,6 @@ __all__ = [
     "expand_conditioning",
     "prepare_latent_train",
     "prepare_latent_inference",
-    "TorchMixedTypeData",
 ]
 
 
@@ -33,12 +32,12 @@ def batchmixin_to_torch(
 
 
 def get_tensor_dict_from_data(
-    data: MixedTypeData | CategoricalData | dict[str, np.ndarray | torch.Tensor] | None,
+    data: CategoricalData | dict[str, np.ndarray | torch.Tensor] | None,
 ) -> dict[str, torch.Tensor]:
     """Extracts torch tensors from the distribution data."""
     if data is None:
         return {}
-    data_dict = data.extract_reps() if isinstance(data, MixedTypeData | CategoricalData) else data
+    data_dict = data.extract_reps() if isinstance(data, CategoricalData) else data
     return batchmixin_to_torch(data_dict)
 
 
@@ -206,59 +205,3 @@ def prepare_latent_inference(
     # Batch present: one draw per observation, or `n_samples` per observation.
     shape = (batch_size, dims.state_dim) if n_samples is None else (n_samples, batch_size, dims.state_dim)
     return noise_sampler(shape, generator=generator, device=device, dtype=dtype)
-
-
-class TorchMixedTypeData(MixedTypeData):
-    """"""  # noqa
-
-    def extract_reps(self) -> TensorMixin:
-        """Extracts the representations for the underlying data."""
-        if self.categorical_covariates is not None:
-            cat_reps = self.categorical_covariates.extract_reps()
-        else:
-            cat_reps = TensorMixin({})
-
-        if self.continuous_covariates is not None:
-            return TensorMixin(
-                {
-                    **self.continuous_covariates.mapping,
-                    **cat_reps.mapping,
-                }
-            )
-        return cat_reps
-
-    @classmethod
-    def from_mixed_type_data(
-        cls, key: str, x_cond: torch.Tensor, base_container: MixedTypeData | None = None
-    ) -> "TorchMixedTypeData":
-        """Constructor from input data and optional base container.
-
-        Instaties the torch mixed data from a base container, while overriding the continuous covariates at the given key.
-
-        :param key: The contiuous covariates key to override.
-        :type key: class: `str`
-
-        :param x_cond: The data for the continuous covariates to override with.
-        :type x_cond: class: `torch.Tensor`
-
-        :param base_container: Optional base container from which to retain the other condition covariates.
-            Defaults to `None`, in which case the container will be created from scratch.
-        :type base_container: class: `MixedTypeData | None`
-        """
-        if base_container is not None:
-            categorical_covariates = base_container.categorical_covariates
-            continuous_covariates = base_container.continuous_covariates
-        else:
-            categorical_covariates = None
-            continuous_covariates = None
-
-        if continuous_covariates is not None:
-            mapping = continuous_covariates.mapping
-            mapping[key] = x_cond
-        else:
-            mapping = {key: x_cond}
-
-        mapping = {k: to_torch_tensor(v) for k, v in mapping.items()}
-        mixin = TensorMixin(mapping)
-
-        return cls(categorical_covariates=categorical_covariates, continuous_covariates=mixin)

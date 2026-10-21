@@ -2,7 +2,6 @@ from collections.abc import Collection, Mapping
 from typing import Any
 
 import pandas as pd
-from anndata import AnnData
 
 from sckitflow._types import TargetCovariatesEncoderCls
 from sckitflow._utils import check_sequence_query_against_reference
@@ -59,41 +58,6 @@ class GroupsDataSchema(StrictDataSchema):
         if len(shared_keys):
             msg = "Each group column should have only one representation"
             raise ValueError(msg)
-
-    def _verify_groups(self, adata: AnnData) -> None:
-        """Verifies the :attr:`self.groups` attribute on the input data.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        for group in self._groups:
-            self._check_key_found_in_adata_field(adata, group, "obs")
-
-    def _verify_groups_reps(self, adata: AnnData) -> None:
-        """Verifies the :attr:`self.groups_reps` attribute on the input data.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        for rep in self._groups_reps.values():
-            self._check_key_found_in_adata_field(adata, rep, "uns")
-
-    def _verify_schema(self, adata):
-        """Verifies the schema on the input data.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        self._verify_groups(adata)
-        self._verify_groups_reps(adata)
-
-    def _get_data(self, adata: AnnData) -> CategoricalData:
-        """Enforces the schema on the input :class: `AnnData`.
-
-        :param adata: The input data.
-        :type adata: class: `AnnData`
-        """
-        return self.categorical_data(adata.obs, adata.uns)
 
     def categorical_data(self, obs: pd.DataFrame, uns: Mapping[str, Any]) -> CategoricalData:
         """The group covariates of ``obs`` rows, looked up in the ``uns`` tables or encoded.

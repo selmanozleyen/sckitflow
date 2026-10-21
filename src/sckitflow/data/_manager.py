@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import copy
-import dataclasses
 from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, Unpack
 
 import numpy as np
 import pandas as pd
-import torch
 from anndata import AnnData
 from scfit.data import obs_columns
 from scfit.registry import Component, component
@@ -17,14 +15,9 @@ if TYPE_CHECKING:
 
     from sckitflow.data._loader import EvalLoader, Loader
 
-from sckitflow._types import TargetCovariatesEncodingId
 from sckitflow.data._dims import DataDimensions
 from sckitflow.data._group_encoders import GroupEncoderConfig
 from sckitflow.data._utils import AnnDataLike, as_adatas, with_derived_obs_stacked
-from sckitflow.data.containers._categorical import CategoricalData
-from sckitflow.data.containers._distribution import DistributionData
-from sckitflow.data.containers._mixed_type import MixedTypeData
-from sckitflow.data.containers._state import StateData
 from sckitflow.data.schemas import (
     ConditionDataSchema,
     CouplingDataSchema,
@@ -34,11 +27,6 @@ from sckitflow.data.schemas import (
 )
 
 __all__ = ["DataManagerConfig", "LoaderKwargs", "DataManager"]
-
-
-def _plain(dims: DataDimensions) -> dict[str, Any]:
-    """``dims`` without its feature names, which compare as an index rather than with ``==``."""
-    return {k: v for k, v in vars(dims).items() if k != "feature_names"}
 
 
 # The conventional split column name -- only used to catch an adata that carries a split the
@@ -148,7 +136,6 @@ class DataManager:
         self.config = config = DataManagerConfig() if config is None else config
         self._control_values_dict = config.control_values_dict
         self._matched_keys = dict(config.matched_pairs) if config.matched_pairs else None
-        self._condition_state_key = config.condition_state_key
 
         self._split_by = config.split_by
 
@@ -164,19 +151,12 @@ class DataManager:
             target_rep_quad=config.target_rep_quad,
             use_linear=config.use_linear,
         )
-        self._target_data_schema = ResponseDataSchema(
-            categorical_covs_dict=config.target_categorical_covs_dict,
-            continuous_covs=config.target_continuous_covs,
-        )
+        self._target_data_schema = ResponseDataSchema(continuous_covs=config.target_continuous_covs)
         self._groups_data_schema = GroupsDataSchema(
             groups=config.groups,
             groups_reps=config.groups_reps,
             groups_encoding=config.groups_encoding,
         )
-
-    @property
-    def _view_on_condition_space(self) -> bool:
-        return self._condition_state_key is not None
 
     @property
     def _loader_schema(self) -> dict[str, Any]:
@@ -217,10 +197,7 @@ class DataManager:
         n_features: int,
     ) -> pd.Index:
         """Determines feature names based on the state representation used."""
-        if self._view_on_condition_space:
-            sample_rep = self._condition_state_key
-        else:
-            sample_rep = self._state_data_schema.sample_rep
+        sample_rep = self._state_data_schema.sample_rep
 
         # If we have a valid base name, build feature names as "base_0", "base_1", ...
         if sample_rep is not None:
@@ -233,164 +210,111 @@ class DataManager:
         # Last resort: generic feature names.
         return pd.Index([f"feature_{i}" for i in range(n_features)])
 
-    def _get_state_data(
-        self,
-        adata: AnnData,
-    ) -> StateData:
-        return self._state_data_schema.get_data(adata)
-
-    def _get_condition_data(
-        self,
-        adata: AnnData,
-    ) -> MixedTypeData | None:
-        return self._condition_data_schema.get_data(adata)
-
-    def _get_groups_data(
-        self,
-        adata: AnnData,
-    ) -> CategoricalData:
-        return self._groups_data_schema.get_data(adata)
-
-    def _get_target_data(
-        self,
-        adata: AnnData,
-    ) -> MixedTypeData | None:
-        return self._target_data_schema.get_data(adata)
-
-    def _get_distribution_data(
-        self,
-        adata: AnnData,
-        require_target_state: bool = True,
-        *,
-        sides: tuple[bool, bool] = (True, True),
-        state: bool = True,
-    ) -> DistributionData:
-        state_data: StateData | None = self._get_state_data(adata) if require_target_state and state else None
-        condition_data: MixedTypeData = self._get_condition_data(adata)
-        response_data: MixedTypeData = self._get_target_data(adata)
-        groups_data: CategoricalData = self._get_groups_data(adata)
-        if require_target_state:
-            source, target = sides
-            source_coupling_data, target_coupling_data = self._coupling_data_schema.get_sides(
-                adata, source=source, target=target
-            )
-        else:
-            # coupling reps default to the state representation (`.X`) unless explicitly
-            # configured otherwise, so they are unavailable in the same cases as state_data.
-            source_coupling_data, target_coupling_data = None, None
-
-        distribution_data = DistributionData(
-            state_data,
-            response_data=response_data,
-            condition_data=condition_data,
-            groups_data=groups_data,
-            source_coupling_data=source_coupling_data,
-            target_coupling_data=target_coupling_data,
-        )
-
-        if self._view_on_condition_space:
-            return distribution_data.view_on_condition_space(self._condition_state_key)
-        return distribution_data
-
-    def _get_data_dimensionalities(
-        self,
-        data: DistributionData,
-        feature_names: pd.Index,
-    ) -> DataDimensions:
-        return DataDimensions.init_from_distribution_data(data, feature_names)
-
-    def get_distribution_data(
-        self,
-        adata: AnnData,
-        require_target_state: bool = True,
-    ) -> DistributionData:
-        """Compiles an annotated data object into a distribution data container.
-
-        :param adata: The annotated data object to compile.
-        :type adata: class: `AnnData`
-
-        :param require_target_state: Whether the state representation (`.X` or the configured
-            `obsm` sample representation) is required from `adata`. Set to `False` to compile
-            only the distribution metadata (condition/group covariates) when no target state
-            data is available, e.g. for prediction without target states. Defaults to `True`.
-        :type require_target_state: class: `bool`
-        """
-        return self._get_distribution_data(
-            adata,
-            require_target_state=require_target_state,
-        )
-
     def get_data_dimensionalities(
         self,
         adata: AnnDataLike,
     ) -> DataDimensions:
-        """Registers the data dimensionalities from the input data according to the current schema.
+        """The dimensions the schema reads from ``adata``, from the reps' shapes: nothing is loaded.
 
-        Several AnnData are read as one dataset (see :meth:`_parts`). Each reads only what its cells need: the
-        targets' state (``target_sample_rep``) and quadratic rep where the targets are, the sources' where the sources
-        are. Every file reading a rep must agree on its width (and the state on its feature names), and on every
-        other dimension.
+        Several AnnData are read as one dataset (see :meth:`_parts`), each sized only on the reps its cells read
+        (see :meth:`_dims_from_shapes`).
 
         :param adata: The annotated data object(s) which to extract the dimensionalities from.
         :type adata: class: `AnnData | Sequence[AnnData]`
         """
         parts = self._parts(adata)
-        roles = self._roles(parts)
-        dims = [self._dims_of(a, sides=r) for a, r in zip(parts, roles, strict=True)]
-        own_space = self.config.source_sample_rep is not None
+        return self._dims_from_shapes(parts, self._roles(parts))
 
-        # The targets' state space: one width and feature names in every file reading `target_sample_rep`.
-        reading = [i for i, r in enumerate(roles) if r[1] or not own_space]
-        if not reading:
+    def _dims_from_shapes(self, parts: list[AnnData], roles: list[tuple[bool, bool]]) -> DataDimensions:
+        """The dimensions from the reps' shapes and one group's encodings: nothing is read into memory.
+
+        Each rep is sized in the files whose cells read it -- the targets' state, quadratic rep and covariates where
+        the targets are, the sources' where the sources are, the linear coupling term everywhere -- and must have one
+        width across them. The condition and group encodings are sized by encoding one group the way the loaders do.
+        """
+        cfg = self.config
+        own_space = cfg.source_sample_rep is not None
+        holding = {
+            "sources": [i for i, r in enumerate(roles) if r[0]],
+            "targets": [i for i, r in enumerate(roles) if r[1]],
+            "all": list(range(len(parts))),
+            "state": [i for i, r in enumerate(roles) if r[1] or not own_space],
+        }
+        if not holding["state"]:
             raise ValueError(
                 "None of the AnnData holds target cells, so the targets' state space (`target_sample_rep`) is unknown. "
                 "Pass data holding target cells as well."
             )
-        first = dims[reading[0]]
-        for i in reading[1:]:
-            if dims[i].state_dim != first.state_dim:
-                diff = f"{dims[i].state_dim} vs {first.state_dim} features"
-            elif not dims[i].feature_names.equals(first.feature_names):
-                diff = "the same width but different feature names"
-            else:
-                continue
-            raise ValueError(
-                f"AnnData {i} and AnnData {reading[0]} differ in their state (`target_sample_rep`): {diff}. The state is "
-                "one space; align the files to it. If the sources have their own state on purpose, name it with "
-                "`source_sample_rep`."
-            )
 
-        merged: dict[str, Any] = {}
-        # Per-side widths: each from the files holding that side, one width across them.
-        per_side = {"source_quad_dim": 0, "target_quad_dim": 1, "source_state_dim": 0}
-        for field, side in per_side.items():
-            widths = {i: getattr(d, field) for i, (d, r) in enumerate(zip(dims, roles, strict=True)) if r[side]}
+        def width(key: str | None, files: str, field: str) -> int | None:
+            widths = {}
+            for i in holding[files]:
+                rep = parts[i].X if key is None else parts[i].obsm.get(key)
+                if rep is None:
+                    raise KeyError(f"AnnData {i} lacks obsm[{key!r}] (`{field}`), which its cells read.")
+                widths[i] = int(rep.shape[1])
             if len(set(widths.values())) > 1:
+                hint = {
+                    "rep_lin": " It compares sources with targets directly; use an embedding both sides share, or "
+                    "match across spaces with the quadratic terms alone (`use_linear=False`).",
+                    "target_sample_rep": " If the sources have their own state on purpose, name it with "
+                    "`source_sample_rep`.",
+                }.get(field, "")
                 raise ValueError(
-                    f"{field} differs across the AnnData holding {('sources', 'targets')[side]}: "
+                    f"`{field}` ({key or 'X'}) has different widths across the AnnData reading it: "
                     + ", ".join(f"AnnData {i}: {w}" for i, w in widths.items())
-                    + ". A side's rep needs one width in every file holding that side."
+                    + f". It needs one width in every file that reads it; align the files to it.{hint}"
                 )
-            merged[field] = next(iter(widths.values()), None)
+            return next(iter(widths.values()), None)
 
-        # The linear coupling term compares sources with targets directly: one width everywhere.
-        lin = {(d.source_lin_dim, d.target_lin_dim) for d in dims}
-        if len(lin) > 1:
-            raise ValueError(
-                f"The linear coupling term (`rep_lin`) has different widths across the AnnData ({sorted(lin)}). It "
-                "compares sources with targets directly, so it needs one width in every file; align the files "
-                "to it, or match across spaces with the quadratic terms alone (`use_linear=False`)."
+        # The targets' state: one width and feature names in every file reading it.
+        state_dim = width(cfg.target_sample_rep, "state", "target_sample_rep")
+        names = {i: self._get_feature_names(parts[i], state_dim) for i in holding["state"]}
+        first = holding["state"][0]
+        for i, n in names.items():
+            if not n.equals(names[first]):
+                raise ValueError(
+                    f"AnnData {i} and AnnData {first} differ in their state (`target_sample_rep`): the same width but "
+                    "different feature names. The state is one space; align the files to it. If the sources have "
+                    "their own state on purpose, name it with `source_sample_rep`."
+                )
+
+        lin = width(cfg.rep_lin, "all", "rep_lin") if cfg.use_linear else None
+        reps = self._encoding_widths(parts, roles)
+        return DataDimensions(
+            state_dim=state_dim,
+            feature_names=names[first],
+            condition_reps_dims=reps["conditions"],
+            condition_continuous_dims={
+                c: width(c, "targets", "continuous_conditions")
+                for c in self._condition_data_schema.continuous_conditions
+            },
+            response_reps_dims={},
+            response_continuous_dims={
+                c: width(c, "targets", "target_continuous_covs") for c in (cfg.target_continuous_covs or ())
+            },
+            groups_reps_dims=reps["groups"],
+            source_lin_dim=lin,
+            source_quad_dim=width(cfg.source_rep_quad, "sources", "source_rep_quad") if cfg.source_rep_quad else None,
+            target_lin_dim=lin,
+            target_quad_dim=width(cfg.target_rep_quad, "targets", "target_rep_quad") if cfg.target_rep_quad else None,
+            source_state_dim=width(cfg.source_sample_rep, "sources", "source_sample_rep") if own_space else None,
+        )
+
+    def _encoding_widths(self, parts: list[AnnData], roles: list[tuple[bool, bool]]) -> dict[str, dict[str, int]]:
+        """The condition and group encodings' widths, from encoding one target group as the loaders do."""
+        if not self.group_cols:
+            return {"conditions": {}, "groups": {}}
+        obs = obs_columns([p for p, r in zip(parts, roles, strict=True) if r[1]] or parts, list(self.group_cols))
+        leaf = obs.iloc[[0]].reset_index(drop=True)
+        uns = parts[0].uns  # `_parts` merged the tables the schema reads into every part
+        out = {}
+        for name, schema in (("conditions", self._condition_data_schema), ("groups", self._groups_data_schema)):
+            data = schema.categorical_data(leaf, uns) if name == "groups" or schema.has_categorical_covariates else None
+            out[name] = (
+                {k: int(v.shape[-1]) for k, v in data.extract_reps().mapping.items()} if data is not None else {}
             )
-
-        # Everything else must agree across every file.
-        own = {*per_side, "state_dim", "source_lin_dim", "target_lin_dim"}
-        base = _plain(dims[0])
-        for i, other in enumerate(dims[1:], start=1):
-            plain = _plain(other)
-            differ = [f"{k} ({base[k]} vs {plain[k]})" for k in base if k not in own and plain[k] != base[k]]
-            if differ:
-                raise ValueError(f"AnnData {i} disagrees with AnnData 0 on {', '.join(differ)}.")
-        return dataclasses.replace(first, **merged)
+        return out
 
     def _roles(self, parts: list[AnnData]) -> list[tuple[bool, bool]]:
         """Per AnnData, whether it holds sources and whether it holds targets, as the loaders route them."""
@@ -405,21 +329,6 @@ class DataManager:
             leaves = set(map(tuple, obs_columns(part, list(self.group_cols)).drop_duplicates().to_numpy()))
             roles.append((not leaves.isdisjoint(sources), not leaves.isdisjoint(targets)))
         return roles
-
-    def _dims_of(self, adata: AnnData, *, sides: tuple[bool, bool] = (True, True)) -> DataDimensions:
-        """One file's dimensions, reading only the reps of the sides it holds (``sides`` = sources, targets)."""
-        reads_state = sides[1] or self.config.source_sample_rep is None
-        data: DistributionData = self._get_distribution_data(adata, sides=sides, state=reads_state)
-        n_features = data.state_data.X.shape[1] if data.state_data is not None else 0
-        dims = self._get_data_dimensionalities(data, self._get_feature_names(adata, n_features))
-        if self.config.source_sample_rep is not None and sides[0]:
-            if self.config.source_sample_rep not in adata.obsm:
-                raise ValueError(
-                    f"AnnData holding source cells lacks obsm[{self.config.source_sample_rep!r}] "
-                    "(`source_sample_rep`), the sources' state."
-                )
-            dims = dataclasses.replace(dims, source_state_dim=int(adata.obsm[self.config.source_sample_rep].shape[1]))
-        return dims
 
     def _parts(self, adata: AnnDataLike) -> list[AnnData]:
         """``adata`` as a list read as one dataset, each part carrying the merged ``.uns`` tables the schema reads.
@@ -790,11 +699,6 @@ class DataManager:
         """Exposes the target data schema."""
         return self._target_data_schema
 
-    @property
-    def condition_state_key(self) -> str | None:
-        """Returns the key used to define the condition covariates to be viewed as state."""
-        return self._condition_state_key
-
 
 @component("data_manager", builds=DataManager)
 class DataManagerConfig(Component):
@@ -841,14 +745,6 @@ class DataManagerConfig(Component):
     """The `.obs` column holding the split labels, written before the data reaches a run (e.g. by a
     pipeline step). Its presence is checked when loaders are built. ``None``
     means there is no split and every non-control group trains."""
-
-    condition_state_key: str | None = None
-    """The key for the continuous condition covariates to be viewed as state when
-    `view_on_condition_space` is `True`. This argument is ignored otherwise."""
-
-    target_categorical_covs_dict: dict[str, TargetCovariatesEncodingId] | None = None
-    """Mapping indicating the encoding used to transform categorical target covariates, used to
-    initialize the target data schema."""
 
     target_continuous_covs: tuple[str, ...] | None = None
     """Collection of string identifiers for the continuous target covariates, used to initialize the

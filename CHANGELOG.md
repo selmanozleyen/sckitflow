@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning][].
 
 ### Changed
 
+- `DataManager.get_data_dimensionalities` sizes each representation from its shape in the files whose cells read it, and the condition and group encodings by encoding one group the way the loaders do, so the dimensions and the batches come from one code path. The in-memory containers that only fed the dimensions (`DistributionData`, `StateData`, `MixedTypeData`, `CouplingData`), `DataManager.get_distribution_data` and the schemas' `get_data` are removed
+- `DataManagerConfig.condition_state_key` and `target_categorical_covs_dict` are removed: only the dimensions honoured them, never the loaders, so a model sized with them trained on differently shaped batches
+
 - `DataManagerConfig.sample_rep` is renamed `target_sample_rep`, next to the new `source_sample_rep`; the loaders' `sample_rep` argument likewise
 - The torch stack (`torch`, `lightning`, `pot`, `torchdiffeq`, `torchmetrics`, `torchsde`) is a core dependency: `import sckitflow` always needed it. The `torch` extra is kept, empty, so `sckitflow[torch]` still installs. `cloudpickle` moves to the test extra, and the unused `sckitflow._runtime` is removed
 

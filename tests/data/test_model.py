@@ -1,5 +1,6 @@
 import json
 
+import pandas as pd
 import pytest
 import torch
 from anndata import AnnData
@@ -81,8 +82,14 @@ def test_reload_keeps_the_training_vocabulary(tmp_path, adata_small: AnnData):
     without_first = adata_small[adata_small.obs["cell_line"] != first].copy()
 
     def encodings(model: Model) -> dict:
-        encoder = model.manager.get_distribution_data(without_first).groups_data.categorical_encoders["cell_line"]
-        return {line: encoder.transform([[line]]).toarray().tolist() for line in rest}
+        schema = model.manager.groups_data_schema
+        return {
+            line: schema.categorical_data(pd.DataFrame({"cell_line": [line]}), without_first.uns)
+            .extract_reps()
+            .mapping["cell_line"]
+            .tolist()
+            for line in rest
+        }
 
     trained = SPEC.build(_split(adata_small))
     trained.save_pretrained(tmp_path)

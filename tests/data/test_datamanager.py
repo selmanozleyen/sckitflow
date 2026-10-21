@@ -5,11 +5,6 @@ from anndata import AnnData
 from tests.data.shared import with_split
 
 from sckitflow.data._manager import DataManager, DataManagerConfig
-from sckitflow.data.containers._categorical import CategoricalData
-from sckitflow.data.containers._coupling import CouplingData
-from sckitflow.data.containers._distribution import DistributionData
-from sckitflow.data.containers._mixed_type import MixedTypeData
-from sckitflow.data.containers._state import StateData
 
 
 def _make_manager(**overrides) -> DataManager:
@@ -29,141 +24,6 @@ def _make_manager(**overrides) -> DataManager:
 def _make_manager_with_continuous(**overrides) -> DataManager:
     """As :func:`_make_manager`, plus a continuous condition covariate (``X_repr``) from obsm."""
     return _make_manager(continuous_conditions=["X_repr"], **overrides)
-
-
-class TestDistributionData:
-    """get_distribution_data: building DistributionData from AnnData."""
-
-    def test_types_and_lengths(self, adata_small: AnnData):
-        manager = _make_manager()
-        distr = manager.get_distribution_data(adata_small)
-
-        assert isinstance(distr, DistributionData)
-        assert len(distr) == adata_small.n_obs
-        assert isinstance(distr.state_data, StateData)
-        assert isinstance(distr.groups_data, CategoricalData)
-        assert len(distr.state_data) == adata_small.n_obs
-        assert len(distr.groups_data) == adata_small.n_obs
-        if distr.condition_data is not None:
-            assert isinstance(distr.condition_data, MixedTypeData)
-            assert len(distr.condition_data) == adata_small.n_obs
-
-    def test_slicing(self, adata_small: AnnData):
-        manager = _make_manager()
-        distr = manager.get_distribution_data(adata_small)
-        n_slice = 5
-        idxs = np.arange(n_slice)
-        sliced = distr[idxs]
-
-        assert len(sliced) == n_slice
-        for attr in ("state_data", "groups_data", "condition_data", "response_data"):
-            val = getattr(sliced, attr)
-            if val is not None:
-                assert len(val) == n_slice
-
-    def test_empty_slice(self, adata_small: AnnData):
-        manager = _make_manager()
-        distr = manager.get_distribution_data(adata_small)
-        sliced = distr[np.array([], dtype=int)]
-
-        assert len(sliced) == 0
-        for attr in ("state_data", "groups_data", "condition_data", "response_data"):
-            val = getattr(sliced, attr)
-            if val is not None:
-                assert len(val) == 0
-
-    def test_repr(self, adata_small: AnnData):
-        manager = _make_manager()
-        distr = manager.get_distribution_data(adata_small)
-        r = repr(distr)
-        assert "DistributionData" in r
-        assert f"n_obs={adata_small.n_obs}" in r
-
-    def test_coupling_defaults_to_state(self, adata_small: AnnData):
-        manager = _make_manager()
-        distr = manager.get_distribution_data(adata_small)
-        assert isinstance(distr.source_coupling_data, CouplingData)
-        assert isinstance(distr.target_coupling_data, CouplingData)
-        assert len(distr.source_coupling_data) == adata_small.n_obs
-        assert len(distr.target_coupling_data) == adata_small.n_obs
-
-
-class TestRequireTargetState:
-    """get_distribution_data with require_target_state=False (predict without target states)."""
-
-    def test_get_distribution_data_state_is_none(self, adata_small: AnnData):
-        manager = _make_manager()
-        distr = manager.get_distribution_data(adata_small, require_target_state=False)
-
-        assert distr.state_data is None
-        assert len(distr) == adata_small.n_obs
-        assert isinstance(distr.groups_data, CategoricalData)
-
-    def test_get_distribution_data_works_without_x(self):
-        """An AnnData with only `.obs` (no `.X`) can be compiled when require_target_state=False."""
-        from tests.data.conftest import CELL_LINES, DRUGS
-
-        obs = pd.DataFrame(
-            {"cell_line": [CELL_LINES[0]] * 3, "drug": [DRUGS[0]] * 3},
-        ).astype("category")
-        ad = AnnData(obs=obs)
-        # condition/group reps are looked up by value in `.uns`, regardless of `.X`
-        ad.uns["drug"] = {DRUGS[0]: np.zeros((1, 4))}
-        ad.uns["cell_line"] = {CELL_LINES[0]: np.zeros((1, 4))}
-
-        manager = _make_manager()
-        distr = manager.get_distribution_data(ad, require_target_state=False)
-
-        assert distr.state_data is None
-        assert len(distr) == 3
-
-
-class TestConditionSpaceView:
-    def test_get_distribution_data_with_condition_space(self, adata_small: AnnData):
-        rng = np.random.default_rng(0)
-        manager = _make_manager_with_continuous(condition_state_key="X_repr")
-        # ensure X_repr exists in obsm
-        if "X_repr" not in adata_small.obsm:
-            adata_small.obsm["X_repr"] = rng.standard_normal((adata_small.n_obs, 10))
-
-        distr = manager.get_distribution_data(adata_small)
-        # state_data becomes the continuous covariate
-        assert isinstance(distr.state_data, StateData)
-        np.testing.assert_array_equal(distr.state_data.X, adata_small.obsm["X_repr"])
-
-        # condition_data still exists (categorical part remains)
-        assert distr.condition_data is not None
-        # The continuous key "X_repr" should be removed. Since it was the only continuous key,
-        # continuous_covariates becomes None. That's acceptable.
-        if distr.condition_data.continuous_covariates is not None:
-            assert "X_repr" not in distr.condition_data.continuous_covariates.mapping
-        # categorical part remains
-        assert distr.condition_data.categorical_covariates is not None
-
-        # coupling data reinitialized
-        assert distr.source_coupling_data is not None
-        assert distr.target_coupling_data is not None
-        assert len(distr.source_coupling_data) == len(distr.state_data)
-
-    def test_get_distribution_data_invalid_condition_state_key(self, adata_small: AnnData):
-        # Use a manager without continuous covariates -- only categorical conditions.
-        manager = _make_manager(condition_state_key="invalid_key")
-        with pytest.raises(KeyError, match="Key invalid_key not found"):
-            manager.get_distribution_data(adata_small)
-
-    def test_get_data_dimensionalities_with_condition_space(self, adata_small: AnnData):
-        rng = np.random.default_rng(0)
-        manager = _make_manager_with_continuous(condition_state_key="X_repr")
-        if "X_repr" not in adata_small.obsm:
-            adata_small.obsm["X_repr"] = rng.standard_normal((adata_small.n_obs, 10))
-
-        dims = manager.get_data_dimensionalities(adata_small)
-        # state dimension comes from continuous covariate
-        assert dims.state_dim == adata_small.obsm["X_repr"].shape[1]
-        # condition has a categorical part (drug) so categorical dim should be present
-        assert dims.condition_reps_dims is not None and all(d > 0 for d in dims.condition_reps_dims.values())
-        # the continuous covariate was consumed, so continuous condition dim should be 0 or None
-        assert dims.condition_continuous_dims == {}
 
 
 def _with_split(adata: AnnData) -> AnnData:
@@ -482,22 +342,6 @@ class TestLinearFreeCoupling:
         adata.obsm["X_src_quad"] = rng.standard_normal((adata.n_obs, 4)).astype("float32")
         adata.obsm["X_tgt_quad"] = rng.standard_normal((adata.n_obs, 6)).astype("float32")
         return adata
-
-    def test_config_flows_to_linear_free_coupling(self, adata_small: AnnData):
-        self._with_quads(adata_small)
-        dm = _make_manager(
-            use_linear=False,
-            source_rep_quad="X_src_quad",
-            target_rep_quad="X_tgt_quad",
-        )
-        distr = dm.get_distribution_data(adata_small)
-
-        assert distr.source_coupling_data.state_lin is None
-        assert distr.target_coupling_data.state_lin is None
-        assert distr.source_coupling_data.state_quad.X.shape[1] == 4
-        assert distr.target_coupling_data.state_quad.X.shape[1] == 6
-        # Both sides linear-free: the check passes, quadratic widths are free to differ.
-        distr.source_coupling_data.assert_same_spatial_dims(distr.target_coupling_data)
 
     def test_config_rejects_rep_lin(self):
         with pytest.raises(ValueError, match="redundant"):

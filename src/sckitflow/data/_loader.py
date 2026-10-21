@@ -168,6 +168,14 @@ _COUPLING_FIELD = {
 }
 
 
+def get_rep(adata: AnnData, loc: str) -> Any:
+    """Rep ``loc`` (``"X"`` | ``"obsm/<k>"`` | ``"layers/<k>"``) of ``adata``."""
+    if loc == "X":
+        return adata.X
+    field, key = loc.split("/", 1)
+    return getattr(adata, field)[key]
+
+
 def _has_rep(adata: AnnData, loc: str) -> bool:
     """Whether ``adata`` carries rep ``loc`` (``"X"`` | ``"obsm/<k>"`` | ``"layers/<k>"``)."""
     if loc == "X":
@@ -462,7 +470,30 @@ class _StepDataBridge:
         sources = {_PRIMARY: self._files_holding(primary, "target")}
         if control is not None:
             sources[_CONTROL] = self._files_holding(control, "source")
+            self._check_shared_widths(sources)
         return sources
+
+    def _check_shared_widths(self, sources: dict[str, list[AnnData]]) -> None:
+        """The state and the linear coupling term are one space for both sides, so one width across every file.
+
+        Within a side scfit already requires it; this compares across the sides, which read separate sources.
+        The quadratic terms are exempt: each side's is only compared within itself.
+        """
+        shared = {self._state_loc, *(loc for loc, t in self._source_coupling_locs.items() if t == _SOURCE_LIN_TERM)}
+        index = {id(a): i for i, a in enumerate(self._adatas)}
+        for loc in shared:
+            widths = {
+                (role, index[id(a)]): int(get_rep(a, loc).shape[1])
+                for role, files in (("source", sources[_CONTROL]), ("target", sources[_PRIMARY]))
+                for a in files
+            }
+            if len(set(widths.values())) > 1:
+                where = ", ".join(f"{w} wide in AnnData {i} ({role}s)" for (role, i), w in sorted(widths.items()))
+                raise ValueError(
+                    f"{loc} ({' / '.join(self._rep_fields.get(loc, ['rep']))}) is {where}. Sources and targets "
+                    "meet in this space, so it needs one width in every file; align the files to it (e.g. one PCA "
+                    "fitted over all of them)."
+                )
 
     def _files_holding(self, stream: Stream, role: str) -> list[AnnData]:
         """The AnnData with at least one ``stream``-selected cell, each checked to carry the stream's reps."""

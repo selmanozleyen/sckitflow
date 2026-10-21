@@ -61,3 +61,33 @@ def test_missing_rep_names_the_file_role_and_field():
     del ctrl.obsm["X_src"]
     with pytest.raises(ValueError, match=r"AnnData 0 of 2 holds source cells but lacks obsm/X_src \(source_rep_quad\)"):
         _manager().get_dataloaders([ctrl, pert], batch_size=8)
+
+
+@pytest.mark.parametrize(
+    ("schema", "field"),
+    [({"sample_rep": "K"}, "sample_rep"), ({"rep_lin": "K"}, "rep_lin")],
+)
+def test_a_space_both_sides_share_needs_one_width(schema, field):
+    ctrl, pert = _split_files()
+    ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")
+    pert.obsm["K"] = np.ones((pert.n_obs, 6), "float32")
+    dm = DataManagerConfig(
+        **{
+            **_manager().config.model_dump(),
+            "source_rep_quad": None,
+            "target_rep_quad": None,
+            "use_linear": True,
+            "rep_lin": None,
+            **schema,
+        }
+    ).build()
+    with pytest.raises(
+        ValueError, match=rf"obsm/K \({field}.*\) is 4 wide in AnnData 0 \(sources\), 6 wide in AnnData 1"
+    ):
+        dm.get_dataloaders([ctrl, pert], batch_size=8)
+
+
+def test_quadratic_terms_may_differ_in_width():
+    ctrl, pert = _split_files()  # X_src is 4 wide, X_tgt 3 wide: Gromov-Wasserstein compares each side within itself
+    batch = next(iter(_manager().get_dataloaders([ctrl, pert], batch_size=8)["train"]))
+    assert batch["source_coupling_quad"].shape[-1] == 4 and batch["target_coupling_quad"].shape[-1] == 3

@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning][].
 
 ## [Unreleased]
 
+### Added
+
+- `EnergyDistance(max_samples=...)` scores a fixed random subset of at most that many rows per update: validation scores every sample, and the cost is quadratic in the rows
+
 ### Changed
 
 - `DataManager.get_data_dimensionalities` sizes each representation from its shape in the files whose cells read it, and the condition and group encodings by encoding one group the way the loaders do, so the dimensions and the batches come from one code path. The in-memory containers that only fed the dimensions (`DistributionData`, `StateData`, `MixedTypeData`, `CouplingData`), `DataManager.get_distribution_data` and the schemas' `get_data` are removed

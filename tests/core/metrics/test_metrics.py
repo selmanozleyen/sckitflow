@@ -55,6 +55,20 @@ def test_energy_distance_vs_sklearn():
     )
 
 
+def test_energy_distance_subsamples_large_inputs():
+    rng = np.random.default_rng(0)
+    pred, target = torch.tensor(rng.normal(size=(5000, 3))), torch.tensor(rng.normal(1.0, size=(300, 3)))
+    full, capped = EnergyDistance(), EnergyDistance(max_samples=1000)
+    full.update(pred, target)
+    capped.update(pred, target)
+    assert capped.compute() == pytest.approx(full.compute().item(), rel=0.05)
+
+    small = EnergyDistance(max_samples=1000)  # fewer rows than the cap: exact
+    small.update(pred[:500], target)
+    exact = _compute_energy_distance_sklearn(pred[:500].numpy(), target.numpy())
+    assert small.compute() == pytest.approx(exact, rel=1e-6)
+
+
 def test_maximum_mean_discrepancy_vs_sklearn():
     """Test that batched MaximumMeanDiscrepancy matches sklearn reference on concatenated data."""
     n_samples = 100

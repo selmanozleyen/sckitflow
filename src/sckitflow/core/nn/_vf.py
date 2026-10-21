@@ -110,8 +110,8 @@ class MLPVelocity(BaseVelocityField):
             dynamics is defined.
         :type state_dim: class: `int`
 
-        :param source_state_dim: The sources' state width when they live in another space than the targets
-            (GENOT); sizes the source encoder's input. ``None``: the sources share ``state_dim``.
+        :param source_state_dim: The width of the sources' own state rep (``source_sample_rep``); sizes the source
+            encoder's input. ``None``: the sources share ``state_dim``.
         :type source_state_dim: class: `int | None`
 
         :param encode_state: (Optional) Whether to initilize an :class: `MLP` for

@@ -26,9 +26,8 @@ class DataDimensions:
     target_lin_dim: int | None
     target_quad_dim: int | None
     source_state_dim: int | None = None
-    """The sources' state width when they live in their own space (``DataManagerConfig.source_sample_rep``): a map
-    between spaces, which only a flow generating from noise conditioned on an encoded source (GENOT) can learn.
-    ``None``: one space, ``state_dim``."""
+    """The width of the sources' own state rep (``DataManagerConfig.source_sample_rep``). ``None``: the sources share
+    the targets' state, ``state_dim``."""
 
     @classmethod
     def _get_dims_from_continuous_data(cls, data: BatchMixin) -> dict[str, int]:

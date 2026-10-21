@@ -356,8 +356,8 @@ class DataManager:
                 continue
             raise ValueError(
                 f"AnnData {i} and AnnData {reading[0]} differ in their state (`sample_rep`): {diff}. The state is "
-                "one space; align the files to it. If the sources live in another space on purpose (GENOT), give "
-                "them their own rep with `source_sample_rep`."
+                "one space; align the files to it. If the sources have their own state on purpose, name it with "
+                "`source_sample_rep`."
             )
 
         merged: dict[str, Any] = {}
@@ -809,9 +809,10 @@ class DataManagerConfig(Component):
     `.X`."""
 
     source_sample_rep: str | None = None
-    """The ``obsm`` key of the sources' state when they live in another space than the targets, e.g. ATAC
-    controls and RNA targets (GENOT). Only the files holding sources need it, and only the files holding targets
-    need ``sample_rep``. ``None``: one space, read from ``sample_rep``."""
+    """The ``obsm`` key of the sources' own state rep, e.g. ATAC controls flowing into RNA targets. The files holding
+    sources need only it, the files holding targets only ``sample_rep``; any width. A flow cannot start from it, so
+    it needs ``generate_from_noise=True`` and a source encoder (as GENOT). ``None``: the sources' state is
+    ``sample_rep`` too."""
 
     categorical_conditions: dict[str, tuple[str, ...]] | None = None
     """Mapping from each condition level to the corresponding columns, used to initialize the

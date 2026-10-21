@@ -1,4 +1,4 @@
-"""GENOT across state spaces: the sources' state is their own rep (`source_sample_rep`), matched by Gromov-Wasserstein."""
+"""The sources' own state rep (`source_sample_rep`): GENOT-style training from it, matched by Gromov-Wasserstein."""
 
 import logging
 
@@ -64,7 +64,7 @@ def _spec(*, generate_from_noise: bool = True, module: dict | None = None) -> Mo
     )
 
 
-def test_genot_maps_between_spaces(tmp_path, caplog):
+def test_generating_from_the_sources_own_rep(tmp_path, caplog):
     ctrl, pert = _two_spaces()
     model = _spec().build([ctrl, pert])
     assert (model.dims.state_dim, model.dims.source_state_dim) == (6, 4)
@@ -87,14 +87,14 @@ def test_genot_maps_between_spaces(tmp_path, caplog):
 def test_two_spaces_of_the_same_width_are_told_apart():
     ctrl, pert = _two_spaces(source_width=6)  # ATAC and RNA both 6 wide: only `source_sample_rep` tells them apart
     assert _spec().build([ctrl, pert]).dims.source_state_dim == 6
-    with pytest.raises(ValueError, match=r"own state space.*set `generate_from_noise=True`"):
+    with pytest.raises(ValueError, match=r"own state rep.*set `generate_from_noise=True`"):
         _spec(generate_from_noise=False).build([ctrl, pert])
 
 
 def test_inference_alone_refuses_to_start_from_another_space():
     ctrl, pert = _two_spaces()
     model = _spec().build([ctrl, pert])
-    with pytest.raises(ValueError, match="own state space"):
+    with pytest.raises(ValueError, match="own state rep"):
         ODEInference(model.module, ODEInferenceConfig(generate_from_noise=False), dims=model.dims)
 
 

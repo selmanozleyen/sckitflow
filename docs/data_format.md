@@ -39,9 +39,9 @@ must be the same in each, and every value looked up must have one. A list of zar
 keys=..., cols=..., uns=...)`, listing every store explicitly. A store holding only controls is just one more
 entry. A store only needs the representations of the cells it holds: the target side reads the stores holding
 targets and the source side the stores holding sources, so e.g. `source_rep_quad` can live only with the controls. The
-sources may even live in another state space than the targets, e.g. ATAC controls and RNA targets: name their
-state with `source_sample_rep` (it cannot be told from the data, since two spaces may have the same width). The
-files holding sources then need only that rep, the files holding targets only `sample_rep`. Only a flow generating
-from noise conditioned on an encoded source can learn such a map (GENOT: `generate_from_noise=True` with
-`source_encoder_mlp_kwargs`), and the matching needs a shared `rep_lin` or the quadratic terms alone
-(`use_linear=False`). A saved model reloads with data holding target cells, which fix the targets' space.
+sources may even have their own state rep, e.g. ATAC controls flowing into RNA targets: name it with
+`source_sample_rep` (it cannot be told from the data, since two reps may have the same width). The files holding
+sources then need only that rep, the files holding targets only `sample_rep`. A flow cannot start from it, so it
+needs `generate_from_noise=True` and a source encoder (`source_encoder_mlp_kwargs`), as GENOT does; the matching
+needs a shared `rep_lin` or the quadratic terms alone (`use_linear=False`). A saved model reloads with data
+holding target cells, which fix the targets' state.

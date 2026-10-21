@@ -226,7 +226,7 @@ class _StepDataBridge:
         self._device_type = device.split(":")[0] if device is not None else None
         self._assert_device = assert_device
         self._state_loc = _state_loc(sample_rep)
-        # The sources' state: their own rep when they live in another space (GENOT), else the targets'.
+        # The sources' state: their own rep when the schema gives them one, else the targets'.
         self._source_state_loc = _state_loc(source_sample_rep) if source_sample_rep is not None else self._state_loc
         # group_by = group columns + categorical condition columns (continuous covs are streamed reps).
         self._group_cols: tuple[str, ...] = (*groups_schema.groups, *condition_schema.all_condition_cols)
@@ -483,7 +483,7 @@ class _StepDataBridge:
         Within a side scfit already requires it; this compares across the sides, which read separate sources.
         The quadratic terms are exempt (each side's is only compared within itself), and so is the state: whether
         it must match depends on the method -- flowing from the sources needs one space, generating from noise
-        conditioned on an encoded source (GENOT) does not -- so the method checks it, not the loader.
+        conditioned on an encoded source (e.g. GENOT) does not -- so the method checks it, not the loader.
         """
         shared = {loc for loc, t in self._source_coupling_locs.items() if t == _SOURCE_LIN_TERM}
         index = {id(a): i for i, a in enumerate(self._adatas)}
@@ -573,8 +573,8 @@ class Loader(_StepDataBridge):
     :param sample_rep: The ``obsm`` key holding the state representation, or ``None`` for ``.X``.
     :type sample_rep: class: `str | None`
 
-    :param source_sample_rep: The ``obsm`` key holding the sources' state when they live in another space than
-        the targets (GENOT); ``None`` reads them from ``sample_rep`` too.
+    :param source_sample_rep: The ``obsm`` key holding the sources' own state rep; ``None`` reads them from
+        ``sample_rep`` too.
     :type source_sample_rep: class: `str | None`
 
     :param response_covs: Continuous response covariate ``obsm`` keys, streamed per-obs into
@@ -751,8 +751,8 @@ class EvalLoader(_StepDataBridge):
     :param sample_rep: The ``obsm`` key holding the state representation, or ``None`` for ``.X``.
     :type sample_rep: class: `str | None`
 
-    :param source_sample_rep: The ``obsm`` key holding the sources' state when they live in another space than
-        the targets (GENOT); ``None`` reads them from ``sample_rep`` too.
+    :param source_sample_rep: The ``obsm`` key holding the sources' own state rep; ``None`` reads them from
+        ``sample_rep`` too.
     :type source_sample_rep: class: `str | None`
 
     :param response_covs: Continuous response covariate ``obsm`` keys; see :class:`Loader`.

@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Added
 
-- GENOT across state spaces: `DataManagerConfig.source_sample_rep` names the sources' state when they live in another space than the targets (`DataDimensions.source_state_dim` records its width). The velocity field reads it through its source encoder, which is then required, and a flow method starting from the sources (`generate_from_noise=False`) refuses it with an error pointing to GENOT
+- `DataManagerConfig.source_sample_rep`: the sources may have their own state rep (e.g. ATAC controls flowing into RNA targets), of any width (`DataDimensions.source_state_dim`). The velocity field reads it through its source encoder, which is then required, and a flow method starting from the sources (`generate_from_noise=False`) refuses it; generating from noise conditioned on the encoded source, as GENOT does, learns the map
 - A dataset split across files only needs each representation where the cells reading it are: the loaders route the files holding targets and those holding sources to separate scfit sources, so e.g. `source_rep_quad` can live only in the controls' file. A file missing a representation its cells need raises an error naming the file, the side and the schema field
 - `sckitflow.core.surrogate.SurrogatePotential`: a differentiable potential of continuous condition covariates through a trained inference method, averaged over the groups of its context data (`adata`), which it reads once per device onto the inference module's device. It takes a `readout` and a `potential`; `MeanSamplesReadoutConfig` and `SquaredErrorPotentialConfig` build the common ones
 - Basic tool, preprocessing and plotting functions

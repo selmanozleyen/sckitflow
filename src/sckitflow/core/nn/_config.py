@@ -166,11 +166,11 @@ class MLPVelocityConfig(ModuleConfig):
             }
             kwargs["condition_encoder_continuous_covariates"] = list(dims.condition_continuous_dims or ())
         if dims.source_state_dim is not None:
-            # The sources live in their own space (GENOT): only a source encoder reads them, sized from the data.
+            # The sources have their own state rep: only a source encoder reads it, sized from the data.
             if self.source_encoder_mlp_kwargs is None:
                 raise ValueError(
-                    "The sources live in their own state space (`source_sample_rep`), which the velocity field "
-                    "only reads through a source encoder; without one it would ignore them. Set "
+                    "The sources have their own state rep (`source_sample_rep`), which the velocity field only "
+                    "reads through a source encoder; without one it would ignore them. Set "
                     "`source_encoder_mlp_kwargs`."
                 )
             if "input_dim" in self.source_encoder_mlp_kwargs:

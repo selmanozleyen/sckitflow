@@ -81,7 +81,7 @@ def test_the_linear_term_needs_one_width():
 
 
 def test_the_state_may_differ_in_width_across_sides():
-    # GENOT generates targets from noise conditioned on an encoded source, so the sides may live in different
+    # A method generating from noise conditioned on an encoded source (e.g. GENOT) lets the sides live in different
     # spaces; whether the state must match is the method's call, not the loader's.
     ctrl, pert = _split_files()
     ctrl.obsm["K"] = np.ones((ctrl.n_obs, 4), "float32")

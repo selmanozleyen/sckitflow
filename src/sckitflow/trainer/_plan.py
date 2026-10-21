@@ -6,6 +6,7 @@ checkpointing -- comes from Lightning. This file only says what one step is.
 """
 
 import copy
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -70,6 +71,9 @@ class TrainingPlan(pl.LightningModule):
     ) -> None:
         super().__init__()
         self.training_method = training_method
+        # batches matched at random because the OT plan was degenerate, summed on device and read once per epoch
+        self._fallbacks: torch.Tensor | int = 0
+        self._matched = 0
         self.inference_method = inference_method
         # Registers the method's parameters with Lightning, which is what makes
         # optimizer wiring, device placement and train/eval mode work.
@@ -100,7 +104,22 @@ class TrainingPlan(pl.LightningModule):
         generator = generators(self.seed, *key, device=self.device)
         loss, metrics = self.training_method.compute_loss(batch, generator=generator)
         self.log_dict(metrics, on_step=True, prog_bar=True)
+        if "coupling_fallback" in metrics:
+            self._fallbacks = self._fallbacks + metrics["coupling_fallback"]
+            self._matched += 1
         return loss
+
+    def on_train_epoch_end(self) -> None:
+        """Warns once per epoch if batches were matched at random: one host read per epoch, not per step."""
+        n = int(self._fallbacks) if self._matched else 0
+        if n:
+            warnings.warn(
+                f"{n} of {self._matched} training batches in epoch {self.current_epoch} fell back to random pairs: "
+                "the OT plan was non-finite or all zero. Scale the cost (`scale_cost='mean'`) or raise `epsilon`.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        self._fallbacks, self._matched = 0, 0
 
     def validation_step(self, batch: StepData, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Scores one validation batch. Metrics aggregate until the epoch ends."""

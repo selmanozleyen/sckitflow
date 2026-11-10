@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from anndata.acc import A
 from tests.core.surrogate.shared import Field
 
 from sckitflow.core._types import PredictionData
@@ -107,7 +108,7 @@ def mean_mse_surrogate(inferer, ystar, datamodule, adata, *, mask=None, **kwargs
 def build_datamodule(
     adata,
     *,
-    target_sample_rep=None,
+    target_sample_rep="X",
     categorical_conditions=None,
     categorical_reps=None,
     continuous_conditions=None,
@@ -187,7 +188,7 @@ class TestMinimalConfig:
             adata,
             cond_dict_single,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -199,7 +200,7 @@ class TestMinimalConfig:
             adata,
             cond_dict,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict)
         out.sum().backward()
@@ -211,7 +212,7 @@ class TestMinimalConfig:
             adata,
             cond_dict_pair,
             ystar,
-            continuous_conditions=(CONT_COV_1, CONT_COV_2),
+            continuous_conditions=(A.obsm[CONT_COV_1], A.obsm[CONT_COV_2]),
         )
         out = potential(cond_dict_pair)
         assert out.shape == (4,)
@@ -221,7 +222,7 @@ class TestMinimalConfig:
             adata,
             cond_dict_wide,
             ystar,
-            continuous_conditions=(CONT_COV_WIDE,),
+            continuous_conditions=(A.obsm[CONT_COV_WIDE],),
         )
         out = potential(cond_dict_wide)
         assert out.shape == (4,)
@@ -240,7 +241,7 @@ class TestGenerateFromNoise:
             cond_dict_single,
             ystar,
             n_samples=n_samples,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -253,7 +254,7 @@ class TestGenerateFromNoise:
             cond_dict,
             ystar,
             n_samples=n_samples,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict)
         out.sum().backward()
@@ -267,7 +268,7 @@ class TestGenerateFromNoise:
             ystar,
             n_samples=1,
             potential_seed=0,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         p4, _ = build_potential(
             adata,
@@ -275,7 +276,7 @@ class TestGenerateFromNoise:
             ystar,
             n_samples=4,
             potential_seed=0,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         assert p1(cond_dict).shape == p4(cond_dict).shape == (4,)
 
@@ -293,7 +294,7 @@ class TestWithGroups:
             ystar,
             groups=("target",),
             groups_encoding={"target": TARGET_LABELS},
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -307,7 +308,7 @@ class TestWithGroups:
             categorical_reps={"drug": "drug"},
             groups=("source_split",),
             groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -320,7 +321,7 @@ class TestWithGroups:
             n_samples=4,
             groups=("target",),
             groups_encoding={"target": TARGET_LABELS},
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -342,7 +343,7 @@ class TestWithControls:
             groups=("source_split",),
             groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             control_values_dict={"drug": "control"},
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -358,7 +359,7 @@ class TestWithControls:
             groups=("source_split",),
             groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             control_values_dict={"drug": "control"},
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -374,7 +375,7 @@ class TestWithControls:
             groups=("source_split",),
             groups_encoding={"source_split": SOURCE_SPLIT_LABELS},
             control_values_dict={"drug": "control"},
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict)
         out.sum().backward()
@@ -393,7 +394,7 @@ class TestWithoutTargetState:
             cond_dict_single,
             ystar,
             require_target_state=False,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -405,7 +406,7 @@ class TestWithoutTargetState:
             cond_dict,
             ystar,
             require_target_state=False,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict)
         out.sum().backward()
@@ -418,7 +419,7 @@ class TestWithoutTargetState:
             ystar,
             n_samples=4,
             require_target_state=False,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         out = potential(cond_dict_single)
         assert out.shape == (4,)
@@ -437,7 +438,7 @@ class TestParameterSweeps:
             adata,
             cond_dict,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         assert potential(cond_dict).shape == (N,)
 
@@ -448,7 +449,7 @@ class TestParameterSweeps:
             cond_dict_single,
             ystar,
             batch_size=batch_size,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         assert potential(cond_dict_single).shape == (4,)
 
@@ -466,7 +467,7 @@ class TestDeterminism:
             ystar,
             potential_seed=7,
             n_samples=4,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         p2, _ = build_potential(
             adata,
@@ -474,7 +475,7 @@ class TestDeterminism:
             ystar,
             potential_seed=7,
             n_samples=4,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         assert torch.allclose(p1(cond_dict_single), p2(cond_dict_single))
 
@@ -485,7 +486,7 @@ class TestDeterminism:
             ystar,
             potential_seed=1,
             n_samples=4,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         p2, _ = build_potential(
             adata,
@@ -493,12 +494,12 @@ class TestDeterminism:
             ystar,
             potential_seed=2,
             n_samples=4,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         assert not torch.allclose(p1(cond_dict_single), p2(cond_dict_single))
 
     def test_context_read_once(self, adata, cond_dict_single, ystar):
-        potential, _ = build_potential(adata, cond_dict_single, ystar, continuous_conditions=(CONT_COV_1,))
+        potential, _ = build_potential(adata, cond_dict_single, ystar, continuous_conditions=(A.obsm[CONT_COV_1],))
         cpu = torch.device("cpu")
         assert potential.response.context_leaves(cpu) is potential.response.context_leaves(cpu)
 
@@ -514,7 +515,7 @@ class TestErrorPaths:
             adata,
             cond_dict_single,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         with pytest.raises(ValueError, match="empty condition dictionary"):
             potential({})
@@ -524,7 +525,7 @@ class TestErrorPaths:
             adata,
             cond_dict_single,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         bad = {"nope": torch.zeros((4, 1))}
         with pytest.raises(ValueError, match="does not appear in the reference"):
@@ -535,7 +536,7 @@ class TestErrorPaths:
             adata,
             cond_dict_single,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         bad = {CONT_COV_1: torch.zeros((4, 99))}
         with pytest.raises(ValueError, match="Shape mismatch for condition key"):
@@ -546,7 +547,7 @@ class TestErrorPaths:
             adata,
             cond_dict_pair,
             ystar,
-            continuous_conditions=(CONT_COV_1, CONT_COV_2),
+            continuous_conditions=(A.obsm[CONT_COV_1], A.obsm[CONT_COV_2]),
         )
         bad = {
             CONT_COV_1: torch.zeros((4, 1)),
@@ -560,7 +561,7 @@ class TestErrorPaths:
             adata,
             cond_dict_single,
             ystar,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         with pytest.raises(ValueError, match="two-dimensional"):
             potential({CONT_COV_1: torch.zeros(4)})
@@ -571,7 +572,7 @@ class TestYstarAndMask:
         mask = torch.zeros(n_genes, dtype=torch.bool)
         mask[:8] = True
         ystar = torch.zeros(n_genes)
-        dmod = build_datamodule(adata, continuous_conditions=(CONT_COV_1,))
+        dmod = build_datamodule(adata, continuous_conditions=(A.obsm[CONT_COV_1],))
         inferer = FakeInferer(n_genes)
         potential = mean_mse_surrogate(inferer, ystar, dmod, adata, mask=mask)
         out = potential(cond_dict_single)
@@ -582,7 +583,7 @@ class TestYstarAndMask:
             adata,
             cond_dict_single,
             torch.zeros(n_genes),
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
         )
         assert potential.ystar.device == potential.mask.device
         assert potential.mask.dtype == torch.bool
@@ -615,7 +616,7 @@ class TestRealInference:
 
         dmod = build_datamodule(
             adata,
-            continuous_conditions=(CONT_COV_1,),
+            continuous_conditions=(A.obsm[CONT_COV_1],),
             groups=groups,
             groups_encoding=None if groups is None else {"target": TARGET_LABELS},
         )
@@ -651,7 +652,7 @@ def test_loss_guidance_steers_through_the_potential(adata, ystar):
     from sckitflow.core.probability_paths import LinearPath
     from sckitflow.core.surrogate import LossGuidedVelocity, PathFlowMap
 
-    potential, _ = build_potential(adata, {}, ystar + 1.0, continuous_conditions=(CONT_COV_1,))
+    potential, _ = build_potential(adata, {}, ystar + 1.0, continuous_conditions=(A.obsm[CONT_COV_1],))
     psi = lambda x: potential({CONT_COV_1: x})
     path = LinearPath(sigma=0.0)
     velocity = Field(lambda t, x: -x)

@@ -36,11 +36,11 @@ class TestVocabularyIsExplicit:
 
     def test_datamanager_rejects_string_ids(self) -> None:
         with pytest.raises(ValueError, match="groups_encoding"):
-            DataManagerConfig(groups=("drug",), groups_encoding={"drug": "one-hot"})
+            DataManagerConfig(target_sample_rep="X", groups=("drug",), groups_encoding={"drug": "one-hot"})
 
 
 class TestPortableSpec:
-    """Every encoder round-trips through the scfit component registry."""
+    """Every encoder round-trips through the modelbinder component registry."""
 
     @pytest.mark.parametrize("encoder", ALL_ENCODERS)
     def test_spec_round_trip(self, encoder: GroupEncoderConfig) -> None:
@@ -106,7 +106,9 @@ class TestSerialization:
 
     def test_datamanager_round_trips(self) -> None:
         dm = DataManagerConfig(
-            groups=("cell_line",), groups_encoding={"cell_line": AffineTransformerConfig(scale=2.0, shift=1.0)}
+            target_sample_rep="X",
+            groups=("cell_line",),
+            groups_encoding={"cell_line": AffineTransformerConfig(scale=2.0, shift=1.0)},
         ).build()
 
         for restored in (pickle.loads(pickle.dumps(dm)), cloudpickle.loads(cloudpickle.dumps(dm))):

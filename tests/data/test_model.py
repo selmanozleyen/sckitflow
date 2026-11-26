@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 import torch
 from anndata import AnnData
-from scfit.pretrained import save_pretrained
+from modelbinder.pretrained import save_pretrained
 from tests.data.shared import with_split
 
 from sckitflow import Model, ModelConfig
@@ -18,6 +18,7 @@ from sckitflow.data._manager import DataManagerConfig
 from .conftest import CELL_LINES
 
 SCHEMA = DataManagerConfig(
+    target_sample_rep="X",
     categorical_conditions={"drug": ("drug",)},
     categorical_reps={"drug": "drug"},
     groups=("cell_line",),
